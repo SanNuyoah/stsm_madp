@@ -27,6 +27,9 @@ from stsm_madp.mpc import evaluate_executed_trajectory
 from stsm_madp.safety_evaluator import SafetyEvaluator
 from stsm_madp.topology import TopologicalCorridorPlanner
 from stsm_madp.topology_constraint import build_topology_constraint
+from stsm_madp.corridor import (
+    CorridorContractError, require_corridor_contract,
+    validate_corridor_contract)
 
 
 class ZeroField(object):
@@ -552,3 +555,76 @@ def test_executed_corridor_counts_only_active_scope():
     assert rows[0]["corridor_constraint_status"] == "not_applicable"
     assert rows[0]["corridor_out_of_scope_violation"] > 0.0
     assert rows[1]["corridor_active"] is True
+
+
+def _valid_morse_corridor(corridor_id="morse_c001", radius=0.2):
+    return SimpleNamespace(
+        corridor_id=corridor_id,
+        label=corridor_id,
+        topology_class="saddle_channel",
+        topology_route_class="saddle_channel",
+        node_sequence=["start", "saddle_0", "goal"],
+        topology_nodes=["start", "saddle_0", "goal"],
+        morse_node_ids=["saddle_0"],
+        morse_induced=True,
+        candidate_source="morse_topology",
+        waypoints=np.asarray([[0.0, 0.0, 0.0],
+                              [0.5, 0.2, 0.0],
+                              [1.0, 0.0, 0.0]]),
+        radius=radius,
+        boundary={},
+    )
+
+
+def test_stsm_corridor_contract_rejects_missing_corridor():
+    status = validate_corridor_contract(
+        None, require_morse=True, require_tube=True)
+    assert status["valid"] is False
+    assert "corridor_id_missing" in status["failure_reason"]
+
+
+def test_stsm_corridor_contract_rejects_wrong_corridor_id():
+    corridor = _valid_morse_corridor()
+    try:
+        require_corridor_contract(
+            corridor, expected_corridor_id="morse_c999",
+            require_morse=True, require_tube=True)
+    except CorridorContractError as exc:
+        assert "corridor_id_mismatch" in str(exc)
+    else:
+        raise AssertionError("mismatched corridor id must fail closed")
+
+
+def test_stsm_corridor_contract_rejects_missing_tube():
+    corridor = _valid_morse_corridor(radius=0.0)
+    status = validate_corridor_contract(
+        corridor, require_morse=True, require_tube=True)
+    assert status["valid"] is False
+    assert "trajectory_tube_missing" in status["failure_reason"]
+
+
+def test_strict_mpc_inputs_preserve_corridor_identity():
+    corridor = _valid_morse_corridor()
+    topology, corridor_info, _manifold, constraint = build_mpc_constraint_inputs(
+        corridor=corridor,
+        reference_path=corridor.waypoints,
+        safe_threshold=1.0,
+        minimum_clearance=0.0,
+        manifold_constraint_mode="hard",
+        strict_stsm=True,
+        expected_corridor_id=corridor.corridor_id)
+    assert corridor_info["corridor_id"] == corridor.corridor_id
+    assert constraint["topology_tube_constraint"]["corridor_id"] == corridor.corridor_id
+    assert topology["topology_tube_constraint"]["corridor_id"] == corridor.corridor_id
+
+
+def test_strict_mpc_inputs_reject_reference_without_corridor():
+    try:
+        build_mpc_constraint_inputs(
+            corridor=None,
+            reference_path=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            strict_stsm=True)
+    except CorridorContractError as exc:
+        assert "corridor_id_missing" in str(exc)
+    else:
+        raise AssertionError("STSM must not synthesize a tube from reference only")

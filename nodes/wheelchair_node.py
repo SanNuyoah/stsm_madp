@@ -21,6 +21,7 @@ if os.path.isdir(os.path.join(PACKAGE_SRC, "stsm_madp")) and PACKAGE_SRC not in 
 
 from stsm_madp.social_field import HumanState, SemanticAnchor, SocialField, SocialFieldParams
 from stsm_madp.manifold import SafetyManifold, Corridor
+from stsm_madp.corridor import require_corridor_contract
 from stsm_madp.mpc import (
     WheelchairMPC, build_mpc_constraint_inputs, generate_topology_tube,
     run_mpc_tracking, write_mpc_outputs)
@@ -466,6 +467,14 @@ class WheelchairNode:
                                           fallback_source="runtime_replan_fallback"):
         if corridor is None:
             return None
+        strict_stsm = bool(not self.baseline)
+        if strict_stsm:
+            try:
+                require_corridor_contract(
+                    corridor, require_morse=True, require_tube=True)
+            except ValueError as exc:
+                rospy.logerr("[wc][corridor_contract] reject: %s", exc)
+                return None
         cid = self._corridor_id(corridor, fallback_id)
         if not cid:
             cid = fallback_id
@@ -479,11 +488,11 @@ class WheelchairNode:
         reference_source = str(getattr(corridor, "final_reference_source", "") or "")
         if not self._valid_reference_source(reference_source):
             corridor.final_reference_source = fallback_source
-        if not list(getattr(corridor, "node_sequence", []) or []):
+        if not strict_stsm and not list(getattr(corridor, "node_sequence", []) or []):
             corridor.node_sequence = ["start", "goal"]
-        if not list(getattr(corridor, "topology_nodes", []) or []):
+        if not strict_stsm and not list(getattr(corridor, "topology_nodes", []) or []):
             corridor.topology_nodes = list(corridor.node_sequence)
-        if not list(getattr(corridor, "node_type_sequence", []) or []):
+        if not strict_stsm and not list(getattr(corridor, "node_type_sequence", []) or []):
             corridor.node_type_sequence = ["start", "goal"]
         try:
             association = associate_corridor_critical_points(corridor, points)
@@ -1907,6 +1916,19 @@ class WheelchairNode:
             "candidate_source": str(getattr(
                 corridor, "candidate_source",
                 getattr(corridor, "route_source", ""))) if corridor is not None else "",
+            "topology_class": str(getattr(
+                corridor, "topology_route_class",
+                getattr(corridor, "topology_class", ""))) if corridor is not None else "",
+            "node_sequence": list(getattr(
+                corridor, "node_sequence", []) or []) if corridor is not None else [],
+            "critical_point_ids": list(getattr(
+                corridor, "critical_point_ids",
+                getattr(corridor, "morse_node_ids", [])) or []) if corridor is not None else [],
+            "recovery_level": str(getattr(
+                corridor, "recovery_level",
+                getattr(corridor, "candidate_recovery_mode", "none"))) if corridor is not None else "none",
+            "corridor_contract_version": str(getattr(
+                corridor, "corridor_contract_version", "")) if corridor is not None else "",
             "reference_source": source,
             "centerline": centerline.tolist(),
             "centerline_count": int(len(centerline)),
@@ -4451,8 +4473,15 @@ class WheelchairNode:
                         safe_threshold=float(self.manifold.rho),
                         minimum_clearance=0.10,
                         phase="navigation", robot_type="wheelchair",
-                        manifold_constraint_mode=self.manifold_constraint_mode))
-            except Exception:
+                        manifold_constraint_mode=self.manifold_constraint_mode,
+                        strict_stsm=bool(not self.baseline),
+                        expected_corridor_id=self._corridor_id(corridor)))
+            except Exception as exc:
+                if not self.baseline:
+                    self._publish_runtime_stop(
+                        "planning:invalid_corridor_contract:%s" % exc)
+                    rospy.logerr("[wc] invalid STSM corridor before MPC: %s", exc)
+                    break
                 topology_constraint_for_mpc = {}
             v, w = self.mpc.solve(self.state, ref, self.field,
                                   corridor=corridor, u_prev=self.u_prev,

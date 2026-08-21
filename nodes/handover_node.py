@@ -19,6 +19,7 @@ if os.path.isdir(os.path.join(PACKAGE_SRC, "stsm_madp")) and PACKAGE_SRC not in 
 
 from stsm_madp.social_field import HumanState, SemanticAnchor, SocialField, SocialFieldParams
 from stsm_madp.manifold import SafetyManifold, Corridor
+from stsm_madp.corridor import require_corridor_contract
 from stsm_madp.deform import (
     deform_trajectory, interpolate_by_segments, path_length,
     protected_waypoint_distances, topology_preserving_shortcut)
@@ -1375,6 +1376,10 @@ class HandoverNode:
         self.execution_corridor = corr
         nominal, protected_indices = self._corridor_reference_path(
             corr, start, goal, n=30)
+        require_corridor_contract(
+            corr, reference_path=nominal,
+            expected_corridor_id=str(getattr(corr, "corridor_id", "")),
+            require_morse=True, require_tube=True)
         if int(getattr(corr, "refinement_used", 0)) == 1:
             mandatory_count = int(len(getattr(corr, "protected_waypoints", [])))
             mandatory_indices = [
@@ -2746,7 +2751,9 @@ class HandoverNode:
                     "approach"),
                 robot_type="arm",
                 manifold_constraint_mode=self.manifold_constraint_mode,
-                phase_params=self.manifold_phase_config))
+                phase_params=self.manifold_phase_config,
+                strict_stsm=bool(not self.baseline),
+                expected_corridor_id=str(getattr(corr, "corridor_id", ""))))
         dbg = dict(getattr(self.manifold, "last_topology_debug", {}) or {})
         dbg["topology_constraint_info"] = topology_constraint_info
         self.manifold.last_topology_debug = dbg

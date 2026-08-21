@@ -1708,7 +1708,14 @@ def build_mpc_constraint_inputs(corridor=None, manifold=None, reference_path=Non
                                 safe_threshold=None, phase=None,
                                 robot_type="generic", phase_params=None,
                                 manifold_constraint_mode=None,
-                                minimum_clearance=None):
+                                minimum_clearance=None, strict_stsm=False,
+                                expected_corridor_id=None):
+    if strict_stsm:
+        from stsm_madp.corridor import require_corridor_contract
+        require_corridor_contract(
+            corridor, reference_path=reference_path,
+            expected_corridor_id=expected_corridor_id,
+            require_morse=True, require_tube=True)
     constraint = build_topology_constraint(
         selected_corridor=corridor,
         safe_manifold=manifold,
@@ -1725,8 +1732,16 @@ def build_mpc_constraint_inputs(corridor=None, manifold=None, reference_path=Non
     waypoints = (
         getattr(corridor, "waypoints", None) if corridor is not None
         else reference_path)
-    return mpc_inputs_from_constraint(
+    inputs = mpc_inputs_from_constraint(
         constraint, corridor_id=corridor_id, waypoints=waypoints)
+    if strict_stsm:
+        tube_id = str(inputs[3].get(
+            "topology_tube_constraint", {}).get("corridor_id", ""))
+        mpc_id = str(inputs[1].get("corridor_id", ""))
+        if not corridor_id or mpc_id != corridor_id or tube_id != corridor_id:
+            from stsm_madp.corridor import CorridorContractError
+            raise CorridorContractError("mpc_corridor_id_mismatch")
+    return inputs
 
 
 def _arm_mpc_input_validation(ref, topology_info, corridor_info, manifold_info,
