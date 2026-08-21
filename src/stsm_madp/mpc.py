@@ -1627,11 +1627,13 @@ def _apply_success_contract(result, reference_audit=None):
 
 
 def evaluate_executed_trajectory(trajectory, context, social_field=None,
-                                 robot_type="", phase_sequence=None):
+                                 robot_type="", phase_sequence=None,
+                                 corridor_active_sequence=None):
     """Evaluate measured states with the same constraint truth as MPC rollout."""
     points = _as_points(trajectory)
     phases = list(phase_sequence or _reference_phases(
         trajectory, len(points), robot_type))
+    corridor_active = list(corridor_active_sequence or [])
     rows = []
     for index, point in enumerate(points):
         phase = phases[min(index, len(phases) - 1)] if phases else (
@@ -1641,6 +1643,18 @@ def evaluate_executed_trajectory(trajectory, context, social_field=None,
         metrics = _constraint_step_metrics(
             point, float(risk_info.get("risk_value", 0.0)), context,
             phase=phase, progress=progress)
+        active = bool(
+            corridor_active[min(index, len(corridor_active) - 1)]) \
+            if corridor_active else True
+        raw_corridor_violation = float(metrics.get("corridor_violation", 0.0))
+        if not active:
+            metrics["corridor_out_of_scope_violation"] = raw_corridor_violation
+            metrics["corridor_violation"] = 0.0
+            metrics["corridor_constraint_violation"] = 0.0
+            metrics["corridor_constraint_status"] = "not_applicable"
+        else:
+            metrics["corridor_out_of_scope_violation"] = 0.0
+        metrics["corridor_active"] = bool(active)
         row = {
             "step": int(index),
             "global_step": int(index),
@@ -2157,7 +2171,9 @@ def run_mpc_tracking(robot_type, current_state, reference_path,
     if _as_optional_points(measured).size:
         executed_rows, executed_summary = evaluate_executed_trajectory(
             measured, context, social_field=social_field, robot_type=robot,
-            phase_sequence=cfg.get("executed_phase_sequence", []))
+            phase_sequence=cfg.get("executed_phase_sequence", []),
+            corridor_active_sequence=cfg.get(
+                "executed_corridor_active_sequence", []))
         result["executed_trajectory_rows"] = executed_rows
         result["actual_executed_trajectory_count"] = len(executed_rows)
         result["executed_trajectory_count"] = len(executed_rows)
@@ -2166,6 +2182,12 @@ def run_mpc_tracking(robot_type, current_state, reference_path,
         result["actual_executable_trajectory"] = _jsonable_points(measured)
         for key, value in executed_summary.items():
             result["executed_" + key] = value
+        result["executed_corridor_active_count"] = int(sum(
+            1 for row in executed_rows if bool(row.get("corridor_active", True))))
+        result["executed_corridor_out_of_scope_count"] = int(sum(
+            1 for row in executed_rows
+            if (not bool(row.get("corridor_active", True)) and
+                float(row.get("corridor_out_of_scope_violation", 0.0)) > 1e-9)))
         result["actual_execution_min_clearance"] = float(
             executed_summary.get("min_manifold_clearance", 0.0))
         result["execution_clearance"] = float(

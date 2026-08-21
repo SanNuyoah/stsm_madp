@@ -29,7 +29,8 @@ from stsm_madp.topology_constraint import write_topology_constraint
 from stsm_madp.safety_gate import SafetyGate, SafetyGateResult
 from stsm_madp.adp import ADPCritic, ADPFeatureBuilder
 from stsm_madp.topology import topology_param_or_auto, topology_profile_defaults
-from stsm_madp.topology_refinement import refine_topology_path
+from stsm_madp.topology_refinement import (
+    check_refinement_manifold_validity, refine_topology_path)
 from stsm_madp.decision_trace import trace_from_debug, write_trace
 from stsm_madp.topology_diagnostics_writer import write_failed_topology_diagnostics
 from stsm_madp.task_config import resolve_task_mode, resolve_task_weight
@@ -180,6 +181,7 @@ class HandoverNode:
             "~mpc_handover_diagnostics_out", "")
         self.mpc_reference_records = []
         self.mpc_executed_records = []
+        self.corridor_evaluation_active = False
         self.task_completed = False
         self.arm_ee_debug_samples = []
         self.arm_handover_debug = {
@@ -940,6 +942,7 @@ class HandoverNode:
         self.mpc_executed_records.append({
             "point": [float(ee[0]), float(ee[1]), float(ee[2])],
             "phase": phase_name,
+            "corridor_active": bool(self.corridor_evaluation_active),
         })
 
         comp = self.field.risk_components(ee)
@@ -1115,6 +1118,17 @@ class HandoverNode:
         return start[None, :] + alpha * (goal - start)[None, :]
 
     def _corridor_reference_path(self, corr, start, goal, n=30):
+        cached = np.asarray(getattr(corr, "execution_reference_path", []), float)
+        cached_endpoints = np.asarray(
+            getattr(corr, "execution_reference_endpoints", []), float)
+        requested_endpoints = np.asarray([start, goal], float)
+        if (len(cached) >= 2 and cached_endpoints.shape == requested_endpoints.shape and
+                np.allclose(cached_endpoints, requested_endpoints, atol=1e-9)):
+            return cached.copy(), list(getattr(
+                corr, "execution_reference_protected_indices", [0, len(cached) - 1]))
+        candidate_raw_points = np.asarray(getattr(
+            corr, "raw_topology_waypoints",
+            getattr(corr, "centerline", getattr(corr, "waypoints", []))), float).copy()
         ordered = np.asarray(
             getattr(corr, "topology_ordered_waypoints", []), float)
         if len(ordered) >= 3:
@@ -1130,6 +1144,10 @@ class HandoverNode:
                 skeleton.append(arr[:3])
         skeleton.append(np.asarray(goal, float))
         path, protected_indices = interpolate_by_segments(skeleton, n=n)
+        # The selected topology route includes the real task endpoints.  This is
+        # the immutable execution tube; a later MPC reference must not redefine it.
+        execution_tube_centerline = np.asarray(path, float).copy()
+        corr.execution_tube_centerline = execution_tube_centerline
         corr.reference_skeleton = np.asarray(skeleton, float)
         mandatory = np.asarray(skeleton[1:-1], float)
         corr.protected_waypoints = mandatory
@@ -1142,8 +1160,28 @@ class HandoverNode:
                 samples_per_segment=self.topology_refinement_samples,
                 max_curvature=self.topology_max_corridor_curvature,
                 max_turn=self.topology_max_corridor_turn,
-                footprint_checker=self._arm_refined_path_checker)
+                footprint_checker=self._arm_refined_path_checker,
+                corridor_constraint={
+                    "centerline": execution_tube_centerline,
+                    "radius": float(getattr(corr, "radius", 0.0)),
+                })
             self._refinement_interest_offsets = None
+            execution_feasibility = {
+                "ik_valid": bool(getattr(corr, "ik_valid", False)),
+                "collision_valid": bool(getattr(
+                    corr, "link_collision_valid", True)) and not bool(getattr(
+                        corr, "link_collision", False)),
+                "manifold_valid": bool(metrics.get(
+                    "refinement_manifold_valid", False)),
+                "tube_valid": bool(metrics.get("refinement_tube_valid", False)),
+            }
+            corr.execution_reference_feasibility = dict(execution_feasibility)
+            if ok and not all(execution_feasibility.values()):
+                failed = [
+                    key for key, valid in execution_feasibility.items()
+                    if not valid]
+                ok = False
+                reason = "execution_reference_infeasible:" + ",".join(failed)
             if ok:
                 path = np.asarray(refined, float)
                 corr.waypoints = path.copy()
@@ -1155,11 +1193,14 @@ class HandoverNode:
                 corr.execution_cost = float(
                     corr.max_turn_angle + 0.2 * corr.max_curvature)
                 corr.motion_cost = float(corr.execution_cost)
-                corr.refinement_used = 1
-                corr.final_reference_source = "refined_waypoints"
+                fallback_used = bool(metrics.get("refinement_fallback", False))
+                corr.refinement_used = int(not fallback_used)
+                corr.final_reference_source = (
+                    "topology_skeleton_validated" if fallback_used
+                    else str(metrics.get("reference_source", "refined_waypoints")))
                 dbg = dict(getattr(self.manifold, "last_topology_debug", {}) or {})
                 selected_id = str(getattr(corr, "corridor_id", ""))
-                dbg["selected_refinement_used"] = 1
+                dbg["selected_refinement_used"] = int(not fallback_used)
                 dbg["selected_refined_path_length"] = float(
                     getattr(corr, "refined_path_length", corr.path_length))
                 dbg["selected_topology_diversity"] = float(
@@ -1181,7 +1222,7 @@ class HandoverNode:
                     if str(item.get("corridor_id", "")) == selected_id:
                         item["selected"] = True
                         item["execution_corridor_id"] = selected_id
-                        item["refinement_used"] = 1
+                        item["refinement_used"] = int(not fallback_used)
                         item["refined_waypoints"] = path.tolist()
                         item["refined_path_length"] = float(
                             getattr(corr, "refined_path_length", corr.path_length))
@@ -1196,56 +1237,20 @@ class HandoverNode:
             else:
                 corr.refinement_used = 0
                 corr.refinement_reject_reason = str(reason)
-                if (bool(getattr(corr, "candidate_tube_valid", False)) and
-                        bool(getattr(corr, "ik_valid", False)) and
-                        "tube_violation" in str(reason)):
-                    path = np.asarray(skeleton, float)
-                    corr.waypoints = path.copy()
-                    corr.refined_waypoints = path.copy()
-                    corr.final_reference_source = "topology_skeleton_ik_valid"
-                    corr.path_length = float(path_length(path))
-                    corr.execution_cost = float(getattr(
-                        corr, "execution_cost", 0.0))
-                    dbg = dict(getattr(self.manifold, "last_topology_debug", {}) or {})
-                    selected_id = str(getattr(corr, "corridor_id", ""))
-                    dbg["selected_refinement_used"] = 0
-                    dbg["selected_refinement_reject_reason"] = str(reason)
-                    dbg["mpc_used"] = 1
-                    dbg["mpc_reference_source"] = "topology_skeleton_ik_valid"
-                    dbg["final_path_source"] = (
-                        "Morse->Candidate->IK->PoseOptimization->MPC")
-                    for item in dbg.get("candidate_corridors", []):
-                        if str(item.get("corridor_id", "")) == selected_id:
-                            item["selected"] = True
-                            item["execution_corridor_id"] = selected_id
-                            item["refinement_used"] = 0
-                            item["refinement_reject_reason"] = str(reason)
-                            item["refined_waypoints"] = path.tolist()
-                            item["waypoints"] = path.tolist()
-                        else:
-                            item["selected"] = False
-                            item["execution_corridor_id"] = ""
-                    self.manifold.last_topology_debug = dbg
-                    self._write_failed_topology_diagnostics("success")
-                    rospy.logwarn(
-                        "[handover][refine] keep %s with IK-valid selected fallback reason=%s",
-                        getattr(corr, "corridor_id", getattr(corr, "label", "")),
-                        reason)
-                else:
-                    rospy.logwarn("[handover][refine] reject %s reason=%s "
-                                  "max_curvature=%.4f limit=%.4f "
-                                  "max_turn=%.4f limit=%.4f length=%.4f",
-                                  getattr(corr, "corridor_id",
-                                          getattr(corr, "label", "")),
-                                  reason,
-                                  float(metrics.get("max_curvature", 0.0)),
-                                  1.15 * float(self.topology_max_corridor_curvature),
-                                  float(metrics.get("max_turn", 0.0)),
-                                  1.15 * float(self.topology_max_corridor_turn),
-                                  float(path_length(np.asarray(refined, float))))
-                    raise RuntimeError(
-                        "handover topology refinement rejected selected corridor: %s" %
-                        str(reason))
+                rospy.logwarn("[handover][refine] reject %s reason=%s "
+                              "max_curvature=%.4f limit=%.4f "
+                              "max_turn=%.4f limit=%.4f length=%.4f",
+                              getattr(corr, "corridor_id",
+                                      getattr(corr, "label", "")),
+                              reason,
+                              float(metrics.get("max_curvature", 0.0)),
+                              1.15 * float(self.topology_max_corridor_curvature),
+                              float(metrics.get("max_turn", 0.0)),
+                              1.15 * float(self.topology_max_corridor_turn),
+                              float(path_length(np.asarray(refined, float))))
+                raise RuntimeError(
+                    "handover topology refinement rejected selected corridor: %s" %
+                    str(reason))
         else:
             corr.waypoints = np.asarray(skeleton, float)
         protected_indices = [0, len(path) - 1]
@@ -1260,6 +1265,28 @@ class HandoverNode:
         protected_indices = sorted(set(protected_indices))
         corr.protected_indices = protected_indices
         corr.mandatory_topology_indices = list(mandatory_indices)
+        original_centerline = np.asarray(getattr(corr, "centerline", []), float)
+        raw_status = check_refinement_manifold_validity(
+            candidate_raw_points,
+            corridor_constraint={"centerline": original_centerline,
+                                 "radius": float(getattr(corr, "radius", 0.0))})
+        fallback_status = check_refinement_manifold_validity(
+            np.asarray(skeleton, float),
+            corridor_constraint={"centerline": execution_tube_centerline,
+                                 "radius": float(getattr(corr, "radius", 0.0))})
+        reference_status = check_refinement_manifold_validity(
+            path,
+            corridor_constraint={"centerline": execution_tube_centerline,
+                                 "radius": float(getattr(corr, "radius", 0.0))})
+        corr.raw_candidate_corridor_violation_count = int(
+            raw_status.get("corridor_violation_count", 0))
+        corr.fallback_corridor_violation_count = int(
+            fallback_status.get("corridor_violation_count", 0))
+        corr.mpc_reference_corridor_violation_count = int(
+            reference_status.get("corridor_violation_count", 0))
+        corr.execution_reference_path = np.asarray(path, float).copy()
+        corr.execution_reference_endpoints = requested_endpoints.copy()
+        corr.execution_reference_protected_indices = list(protected_indices)
         return path, protected_indices
 
     def _sync_selected_corridor_debug(self, corr):
@@ -1409,6 +1436,28 @@ class HandoverNode:
                 samples=self.path_shortcut_samples,
                 max_passes=self.path_shortcut_passes)
         shortcut_length = path_length(path)
+        final_reference_status = check_refinement_manifold_validity(
+            path,
+            manifold_constraint={
+                "risk_threshold": float(self.arm_interest_rho_stop),
+                "minimum_clearance": 0.0,
+            },
+            corridor_constraint={
+                "centerline": np.asarray(getattr(
+                    corr, "execution_tube_centerline", nominal), float),
+                "radius": float(getattr(corr, "radius", 0.0)),
+            },
+            risk_field=self.field)
+        corr.mpc_reference_corridor_violation_count = int(
+            final_reference_status.get("corridor_violation_count", 0))
+        corr.mpc_reference_manifold_violation_count = int(
+            final_reference_status.get("manifold_violation_count", 0))
+        if not bool(final_reference_status.get("valid", False)):
+            raise RuntimeError(
+                "arm MPC reference rejected after deformation: "
+                "corridor_violation=%d manifold_violation=%d" % (
+                    corr.mpc_reference_corridor_violation_count,
+                    corr.mpc_reference_manifold_violation_count))
         protected_dist = protected_waypoint_distances(
             path, getattr(corr, "protected_waypoints", []))
         protected_ok = bool(
@@ -1843,26 +1892,6 @@ class HandoverNode:
                     executable.append(c)
                 except Exception as exc:
                     c.reject_reason = str(exc)
-                    if (bool(getattr(c, "candidate_tube_valid", False)) and
-                            bool(getattr(c, "ik_valid", False)) and
-                            "tube_violation" in str(exc)):
-                        fallback = np.asarray(getattr(
-                            c, "centerline", getattr(c, "waypoints", [])),
-                            float)
-                        if len(fallback) >= 2:
-                            c.waypoints = fallback.copy()
-                            c.refined_waypoints = fallback.copy()
-                            c.refinement_used = 0
-                            c.refinement_reject_reason = str(exc)
-                            c.length_cost = float(path_length(fallback))
-                            c.execution_cost = float(getattr(
-                                c, "execution_cost", 0.0))
-                            executable.append(c)
-                            rospy.logwarn(
-                                "[handover][refine] keep %s with IK-valid fallback reason=%s",
-                                getattr(c, "corridor_id", getattr(c, "label", "")),
-                                exc)
-                            continue
                     rospy.logwarn(
                         "[handover][refine] skip %s reason=%s",
                         getattr(c, "corridor_id", getattr(c, "label", "")),
@@ -2336,10 +2365,13 @@ class HandoverNode:
                       "baseline" if self.baseline else "STSM-deformed")
         self._set_phase(1)
         path = self._deformed_path(self._ee_pos(), self.handover)
+        self.corridor_evaluation_active = bool(
+            not self.baseline and self.execution_corridor is not None)
         if not self._servo_to_path_segmented(
                 path, mandatory_indices=self.mandatory_topology_indices,
                 corridor=self.execution_corridor):
             if self.abort_on_stop:
+                self.corridor_evaluation_active = False
                 self._return_home()
                 self._log_done()
                 return
@@ -2424,6 +2456,7 @@ class HandoverNode:
             self.stop_triggered = True
             self.stop_reason = "handover_not_complete"
             if self.abort_on_stop:
+                self.corridor_evaluation_active = False
                 self._return_home()
                 self._log_done()
                 return
@@ -2434,10 +2467,12 @@ class HandoverNode:
         if not self._servo_to_path(
                 self._nominal_path(self._ee_pos(), self.wait),
                 reference_corridor=self.execution_corridor):
+            self.corridor_evaluation_active = False
             self._return_home()
             if self.abort_on_stop:
                 self._log_done()
                 return
+        self.corridor_evaluation_active = False
         self.task_completed = bool(self._return_home())
         self._log_done()
 
@@ -2732,7 +2767,24 @@ class HandoverNode:
                     row["point"] for row in self.mpc_executed_records],
                 "executed_phase_sequence": [
                     row["phase"] for row in self.mpc_executed_records],
+                "executed_corridor_active_sequence": [
+                    bool(row.get("corridor_active", False))
+                    for row in self.mpc_executed_records],
                 "executed_evidence_required": True,
+            })
+        if corr is not None:
+            result.update({
+                "raw_candidate_corridor_violation_count": int(getattr(
+                    corr, "raw_candidate_corridor_violation_count", 0)),
+                "refined_corridor_violation_count": int(getattr(
+                    corr, "trajectory_corridor_violation_count", 0)),
+                "fallback_corridor_violation_count": int(getattr(
+                    corr, "fallback_corridor_violation_count", 0)),
+                "mpc_reference_corridor_violation_count": int(getattr(
+                    corr, "mpc_reference_corridor_violation_count", 0)),
+                "execution_tube_source": "selected_topology_route_with_task_endpoints",
+                "execution_reference_feasibility": dict(getattr(
+                    corr, "execution_reference_feasibility", {})),
             })
         result["task_success"] = bool(self.task_completed)
         result["overall_success"] = bool(

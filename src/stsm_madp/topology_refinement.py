@@ -586,6 +586,8 @@ def refine_topology_path(corridor, samples_per_segment=12,
     corridor.post_refinement_clearance = float(post_status.get("min_clearance", 0.0))
     corridor.trajectory_manifold_violation_count = int(
         post_status.get("violation_count", 0))
+    corridor.trajectory_corridor_violation_count = int(
+        post_status.get("corridor_violation_count", 0))
     corridor.refinement_fallback = bool(fallback_used)
     corridor.refinement_trace = list(refinement_info.get("trace", []))
     association = associate_corridor_critical_points(corridor, refined)
@@ -625,6 +627,8 @@ def refine_topology_path(corridor, samples_per_segment=12,
         "reference_source": reference_source,
         "trajectory_manifold_violation_count": int(
             corridor.trajectory_manifold_violation_count),
+        "trajectory_corridor_violation_count": int(
+            corridor.trajectory_corridor_violation_count),
     }
     corridor.risk_before_refinement = float(risk_before)
     corridor.risk_after_refinement = float(risk_after)
@@ -658,5 +662,7 @@ def refine_topology_path(corridor, samples_per_segment=12,
     metrics["reference_path_count"] = int(len(refined))
     metrics["trajectory_manifold_violation_count"] = int(
         corridor.trajectory_manifold_violation_count)
+    metrics["trajectory_corridor_violation_count"] = int(
+        corridor.trajectory_corridor_violation_count)
     metrics["refinement_trace"] = list(corridor.refinement_trace)
     return ok, refined, metrics, reason

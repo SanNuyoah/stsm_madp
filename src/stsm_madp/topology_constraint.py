@@ -442,13 +442,18 @@ def build_topology_constraint(selected_topology_graph=None,
         getattr(corridor, "refinement_output", {}) if corridor is not None else {})
     if not isinstance(refinement_output, dict):
         refinement_output = {}
+    # Keep the selected route's execution tube independent from the MPC
+    # reference.  Otherwise every reference is trivially valid against a tube
+    # rebuilt from itself and candidate/refinement violations are hidden.
     centerline = _first_points(
-        refined_reference,
+        getattr(corridor, "execution_tube_centerline", None)
+        if corridor is not None else None,
         refinement_output.get("final_trajectory"),
         refinement_output.get("trajectory"),
         getattr(corridor, "refined_waypoints", None) if corridor is not None else None,
         getattr(corridor, "centerline", None) if corridor is not None else None,
-        getattr(corridor, "waypoints", None) if corridor is not None else None)
+        getattr(corridor, "waypoints", None) if corridor is not None else None,
+        refined_reference)
     radius = float(getattr(corridor, "radius", 0.35)) if corridor is not None else 0.35
     topology_class = str(
         getattr(corridor, "topology_route_class",

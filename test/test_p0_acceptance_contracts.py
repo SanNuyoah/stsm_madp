@@ -1,5 +1,6 @@
 import os
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -22,8 +23,10 @@ from stsm_madp.mpc import run_mpc_tracking
 from stsm_madp.mpc import build_mpc_constraint_inputs
 from stsm_madp.mpc import audit_reference_safety
 from stsm_madp.mpc import _phase_constraint_diagnostics_payload
+from stsm_madp.mpc import evaluate_executed_trajectory
 from stsm_madp.safety_evaluator import SafetyEvaluator
 from stsm_madp.topology import TopologicalCorridorPlanner
+from stsm_madp.topology_constraint import build_topology_constraint
 
 
 class ZeroField(object):
@@ -500,3 +503,52 @@ def test_metrics_does_not_read_output_row_before_it_is_built():
         source = handle.read()
     base_assignment = source.index("        base = {")
     assert 'base.get("safety_success"' not in source[:base_assignment]
+
+
+def test_execution_tube_is_not_redefined_by_mpc_reference():
+    corridor = SimpleNamespace(
+        corridor_id="arm_test",
+        radius=0.08,
+        execution_tube_centerline=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+        refined_waypoints=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+        centerline=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+        node_sequence=[])
+    reference = [[0.0, 0.5, 0.0], [1.0, 0.5, 0.0]]
+
+    constraint = build_topology_constraint(
+        selected_corridor=corridor, refined_reference=reference,
+        safe_threshold=1.0, minimum_clearance=0.0)
+
+    assert np.allclose(
+        constraint["corridor_centerline"],
+        corridor.execution_tube_centerline)
+    evaluator = SafetyEvaluator(
+        manifold_constraint={"minimum_clearance": 0.0, "risk_threshold": 1.0},
+        corridor_constraint={"centerline": constraint["corridor_centerline"],
+                             "radius": constraint["corridor_radius"]})
+    assert evaluator.evaluate_trajectory(reference)["corridor_violation_count"] == 2
+
+
+def test_executed_corridor_counts_only_active_scope():
+    context = {
+        "centerline": np.asarray([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
+        "radius": 0.08,
+        "safe_threshold": 10.0,
+        "minimum_clearance": 0.0,
+        "nominal_minimum_clearance": 0.0,
+        "manifold_boundary": [],
+        "manifold_constraint": {"minimum_clearance": 0.0,
+                                "risk_threshold": 10.0},
+        "topology_tube_constraint": {},
+        "robot_type": "arm",
+    }
+    points = [[0.0, 0.5, 0.0], [0.5, 0.0, 0.0], [1.0, 0.5, 0.0]]
+    rows, summary = evaluate_executed_trajectory(
+        points, context, social_field=ZeroField(), robot_type="arm",
+        phase_sequence=["approach", "approach", "return"],
+        corridor_active_sequence=[False, True, False])
+
+    assert summary["corridor_violation_count"] == 0
+    assert rows[0]["corridor_constraint_status"] == "not_applicable"
+    assert rows[0]["corridor_out_of_scope_violation"] > 0.0
+    assert rows[1]["corridor_active"] is True
