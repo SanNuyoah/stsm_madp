@@ -1,0 +1,103 @@
+<?xml version="1.0"?>
+<robot name="wheelchair" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:property name="base_x" value="0.7"/>
+  <xacro:property name="base_y" value="0.6"/>
+  <xacro:property name="base_z" value="0.25"/>
+  <xacro:property name="wheel_r" value="0.15"/>
+  <xacro:property name="wheel_w" value="0.05"/>
+  <xacro:property name="sep" value="0.62"/>
+
+  <material name="chair"><color rgba="0.2 0.3 0.4 1"/></material>
+  <material name="dark"><color rgba="0.1 0.1 0.1 1"/></material>
+
+  <link name="base_footprint"/>
+
+  <link name="base_link">
+    <inertial>
+      <mass value="40"/>
+      <inertia ixx="2.0" ixy="0" ixz="0" iyy="2.0" iyz="0" izz="2.0"/>
+    </inertial>
+    <visual>
+      <geometry><box size="${base_x} ${base_y} ${base_z}"/></geometry>
+      <material name="chair"/>
+    </visual>
+    <collision>
+      <geometry><box size="${base_x} ${base_y} ${base_z}"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="base_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 ${wheel_r + base_z/2}"/>
+  </joint>
+
+  <!-- seat back (so the occupant volume matters for social footprint) -->
+  <link name="seat_back">
+    <inertial><mass value="5"/>
+      <inertia ixx="0.2" ixy="0" ixz="0" iyy="0.2" iyz="0" izz="0.2"/></inertial>
+    <visual><geometry><box size="0.1 ${base_y} 0.5"/></geometry>
+      <material name="chair"/></visual>
+    <collision><geometry><box size="0.1 ${base_y} 0.5"/></geometry></collision>
+  </link>
+  <joint name="seat_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="seat_back"/>
+    <origin xyz="${-base_x/2 + 0.05} 0 ${base_z/2 + 0.25}"/>
+  </joint>
+
+  <xacro:macro name="wheel" params="name y">
+    <link name="${name}">
+      <inertial><mass value="2"/>
+        <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.02"/></inertial>
+      <visual>
+        <origin rpy="1.5708 0 0"/>
+        <geometry><cylinder radius="${wheel_r}" length="${wheel_w}"/></geometry>
+        <material name="dark"/>
+      </visual>
+      <collision>
+        <origin rpy="1.5708 0 0"/>
+        <geometry><cylinder radius="${wheel_r}" length="${wheel_w}"/></geometry>
+      </collision>
+    </link>
+    <joint name="${name}_joint" type="continuous">
+      <parent link="base_link"/>
+      <child link="${name}"/>
+      <origin xyz="0 ${y} ${-base_z/2}"/>
+      <axis xyz="0 1 0"/>
+    </joint>
+    <transmission name="${name}_trans">
+      <type>transmission_interface/SimpleTransmission</type>
+      <joint name="${name}_joint"><hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface></joint>
+      <actuator name="${name}_motor"><mechanicalReduction>1</mechanicalReduction></actuator>
+    </transmission>
+  </xacro:macro>
+
+  <xacro:wheel name="left_wheel" y="${sep/2}"/>
+  <xacro:wheel name="right_wheel" y="${-sep/2}"/>
+
+  <!-- passive front caster (sphere) -->
+  <link name="caster">
+    <inertial><mass value="0.5"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/></inertial>
+    <visual><geometry><sphere radius="0.06"/></geometry><material name="dark"/></visual>
+    <collision><geometry><sphere radius="0.06"/></geometry>
+      <surface><friction><ode><mu>0.0</mu><mu2>0.0</mu2></ode></friction></surface></collision>
+  </link>
+  <joint name="caster_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="caster"/>
+    <origin xyz="${base_x/2 - 0.1} 0 ${-base_z/2 - wheel_r + 0.06}"/>
+  </joint>
+
+  <gazebo reference="caster"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+  <gazebo reference="left_wheel"><mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
+  <gazebo reference="right_wheel"><mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
+
+  <gazebo>
+    <plugin name="gazebo_ros_control" filename="libgazebo_ros_control.so">
+      <robotNamespace>/wheelchair</robotNamespace>
+    </plugin>
+  </gazebo>
+</robot>

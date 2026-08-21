@@ -1,0 +1,23 @@
+{
+  "baseline": true,
+  "baseline_type": "direct",
+  "corridor_constraint_used": false,
+  "critical_point_association_used": false,
+  "critical_point_sequence_constraint_used": false,
+  "failure_reason": "none",
+  "final_mpc_status": "feasible",
+  "final_status": "feasible",
+  "manifold_constraint_used": false,
+  "mode": "baseline",
+  "module_chain_valid": false,
+  "morse_used": false,
+  "mpc_feasibility_status": "feasible",
+  "planner_source": "direct_connection",
+  "refinement_used": false,
+  "replan_required": false,
+  "robot": "arm",
+  "selected_corridor_id": "baseline_direct",
+  "target": "arm",
+  "topology_constraint_used": false,
+  "variant": "baseline"
+}

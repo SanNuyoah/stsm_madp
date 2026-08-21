@@ -1,0 +1,227 @@
+[
+  {
+    "clearance": 0.05807555020503881, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2"
+    ], 
+    "length": 0.8803122018952229, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0001", 
+    "route_source": "morse_topology"
+  }, 
+  {
+    "clearance": 0.006496612584655414, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2", 
+      "minimum_4"
+    ], 
+    "length": 0.957332008180888, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0002", 
+    "route_source": "morse_topology"
+  }, 
+  {
+    "clearance": 0.022685730871420832, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2", 
+      "saddle_0"
+    ], 
+    "length": 1.159025613270119, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0003", 
+    "route_source": "morse_topology"
+  }, 
+  {
+    "clearance": 0.01980449930902916, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2", 
+      "saddle_3"
+    ], 
+    "length": 2.235293314589527, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0004", 
+    "route_source": "morse_topology"
+  }, 
+  {
+    "clearance": 0.022685730871420832, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2", 
+      "minimum_4", 
+      "saddle_0"
+    ], 
+    "length": 1.159025613270119, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0005", 
+    "route_source": "morse_topology"
+  }, 
+  {
+    "clearance": 0.012578423154387529, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2", 
+      "saddle_0", 
+      "minimum_4"
+    ], 
+    "length": 1.2751230377275156, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0006", 
+    "route_source": "morse_topology"
+  }, 
+  {
+    "clearance": 0.01980449930902916, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2", 
+      "minimum_4", 
+      "saddle_3"
+    ], 
+    "length": 2.235293314589527, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0007", 
+    "route_source": "morse_topology"
+  }, 
+  {
+    "clearance": 0.012578423154387529, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2", 
+      "saddle_3", 
+      "minimum_4"
+    ], 
+    "length": 2.3537372983800027, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0008", 
+    "route_source": "morse_topology"
+  }, 
+  {
+    "clearance": 0.01980449930902916, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2", 
+      "saddle_0", 
+      "saddle_3"
+    ], 
+    "length": 2.229033899018756, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0009", 
+    "route_source": "morse_topology"
+  }, 
+  {
+    "clearance": 0.01980449930902916, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2", 
+      "saddle_3", 
+      "saddle_0"
+    ], 
+    "length": 2.235293314589527, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0010", 
+    "route_source": "morse_topology"
+  }, 
+  {
+    "clearance": 0.01980449930902916, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2", 
+      "minimum_4", 
+      "saddle_3", 
+      "saddle_0"
+    ], 
+    "length": 2.235293314589527, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0011", 
+    "route_source": "morse_topology"
+  }, 
+  {
+    "clearance": 0.01980449930902916, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2", 
+      "minimum_4", 
+      "saddle_0", 
+      "saddle_3"
+    ], 
+    "length": 2.229033899018756, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0012", 
+    "route_source": "morse_topology"
+  }, 
+  {
+    "clearance": 0.012578423154387529, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2", 
+      "saddle_0", 
+      "saddle_3", 
+      "minimum_4"
+    ], 
+    "length": 2.347477882809232, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0013", 
+    "route_source": "morse_topology"
+  }, 
+  {
+    "clearance": 0.012578423154387529, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2", 
+      "saddle_3", 
+      "saddle_0", 
+      "minimum_4"
+    ], 
+    "length": 2.346836791513521, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0014", 
+    "route_source": "morse_topology"
+  }, 
+  {
+    "clearance": 0.003509943557169753, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2", 
+      "saddle_0", 
+      "minimum_4", 
+      "saddle_3"
+    ], 
+    "length": 2.472270445455302, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0015", 
+    "route_source": "morse_topology"
+  }, 
+  {
+    "clearance": 0.003509943557169774, 
+    "critical_sequence": [
+      "saddle_1", 
+      "saddle_2", 
+      "saddle_3", 
+      "minimum_4", 
+      "saddle_0"
+    ], 
+    "length": 2.4739759134926707, 
+    "risk": 1.9933859879631295, 
+    "route_generation_level": "saddle_sequence", 
+    "route_id": "morse_topology_candidate_0016", 
+    "route_source": "morse_topology"
+  }
+]

@@ -1,0 +1,41 @@
+<launch>
+  <!-- STSM-MADP eldercare handover scenario on elfin3 (E3 pro) -->
+  <arg name="gui" default="true"/>
+  <arg name="paused" default="false"/>
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(find stsm_madp)/worlds/eldercare_room.world"/>
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="paused" value="$(arg paused)"/>
+  </include>
+
+  <param name="robot_description"
+         command="$(find xacro)/xacro '$(find elfin_description)/urdf/elfin3_gazebo.urdf.xacro'"/>
+
+  <!-- Mount arm at the table edge; Gazebo pose is the simulation ground truth. -->
+  <node name="urdf_spawner" pkg="gazebo_ros" type="spawn_model" respawn="false"
+        output="screen"
+        args="-urdf -model elfin3 -param robot_description -x 0.0 -y 0.0 -z 0.74"/>
+
+  <node name="fake_joint_calibration" pkg="rostopic" type="rostopic"
+        args="pub /calibrated std_msgs/Bool true"/>
+
+  <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher">
+    <param name="publish_frequency" type="double" value="50.0"/>
+  </node>
+
+  <rosparam file="$(find elfin_gazebo)/config/joint_state_controller.yaml" command="load"/>
+  <node name="joint_state_controller_spawner" pkg="controller_manager"
+        type="controller_manager" args="spawn joint_state_controller"
+        respawn="false" output="screen"/>
+
+  <rosparam file="$(find elfin_gazebo)/config/elfin_arm_control.yaml" command="load"/>
+  <node name="elfin_arm_controller_spawner" pkg="controller_manager"
+        type="controller_manager" args="spawn elfin_arm_controller"
+        respawn="false" output="screen"/>
+
+  <!-- MoveIt move_group for nominal trajectory generation -->
+  <include file="$(find elfin3_moveit_config)/launch/move_group.launch">
+    <arg name="publish_monitored_planning_scene" value="true"/>
+  </include>
+</launch>

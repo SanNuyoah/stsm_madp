@@ -1,0 +1,16 @@
+{
+  "critical_point_association_used": true,
+  "critical_point_count": 0,
+  "critical_point_status": "passed",
+  "critical_points": [],
+  "hard_radius": 1.0,
+  "hard_violation_count": 0,
+  "robot": "arm",
+  "selected_corridor_id": "arm_c0001",
+  "soft_radius": 0.5,
+  "soft_violation_count": 0,
+  "target": "arm",
+  "topology_sequence_valid": true,
+  "trajectory_count": 4,
+  "variant": "stsm"
+}

@@ -1,0 +1,12 @@
+{
+  "baseline_valid": false,
+  "diagnostics_consistent": false,
+  "diagnostics_metrics_consistent": false,
+  "metrics_consistent": true,
+  "overall_pass": false,
+  "result_structure_valid": false,
+  "stsm_valid": false,
+  "topology_constraint_consistent": false,
+  "topology_mpc_closed_loop": false,
+  "variant_isolated": false
+}

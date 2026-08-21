@@ -1,0 +1,254 @@
+... logging to /home/sun/.ros/log/10f36c30-9ba8-11f1-9ff1-fc221c3008c1/roslaunch-ubuntu1804-6060.log
+Checking log directory for disk usage. This may take a while.
+Press Ctrl-C to interrupt
+Done checking log file disk usage. Usage is <1GB.
+]2;/home/sun/LLL/catkin_ws/src/stsm_madp/launch/arm_action.launch
+[1mstarted roslaunch server http://ubuntu1804:38835/[0m
+
+SUMMARY
+========
+
+PARAMETERS
+ * /rosdistro: melodic
+ * /rosversion: 1.14.13
+ * /stsm_handover/adp_blend_alpha: 0.08
+ * /stsm_handover/adp_debug: False
+ * /stsm_handover/adp_descent_gain: 0.04
+ * /stsm_handover/adp_enabled: False
+ * /stsm_handover/adp_grad_clip: 8.0
+ * /stsm_handover/adp_grad_eps: 0.01
+ * /stsm_handover/adp_min_scale: 0.35
+ * /stsm_handover/adp_model: /home/sun/LLL/cat...
+ * /stsm_handover/adp_post_scale_enabled: False
+ * /stsm_handover/adp_solver_mode: dls_adp
+ * /stsm_handover/arm_handover_debug_out: /home/sun/LLL/cat...
+ * /stsm_handover/baseline: True
+ * /stsm_handover/decision_trace_out: /home/sun/LLL/cat...
+ * /stsm_handover/experiment_mode: paper
+ * /stsm_handover/interest_points/enabled: True
+ * /stsm_handover/interest_points/gate_enabled: True
+ * /stsm_handover/interest_points/min_scale: 0.2
+ * /stsm_handover/interest_points/rho_stop: 6.0
+ * /stsm_handover/interest_points/rho_warn: 3.5
+ * /stsm_handover/lambda_adp: 0.005
+ * /stsm_handover/lambda_adp_arm: 0.008
+ * /stsm_handover/lambda_adp_path: 0.005
+ * /stsm_handover/mpc_reference_out: /home/sun/LLL/cat...
+ * /stsm_handover/scene/anchors/table/center: [0.55, 0.0, -0.37]
+ * /stsm_handover/scene/anchors/table/forbidden: False
+ * /stsm_handover/scene/anchors/table/half_extent: [0.3, 0.5, 0.37]
+ * /stsm_handover/scene/anchors/table/type: table
+ * /stsm_handover/scene/anchors/table/weight: 1.0
+ * /stsm_handover/scene/field/lam_body: 2.5
+ * /stsm_handover/scene/field/lam_close: 1.2
+ * /stsm_handover/scene/field/lam_dir: 0.6
+ * /stsm_handover/scene/field/lam_env: 0.8
+ * /stsm_handover/scene/field/lam_prox: 1.0
+ * /stsm_handover/scene/field/sigma_env: 0.25
+ * /stsm_handover/scene/grasp_pose: [0.34, 0.16, 0.05]
+ * /stsm_handover/scene/handover_minima_pose: [0.36, 0.05, 0.18]
+ * /stsm_handover/scene/handover_pose: [0.42, 0.0, 0.21]
+ * /stsm_handover/scene/interest_points/enabled: True
+ * /stsm_handover/scene/interest_points/fallback_to_ee_only: True
+ * /stsm_handover/scene/interest_points/gate_enabled: True
+ * /stsm_handover/scene/interest_points/labels: ['ee', 'wrist', '...
+ * /stsm_handover/scene/interest_points/links/elbow/enabled: True
+ * /stsm_handover/scene/interest_points/links/elbow/link_name: elfin_link3
+ * /stsm_handover/scene/interest_points/links/wrist/enabled: True
+ * /stsm_handover/scene/interest_points/links/wrist/link_name: elfin_link5
+ * /stsm_handover/scene/interest_points/min_scale: 0.2
+ * /stsm_handover/scene/interest_points/object/enabled: True
+ * /stsm_handover/scene/interest_points/object/source: ee_offset
+ * /stsm_handover/scene/interest_points/object_offset: [0.0, 0.0, -0.05]
+ * /stsm_handover/scene/interest_points/publish_points: True
+ * /stsm_handover/scene/interest_points/rho_stop: 6.0
+ * /stsm_handover/scene/interest_points/rho_warn: 3.5
+ * /stsm_handover/scene/manifold/lam_s: 1.0
+ * /stsm_handover/scene/manifold/manifold_phase_config/approach/adaptive: True
+ * /stsm_handover/scene/manifold/manifold_phase_config/approach/end_clearance: 0.2
+ * /stsm_handover/scene/manifold/manifold_phase_config/approach/start_clearance: 0.35
+ * /stsm_handover/scene/manifold/manifold_phase_config/handover/clearance: 0.15
+ * /stsm_handover/scene/manifold/manifold_phase_config/handover/interaction_clearance: 0.15
+ * /stsm_handover/scene/manifold/manifold_phase_config/return/adaptive: True
+ * /stsm_handover/scene/manifold/manifold_phase_config/return/end_clearance: 0.35
+ * /stsm_handover/scene/manifold/manifold_phase_config/return/start_clearance: 0.2
+ * /stsm_handover/scene/manifold/rho_ee: 2.0
+ * /stsm_handover/scene/manifold_phase_config/approach/adaptive: True
+ * /stsm_handover/scene/manifold_phase_config/approach/end_clearance: 0.2
+ * /stsm_handover/scene/manifold_phase_config/approach/start_clearance: 0.35
+ * /stsm_handover/scene/manifold_phase_config/handover/clearance: 0.15
+ * /stsm_handover/scene/manifold_phase_config/return/adaptive: True
+ * /stsm_handover/scene/manifold_phase_config/return/end_clearance: 0.35
+ * /stsm_handover/scene/manifold_phase_config/return/start_clearance: 0.2
+ * /stsm_handover/scene/mpc/body_slow_radius: 0.45
+ * /stsm_handover/scene/mpc/clearance_threshold: 0.08
+ * /stsm_handover/scene/mpc/dq_max: 0.6
+ * /stsm_handover/scene/mpc/manifold_constraint_mode: soft
+ * /stsm_handover/scene/mpc/manifold_hard_tolerance: 0.25
+ * /stsm_handover/scene/mpc/manifold_soft_tolerance: 0.08
+ * /stsm_handover/scene/mpc/manifold_threshold: 6.0
+ * /stsm_handover/scene/mpc/mpc_manifold_constraint_mode: soft
+ * /stsm_handover/scene/mpc/near_radius: 0.12
+ * /stsm_handover/scene/mpc/path_shortcut_enabled: True
+ * /stsm_handover/scene/mpc/path_shortcut_passes: 2
+ * /stsm_handover/scene/mpc/path_shortcut_rho: 6.0
+ * /stsm_handover/scene/mpc/path_shortcut_samples: 8
+ * /stsm_handover/scene/mpc/phase_cost_weights/approach/risk_multiplier: 1.8
+ * /stsm_handover/scene/mpc/phase_cost_weights/approach/smooth_multiplier: 1.0
+ * /stsm_handover/scene/mpc/phase_cost_weights/approach/task_multiplier: 1.0
+ * /stsm_handover/scene/mpc/phase_cost_weights/approach/tracking_multiplier: 1.0
+ * /stsm_handover/scene/mpc/phase_cost_weights/handover/risk_multiplier: 0.7
+ * /stsm_handover/scene/mpc/phase_cost_weights/handover/smooth_multiplier: 1.0
+ * /stsm_handover/scene/mpc/phase_cost_weights/handover/task_multiplier: 3.0
+ * /stsm_handover/scene/mpc/phase_cost_weights/handover/tracking_multiplier: 3.0
+ * /stsm_handover/scene/mpc/phase_cost_weights/return/risk_multiplier: 1.8
+ * /stsm_handover/scene/mpc/phase_cost_weights/return/smooth_multiplier: 1.0
+ * /stsm_handover/scene/mpc/phase_cost_weights/return/task_multiplier: 1.0
+ * /stsm_handover/scene/mpc/phase_cost_weights/return/tracking_multiplier: 1.0
+ * /stsm_handover/scene/mpc/risk_slow_threshold: 2.6
+ * /stsm_handover/scene/mpc/risk_stop_threshold: 6.0
+ * /stsm_handover/scene/mpc/risk_threshold: 6.0
+ * /stsm_handover/scene/mpc/servo_gain: 1.35
+ * /stsm_handover/scene/mpc/stsm_speed_scale: 0.6
+ * /stsm_handover/scene/mpc/v_cap_body: 0.05
+ * /stsm_handover/scene/mpc/v_cap_far: 0.18
+ * /stsm_handover/scene/mpc/v_cap_near: 0.04
+ * /stsm_handover/scene/mpc/v_cap_risk: 0.08
+ * /stsm_handover/scene/mpc/weights/control: 0.1
+ * /stsm_handover/scene/mpc/weights/corridor: 10.0
+ * /stsm_handover/scene/mpc/weights/manifold: 10.0
+ * /stsm_handover/scene/mpc/weights/risk: 1.0
+ * /stsm_handover/scene/mpc/weights/smooth: 0.2
+ * /stsm_handover/scene/mpc/weights/topology: 5.0
+ * /stsm_handover/scene/mpc/weights/track: 1.0
+ * /stsm_handover/scene/person/body_parts/chest/pos: [0.78, 0.0, 0.31]
+ * /stsm_handover/scene/person/body_parts/chest/sigma: 0.18
+ * /stsm_handover/scene/person/body_parts/chest/weight: 1.6
+ * /stsm_handover/scene/person/body_parts/hand/pos: [0.42, 0.0, 0.21]
+ * /stsm_handover/scene/person/body_parts/hand/sigma: 0.1
+ * /stsm_handover/scene/person/body_parts/hand/weight: 0.3
+ * /stsm_handover/scene/person/body_parts/head/pos: [0.78, 0.0, 0.61]
+ * /stsm_handover/scene/person/body_parts/head/sigma: 0.13
+ * /stsm_handover/scene/person/body_parts/head/weight: 3.0
+ * /stsm_handover/scene/person/heading: 3.14159
+ * /stsm_handover/scene/person/posture: sitting
+ * /stsm_handover/scene/person/ref_pos: [0.78, 0.0, 0.31]
+ * /stsm_handover/scene/person/vulnerability: 1.3
+ * /stsm_handover/scene/safety_gate/abort_on_stop: True
+ * /stsm_handover/scene/safety_gate/enabled: True
+ * /stsm_handover/scene/safety_gate/hold_dt: 0.2
+ * /stsm_handover/scene/safety_gate/min_scale: 0.15
+ * /stsm_handover/scene/safety_gate/rho_stop: 6.0
+ * /stsm_handover/scene/safety_gate/rho_warn: 3.5
+ * /stsm_handover/scene/topology/allow_graph_fallback_with_morse: False
+ * /stsm_handover/scene/topology/allow_ring_with_morse: False
+ * /stsm_handover/scene/topology/allow_semantic_topology_recovery: False
+ * /stsm_handover/scene/topology/allow_semantic_with_morse: False
+ * /stsm_handover/scene/topology/candid[ WARN] [1787131426.101917870]: Kinematics solver doesn't support #attempts anymore, but only a timeout.
+Please remove the parameter '/robot_description_kinematics/elfin_arm/kinematics_solver_attempts' from your configuration.
+[ WARN] [1787131426.104531039]: IK plugin for group 'elfin_arm' relies on deprecated API. Please implement initialize(RobotModel, ...).
+[WARN] [1787131462.274164, 52.462000]: [handover] phase 3 protected approach pos_err=0.0363 tol=0.0350
+[ INFO] [1787131425.963393442]: Loading robot model 'elfin3'...
+[ INFO] [1787131425.963831374]: No root/virtual joint specified in SRDF. Assuming fixed joint
+[ INFO] [1787131426.105601532]: IK Using joint elfin_link1 -3.14 3.14
+[ INFO] [1787131426.105609753]: IK Using joint elfin_link2 -2.35 2.35
+[ INFO] [1787131426.105615135]: IK Using joint elfin_link3 -2.61 2.61
+[ INFO] [1787131426.105620507]: IK Using joint elfin_link4 -3.14 3.14
+[ INFO] [1787131426.105625757]: IK Using joint elfin_link5 -2.56 2.56
+[ INFO] [1787131426.105630974]: IK Using joint elfin_link6 -3.14 3.14
+[ INFO] [1787131426.105637963]: Looking in common namespaces for param name: elfin_arm/position_only_ik
+[ INFO] [1787131426.106071411]: Looking in common namespaces for param name: elfin_arm/solve_type
+[ INFO] [1787131426.106476539]: Using solve type Speed
+[ INFO] [1787131427.453994068, 17.680000000]: Ready to take commands for planning group elfin_arm.
+[INFO] [1787131429.552372, 19.776000]: [handover] going home
+[INFO] [1787131430.277230, 20.300000]: [handover] EE start [-0.    -0.     0.939]
+[INFO] [1787131430.316438, 20.522000]: [handover] phase 0: reach object
+[INFO] [1787131430.539157, 20.761000]: Arm solver: calls=1, success=1, fallback=0, status=dls adp_grad=0.000 adp_soft=0.000 align=0.000
+[INFO] [1787131435.581947, 25.799000]: Arm solver: calls=53, success=53, fallback=0, status=dls adp_grad=0.000 adp_soft=0.000 align=0.000
+[INFO] [1787131440.588788, 30.802000]: Arm solver: calls=102, success=102, fallback=0, status=dls adp_grad=0.000 adp_soft=0.000 align=0.000
+[INFO] [1787131445.633383, 35.841000]: Arm solver: calls=153, success=153, fallback=0, status=dls adp_grad=0.000 adp_soft=0.000 align=0.000
+[INFO] [1787131450.695475, 40.899000]: Arm solver: calls=204, success=204, fallback=0, status=dls adp_grad=0.000 adp_soft=0.000 align=0.000
+[INFO] [1787131454.979614, 45.179000]: [handover][topology_exec] ok=1 mandatory_reached=1 max_saddle_dist=0.000 corridor_violations=0 topology_error=0.000
+[INFO] [1787131454.980367, 45.180000]: [handover] phase 1: baseline handover approach
+[INFO] [1787131455.000022, 45.183000]: [handover][mpc_segment] segment=1/1 path_idx=0->29 mandatory_end=0
+[INFO] [1787131455.748197, 45.941000]: Arm solver: calls=251, success=251, fallback=0, status=dls adp_grad=0.000 adp_soft=0.000 align=0.000
+[INFO] [1787131460.792674, 50.981000]: Arm solver: calls=299, success=299, fallback=0, status=dls adp_grad=0.000 adp_soft=0.000 align=0.000
+[INFO] [1787131462.211930, 52.400000]: [handover][topology_exec] ok=1 mandatory_reached=1 max_saddle_dist=0.000 corridor_violations=0 topology_error=0.000
+[INFO] [1787131462.230530, 52.402000]: [handover] phase 2: handover pose reached
+[INFO] [1787131462.271292, 52.442000]: [handover] phase 3: handover hold
+[INFO] [1787131462.852093, 53.023000]: [handover][topology_exec] ok=1 mandatory_reached=1 max_saddle_dist=0.000 corridor_violations=0 topology_error=0.000
+[INFO] [1787131464.393136, 54.562000]: [handover] handover complete pos_err=0.0217 orient_err=0.0397 stable=1.06s gripper=0
+[INFO] [1787131464.395834, 54.582000]: [handover] phase 3: retreat after handover
+[INFO] [1787131465.897904, 56.081000]: Arm solver: calls=327, success=327, fallback=0, status=dls adp_grad=0.000 adp_soft=0.000 align=0.000
+[INFO] [1787131470.119123, 60.300000]: [handover][topology_exec] ok=1 mandatory_reached=1 max_saddle_dist=0.000 corridor_violations=0 topology_error=0.000
+[INFO] [1787131470.121198, 60.303000]: [handover] returning arm to home
+[INFO] [1787131476.642866, 66.783000]: [handover] task completion stable pos_err=0.0001 speed=0.0000 cycles=6
+[INFO] [1787131476.643659, 66.820000]: Arm solver summary: calls=370, success=370, fallback=0, status=dls
+[INFO] [1787131476.644118, 66.821000]: [handover] done (mode=baseline, stop=False, reason=)
+ate_max_risk: 6.0
+ * /stsm_handover/scene/topology/candidate_pool_min: 3
+ * /stsm_handover/scene/topology/corridor_dedupe_distance: 0.04
+ * /stsm_handover/scene/topology/corridor_radius: 0.08
+ * /stsm_handover/scene/topology/corridor_score_weights/curvature: 1.0
+ * /stsm_handover/scene/topology/corridor_score_weights/exec: 1.0
+ * /stsm_handover/scene/topology/corridor_score_weights/length: 1.0
+ * /stsm_handover/scene/topology/corridor_score_weights/max_risk: 2.0
+ * /stsm_handover/scene/topology/corridor_score_weights/motion: 1.5
+ * /stsm_handover/scene/topology/corridor_score_weights/risk: 4.0
+ * /stsm_handover/scene/topology/corridor_score_weights/smooth: 1.5
+ * /stsm_handover/scene/topology/corridor_score_weights/task: 2.0
+ * /stsm_handover/scene/topology/corridor_score_weights/topology: 0.35
+ * /stsm_handover/scene/topology/corridor_violation_gain: 1.5
+ * /stsm_handover/scene/topology/enabled: True
+ * /stsm_handover/scene/topology/fallback_enabled: False
+ * /stsm_handover/scene/topology/goal_saddle_exclusion: 0.08
+ * /stsm_handover/scene/topology/grid_resolution: auto
+ * /stsm_handover/scene/topology/hard_clearance: auto
+ * /stsm_handover/scene/topology/k_paths: 3
+ * /stsm_handover/scene/topology/lambda_execution: 0.2
+ * /stsm_handover/scene/topology/lambda_saddle_value: 0.3
+ * /stsm_handover/scene/topology/lambda_tracking: 0.2
+ * /stsm_handover/scene/topology/lateral_margin: 0.45
+ * /stsm_handover/scene/topology/longitudinal_margin: 0.08
+ * /stsm_handover/scene/topology/mandatory_topology_tolerance: 0.025
+ * /stsm_handover/scene/topology/max_corridor_curvature: 120.0
+ * /stsm_handover/scene/topology/max_corridor_turn: 3.2
+ * /stsm_handover/scene/topology/max_graph_nodes: 24
+ * /stsm_handover/scene/topology/merge_radius: auto
+ * /stsm_handover/scene/topology/min_clearance: auto
+ * /stsm_handover/scene/topology/min_saddle_offset: 0.09
+ * /stsm_handover/scene/topology/min_segment_length: 0.01
+ * /stsm_handover/scene/topology/morse_core_required: True
+ * /stsm_handover/scene/topology/morse_decision_mode: priority
+ * /stsm_handover/scene/topology/morse_grad_eps: 0.6
+ * /stsm_handover/scene/topology/morse_minima_priority_ratio: 0.25
+ * /stsm_handover/scene/topology/morse_mix_priority_ratio: 0.5
+ * /stsm_handover/scene/topology/morse_priority_ratio: 0.25
+ * /stsm_handover/scene/topology/morse_saddle_priority_ratio: 0.5
+ * /stsm_handover/scene/topology/morse_w_barrier: 0.8
+ * /stsm_handover/scene/topology/morse_w_goal: 0.25
+ * /stsm_handover/scene/topology/morse_w_social: 1.2
+ * /stsm_handover/scene/topology/neighbor_k: auto
+ * /stsm_handover/scene/topology/profile: arm
+ * /stsm_handover/scene/topology/protected_saddle_tolerance: 0.035
+ * /stsm_handover/scene/topology/refinement_enabled: True
+ * /stsm_handover/scene/topology/refinement_samples_per_segment: 24
+ * /stsm_handover/scene/topology/require_risk_improvement: True
+ * /stsm_handover/scene/topology/saddle_tie_ratio: 0.1
+ * /stsm_handover/scene/topology/safety_regions: [{'name': 'handov...
+ * /stsm_handover/scene/wait_pose: [0.3, 0.0, 0.3]
+ * /stsm_handover/use_cvxpy: False
+
+NODES
+  /
+    stsm_handover (stsm_madp/handover_node.py)
+
+[1mROS_MASTER_URI=http://localhost:11311[0m
+]2;/home/sun/LLL/catkin_ws/src/stsm_madp/launch/arm_action.launch http://localhost:11311
+[1mprocess[stsm_handover-1]: started with pid [6080][0m
+[1m[stsm_handover-1] process has finished cleanly
+log file: /home/sun/.ros/log/10f36c30-9ba8-11f1-9ff1-fc221c3008c1/stsm_handover-1*.log[0m
+all processes on machine have died, roslaunch will exit
+shutting down processing monitor...
+... shutting down processing monitor complete
+[1mdone[0m

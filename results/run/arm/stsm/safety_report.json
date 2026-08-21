@@ -1,0 +1,18 @@
+{
+  "candidate_manifold_valid": true,
+  "candidate_tube_valid": true,
+  "clearance_violation_count": 3280,
+  "constraint_mode": "soft",
+  "corridor_violation_count": 0,
+  "hard_violation_count": 0,
+  "manifold_violation_count": 3280,
+  "predicted_corridor_violation_count": 0,
+  "predicted_manifold_violation_count": 3280,
+  "predicted_max_risk": "",
+  "predicted_min_clearance": "",
+  "refinement_tube_valid": true,
+  "safety_success": true,
+  "tube_constraint_mode": "hard",
+  "tube_constraint_used": true,
+  "violation_count": 3280
+}

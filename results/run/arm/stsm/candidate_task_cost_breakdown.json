@@ -1,0 +1,53 @@
+[
+  {
+    "candidate_id": "arm_c0001", 
+    "cost_contributions": {
+      "approach_direction_cost": 0.11754392587244311, 
+      "distance_cost": 0.1903318363792786, 
+      "feasibility_cost": 0.0, 
+      "handover_distance_cost": 0.1903318363792786, 
+      "ik_feasibility_cost": 0.0, 
+      "interaction_cost": 0.0, 
+      "interaction_region_cost": 0.0, 
+      "orientation_cost": 0.0, 
+      "orientation_match_cost": 0.0, 
+      "semantic_handover_missing_cost": 3.0
+    }, 
+    "distance_cost": 0.1903318363792786, 
+    "feasibility_cost": 0.0, 
+    "interaction_cost": 0.0, 
+    "orientation_cost": 0.0, 
+    "rank": 1, 
+    "ranking_score": 14.36472165011817, 
+    "selected": true, 
+    "selection_reason": "lowest_candidate_cost_after_task_safety_feasibility_ranking", 
+    "task_cost": 3.307875762251722, 
+    "task_cost_breakdown": {
+      "semantic_sequence": [
+        "start", 
+        "passage", 
+        "passage", 
+        "goal"
+      ], 
+      "task_cost": 3.307875762251722, 
+      "task_mode": "handover", 
+      "task_state": "approach", 
+      "terms": {
+        "approach_direction_cost": 0.11754392587244311, 
+        "distance_cost": 0.1903318363792786, 
+        "feasibility_cost": 0.0, 
+        "handover_distance_cost": 0.1903318363792786, 
+        "ik_feasibility_cost": 0.0, 
+        "interaction_cost": 0.0, 
+        "interaction_region_cost": 0.0, 
+        "orientation_cost": 0.0, 
+        "orientation_match_cost": 0.0, 
+        "semantic_handover_missing_cost": 3.0
+      }, 
+      "topology_route_class": "left_bypass"
+    }, 
+    "task_mode": "handover", 
+    "task_state": "approach", 
+    "total_task_cost": 3.307875762251722
+  }
+]

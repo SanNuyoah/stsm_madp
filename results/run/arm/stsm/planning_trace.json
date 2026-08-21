@@ -1,0 +1,19 @@
+{
+  "candidate_generated": 16,
+  "candidate_source": "morse_topology",
+  "controller_success": true,
+  "failure_reason": "",
+  "morse_route_count": 16,
+  "mpc_status": "feasible_with_soft_violation",
+  "mpc_used": true,
+  "overall_success": true,
+  "planner_success": true,
+  "reference_source": "refined_waypoints",
+  "refinement_used": true,
+  "robot_type": "arm",
+  "safety_success": true,
+  "selected_candidate_source": "morse_topology",
+  "success": true,
+  "task_success": true,
+  "warning_reason": "minor_soft_violation"
+}

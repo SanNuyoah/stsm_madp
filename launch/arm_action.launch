@@ -1,0 +1,71 @@
+<launch>
+  <arg name="baseline" default="false"/>
+  <arg name="experiment_mode" default="paper"/>
+  <arg name="arm_interest_enabled" default="true"/>
+  <arg name="arm_interest_gate_enabled" default="true"/>
+  <arg name="arm_interest_rho_warn" default="3.5"/>
+  <arg name="arm_interest_rho_stop" default="6.0"/>
+  <arg name="arm_interest_gate_min_scale" default="0.20"/>
+  <arg name="topology_profile" default="arm"/>
+  <arg name="topology_morse_core_required" default="true"/>
+  <arg name="topology_morse_decision_mode" default="priority"/>
+  <arg name="topology_allow_semantic_topology_recovery" default="false"/>
+  <arg name="topology_fallback_enabled" default="false"/>
+  <arg name="topology_lambda_tracking" default="0.20"/>
+  <arg name="topology_lambda_saddle_value" default="0.30"/>
+  <arg name="adp_enabled" default="true"/>
+  <arg name="adp_model" default="$(find stsm_madp)/config/adp_critic.yaml"/>
+  <arg name="lambda_adp" default="0.005"/>
+  <arg name="lambda_adp_path" default="$(arg lambda_adp)"/>
+  <arg name="lambda_adp_arm" default="0.008"/>
+  <arg name="adp_grad_eps" default="0.01"/>
+  <arg name="adp_descent_gain" default="0.04"/>
+  <arg name="adp_grad_clip" default="8.0"/>
+  <arg name="adp_solver_mode" default="dls_adp"/>
+  <arg name="use_cvxpy" default="false"/>
+  <arg name="adp_blend_alpha" default="0.08"/>
+  <arg name="adp_post_scale_enabled" default="false"/>
+  <arg name="adp_min_scale" default="0.35"/>
+  <arg name="adp_debug" default="false"/>
+  <arg name="decision_trace_out" default=""/>
+  <arg name="mpc_reference_out" default=""/>
+  <arg name="arm_handover_debug_out" default=""/>
+
+  <rosparam file="$(find stsm_madp)/config/handover_scene.yaml"
+            command="load" ns="/stsm_handover/scene"/>
+
+  <node pkg="stsm_madp" type="handover_node.py"
+        name="stsm_handover" output="screen">
+    <param name="baseline" value="$(arg baseline)"/>
+    <param name="experiment_mode" value="$(arg experiment_mode)"/>
+    <param name="interest_points/enabled" value="$(arg arm_interest_enabled)"/>
+    <param name="interest_points/gate_enabled" value="$(arg arm_interest_gate_enabled)"/>
+    <param name="interest_points/rho_warn" value="$(arg arm_interest_rho_warn)"/>
+    <param name="interest_points/rho_stop" value="$(arg arm_interest_rho_stop)"/>
+    <param name="interest_points/min_scale" value="$(arg arm_interest_gate_min_scale)"/>
+    <param name="scene/topology/profile" value="$(arg topology_profile)"/>
+    <param name="scene/topology/morse_core_required" value="$(arg topology_morse_core_required)"/>
+    <param name="scene/topology/morse_decision_mode" value="$(arg topology_morse_decision_mode)"/>
+    <param name="scene/topology/allow_semantic_topology_recovery" value="$(arg topology_allow_semantic_topology_recovery)"/>
+    <param name="scene/topology/fallback_enabled" value="$(arg topology_fallback_enabled)"/>
+    <param name="scene/topology/lambda_tracking" value="$(arg topology_lambda_tracking)"/>
+    <param name="scene/topology/lambda_saddle_value" value="$(arg topology_lambda_saddle_value)"/>
+    <param name="adp_enabled" value="$(arg adp_enabled)"/>
+    <param name="adp_model" value="$(arg adp_model)"/>
+    <param name="lambda_adp" value="$(arg lambda_adp)"/>
+    <param name="lambda_adp_path" value="$(arg lambda_adp_path)"/>
+    <param name="lambda_adp_arm" value="$(arg lambda_adp_arm)"/>
+    <param name="adp_grad_eps" value="$(arg adp_grad_eps)"/>
+    <param name="adp_descent_gain" value="$(arg adp_descent_gain)"/>
+    <param name="adp_grad_clip" value="$(arg adp_grad_clip)"/>
+    <param name="adp_solver_mode" value="$(arg adp_solver_mode)"/>
+    <param name="use_cvxpy" value="$(arg use_cvxpy)"/>
+    <param name="adp_blend_alpha" value="$(arg adp_blend_alpha)"/>
+    <param name="adp_post_scale_enabled" value="$(arg adp_post_scale_enabled)"/>
+    <param name="adp_min_scale" value="$(arg adp_min_scale)"/>
+    <param name="adp_debug" value="$(arg adp_debug)"/>
+    <param name="decision_trace_out" value="$(arg decision_trace_out)"/>
+    <param name="mpc_reference_out" value="$(arg mpc_reference_out)"/>
+    <param name="arm_handover_debug_out" value="$(arg arm_handover_debug_out)"/>
+  </node>
+</launch>

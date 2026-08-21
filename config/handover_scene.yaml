@@ -1,0 +1,207 @@
+# STSM-MADP eldercare handover scene, expressed in the elfin_base_link frame.
+# Arm base is mounted at world (0,0,0.74); all coordinates below are relative
+# to that base link (so z=0 is the table top / mount height).
+person:
+  heading: 3.14159          # person faces -x (toward the arm)
+  posture: sitting
+  vulnerability: 1.3
+  body_parts:
+    head:  {pos: [0.78, 0.0, 0.61], weight: 3.0, sigma: 0.13}
+    chest: {pos: [0.78, 0.0, 0.31], weight: 1.6, sigma: 0.18}
+    hand:  {pos: [0.42, 0.0, 0.21], weight: 0.3, sigma: 0.10}
+  ref_pos: [0.78, 0.0, 0.31]
+
+anchors:
+  table: {type: table, center: [0.55, 0.0, -0.37], half_extent: [0.30, 0.50, 0.37], weight: 1.0, forbidden: false}
+
+manifold_phase_config:
+  approach:
+    start_clearance: 0.35
+    end_clearance: 0.20
+    adaptive: true
+  handover:
+    clearance: 0.15
+  return:
+    start_clearance: 0.20
+    end_clearance: 0.35
+    adaptive: true
+
+grasp_pose:    [0.34, 0.16, 0.05]   # cup pickup, just above table
+handover_pose: [0.42, 0.0, 0.21]    # target near the person's hand
+handover_minima_pose: [0.36, 0.05, 0.18]
+wait_pose:     [0.30, 0.0, 0.30]    # pre-handover wait point in visible front
+
+field:
+  lam_prox: 1.0
+  lam_close: 1.2
+  lam_dir: 0.6
+  lam_body: 2.5
+  lam_env: 0.8
+  sigma_env: 0.25
+
+manifold:
+  rho_ee: 2.0
+  lam_s: 1.0
+  manifold_phase_config:
+    approach:
+      start_clearance: 0.35
+      end_clearance: 0.20
+      adaptive: true
+    handover:
+      interaction_clearance: 0.15
+      clearance: 0.15
+    return:
+      start_clearance: 0.20
+      end_clearance: 0.35
+      adaptive: true
+
+topology:
+  profile: arm
+  enabled: true
+  grid_resolution: "auto"
+  merge_radius: "auto"
+  k_paths: 3
+  min_clearance: "auto"
+  hard_clearance: "auto"
+  neighbor_k: "auto"
+  saddle_tie_ratio: 0.10
+  morse_priority_ratio: 0.25
+  morse_saddle_priority_ratio: 0.50
+  morse_mix_priority_ratio: 0.50
+  morse_minima_priority_ratio: 0.25
+  morse_core_required: true
+  morse_decision_mode: priority
+  morse_w_goal: 0.25
+  morse_w_social: 1.20
+  morse_w_barrier: 0.80
+  morse_grad_eps: 0.60
+  safety_regions:
+    - name: handover_approach
+      shape: circle
+      center: [0.42, 0.21]
+      radius: 0.16
+      rho: 2.4
+      interest_rho: 6.5
+      min_clearance: 0.05
+      hard_clearance: 0.02
+    - name: head_chest_guard
+      shape: rect
+      center: [0.78, 0.46]
+      half_extent: [0.18, 0.28]
+      rho: 1.6
+      interest_rho: 4.5
+      min_clearance: 0.12
+      hard_clearance: 0.06
+  max_graph_nodes: 24
+  allow_semantic_with_morse: false
+  allow_semantic_topology_recovery: false
+  allow_ring_with_morse: false
+  allow_graph_fallback_with_morse: false
+  lambda_execution: 0.20
+  lambda_tracking: 0.20
+  lambda_saddle_value: 0.30
+  fallback_enabled: false
+  lateral_margin: 0.45
+  longitudinal_margin: 0.08
+  corridor_radius: 0.08
+  min_saddle_offset: 0.09
+  goal_saddle_exclusion: 0.08
+  corridor_dedupe_distance: 0.04
+  candidate_pool_min: 3
+  protected_saddle_tolerance: 0.035
+  mandatory_topology_tolerance: 0.025
+  corridor_violation_gain: 1.5
+  candidate_max_risk: 6.0
+  max_corridor_turn: 3.20
+  max_corridor_curvature: 120.0
+  min_segment_length: 0.01
+  require_risk_improvement: true
+  refinement_enabled: true
+  refinement_samples_per_segment: 24
+  corridor_score_weights:
+    risk: 4.0
+    max_risk: 2.0
+    length: 1.0
+    task: 2.0
+    smooth: 1.5
+    motion: 1.5
+    curvature: 1.0
+    exec: 1.0
+    topology: 0.35
+
+mpc:
+  manifold_threshold: 6.0
+  clearance_threshold: 0.08
+  risk_threshold: 6.0
+  manifold_constraint_mode: soft
+  mpc_manifold_constraint_mode: soft
+  manifold_soft_tolerance: 0.08
+  manifold_hard_tolerance: 0.25
+  weights:
+    track: 1.0
+    control: 0.1
+    smooth: 0.2
+    risk: 1.0
+    topology: 5.0
+    corridor: 10.0
+    manifold: 10.0
+  phase_cost_weights:
+    approach:
+      risk_multiplier: 1.8
+      tracking_multiplier: 1.0
+      smooth_multiplier: 1.0
+      task_multiplier: 1.0
+    handover:
+      risk_multiplier: 0.7
+      tracking_multiplier: 3.0
+      smooth_multiplier: 1.0
+      task_multiplier: 3.0
+    return:
+      risk_multiplier: 1.8
+      tracking_multiplier: 1.0
+      smooth_multiplier: 1.0
+      task_multiplier: 1.0
+  dq_max: 0.6
+  stsm_speed_scale: 0.60  # STSM mode uses a lower EE cap so safety plots read unambiguously.
+  v_cap_far: 0.18
+  v_cap_near: 0.04    # EE speed cap when close to the hand
+  near_radius: 0.12
+  v_cap_body: 0.05    # EE speed cap near head/chest high-risk regions
+  body_slow_radius: 0.45
+  v_cap_risk: 0.08    # EE speed cap when social risk is high
+  risk_slow_threshold: 2.6
+  risk_stop_threshold: 6.0
+  servo_gain: 1.35
+  path_shortcut_enabled: true
+  path_shortcut_samples: 8
+  path_shortcut_passes: 2
+  path_shortcut_rho: 6.0
+
+safety_gate:
+  enabled: true
+  rho_warn: 3.5
+  rho_stop: 6.0
+  min_scale: 0.15
+  abort_on_stop: true
+  hold_dt: 0.2
+
+interest_points:
+  enabled: true
+  gate_enabled: true
+  rho_warn: 3.5
+  rho_stop: 6.0
+  min_scale: 0.20
+  publish_points: true
+  fallback_to_ee_only: true
+  object_offset: [0.0, 0.0, -0.05]
+  labels: [ee, wrist, elbow, object]
+  links:
+    wrist:
+      enabled: true
+      link_name: elfin_link5
+    elbow:
+      enabled: true
+      link_name: elfin_link3
+  object:
+    enabled: true
+    source: ee_offset

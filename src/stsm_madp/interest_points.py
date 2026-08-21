@@ -1,0 +1,108 @@
+import sys
+sys.dont_write_bytecode = True
+
+import numpy as np
+
+
+DEFAULT_WC_LOCAL_POINTS = {
+    "center": [0.00, 0.00],
+    "front_center": [0.35, 0.00],
+    "front_left": [0.35, 0.30],
+    "front_right": [0.35, -0.30],
+    "footrest_left": [0.50, 0.22],
+    "footrest_right": [0.50, -0.22],
+    "rear_left": [-0.35, 0.30],
+    "rear_right": [-0.35, -0.30],
+}
+
+WC_LABELS = [
+    "center",
+    "front_center",
+    "front_left",
+    "front_right",
+    "footrest_left",
+    "footrest_right",
+    "rear_left",
+    "rear_right",
+]
+
+
+def _as_point3(p, z=0.0):
+    arr = np.asarray(p, float)
+    if arr.shape[0] >= 3:
+        return arr[:3].astype(float)
+    return np.array([arr[0], arr[1], float(z)], dtype=float)
+
+
+def transform_points_2d(state, local_points):
+    x, y, yaw = float(state[0]), float(state[1]), float(state[2])
+    c, s = np.cos(yaw), np.sin(yaw)
+    out = {}
+    for label, p in local_points.items():
+        lx, ly = float(p[0]), float(p[1])
+        wx = x + c * lx - s * ly
+        wy = y + s * lx + c * ly
+        out[label] = np.array([wx, wy, 0.0], dtype=float)
+    return out
+
+
+def points_from_offsets(anchor, offsets, labels=None):
+    anchor = _as_point3(anchor)
+    offsets = offsets or {}
+    if labels is None:
+        labels = list(offsets.keys())
+    points = []
+    out_labels = []
+    for label in labels:
+        if label not in offsets:
+            continue
+        points.append(anchor + _as_point3(offsets[label]))
+        out_labels.append(label)
+    return out_labels, points
+
+
+def aggregate_point_risks(field, labels, points, vels=None):
+    if vels is None:
+        vels = [None] * len(points)
+    phi_each = [float(field.phi_s(p, v)) for p, v in zip(points, vels)]
+    worst_idx = int(np.argmax(phi_each)) if phi_each else -1
+    return {
+        "phi_each": phi_each,
+        "phi_max": float(np.max(phi_each)) if phi_each else 0.0,
+        "phi_mean": float(np.mean(phi_each)) if phi_each else 0.0,
+        "phi_sum": float(np.sum(phi_each)) if phi_each else 0.0,
+        "risk_gate": float(np.max(phi_each)) if phi_each else 0.0,
+        "worst_idx": worst_idx,
+        "worst_label": labels[worst_idx] if worst_idx >= 0 else "",
+    }
+
+
+def pose_interest_risk(field, state, local_points=None, offsets=None,
+                       labels=None, vels=None):
+    if offsets is not None:
+        out_labels, points = points_from_offsets(state, offsets, labels)
+    else:
+        local_points = local_points or DEFAULT_WC_LOCAL_POINTS
+        points_map = transform_points_2d(state, local_points)
+        out_labels = list(labels or points_map.keys())
+        points = [points_map[k] for k in out_labels if k in points_map]
+        out_labels = [k for k in out_labels if k in points_map]
+    summary = aggregate_point_risks(field, out_labels, points, vels)
+    summary["labels"] = out_labels
+    summary["points"] = points
+    return summary
+
+
+def point_inside_anchor(anchor, p):
+    return float(anchor.signed_distance(p)) <= 0.0
+
+
+def forbidden_anchor_hit(field, labels, points):
+    for label, p in zip(labels, points):
+        for anchor in getattr(field, "anchors", []):
+            if getattr(anchor, "forbidden", False) and point_inside_anchor(anchor, p):
+                anchor_type = getattr(anchor, "type", "unknown")
+                reason = "footprint:forbidden_zone:{0}:{1}".format(
+                    label, anchor_type)
+                return True, label, anchor_type, reason
+    return False, "", "", ""

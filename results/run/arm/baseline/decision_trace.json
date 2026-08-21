@@ -1,0 +1,15 @@
+{
+  "baseline_type": "direct",
+  "execution_status": "success",
+  "final_path_source": "direct_connection",
+  "mode": "baseline",
+  "morse_used": false,
+  "mpc_feasibility_status": "feasible",
+  "planner_source": "direct_connection",
+  "refinement_used": false,
+  "robot": "arm",
+  "selected_corridor_id": "baseline_direct",
+  "target": "arm",
+  "topology_constraint_used": false,
+  "variant": "baseline"
+}

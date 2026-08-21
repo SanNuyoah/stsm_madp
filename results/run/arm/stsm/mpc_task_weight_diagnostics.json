@@ -1,0 +1,38 @@
+{
+  "phase_counts": {
+    "approach": 2265, 
+    "handover": 120, 
+    "return": 895
+  }, 
+  "phase_weight_used": true, 
+  "phase_weights": [
+    {
+      "first_step_index": 0, 
+      "phase": "approach", 
+      "risk_weight": 1.8, 
+      "smoothness_weight": 0.2, 
+      "task_weight": 1.0, 
+      "tracking_weight": 1.0
+    }, 
+    {
+      "first_step_index": 231, 
+      "phase": "handover", 
+      "risk_weight": 0.7, 
+      "smoothness_weight": 0.2, 
+      "task_weight": 3.0, 
+      "tracking_weight": 3.0
+    }, 
+    {
+      "first_step_index": 243, 
+      "phase": "return", 
+      "risk_weight": 1.8, 
+      "smoothness_weight": 0.2, 
+      "task_weight": 1.0, 
+      "tracking_weight": 1.0
+    }
+  ], 
+  "robot_type": "arm", 
+  "selected_corridor_id": "arm_c0001", 
+  "task_mode": "handover", 
+  "task_weight_used": true
+}

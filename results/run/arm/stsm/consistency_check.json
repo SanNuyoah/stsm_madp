@@ -1,0 +1,13 @@
+{
+  "consistent": true,
+  "metrics_reference_path_count": 350,
+  "metrics_success": true,
+  "mpc_diagnostics_reference_path_count": 350,
+  "mpc_diagnostics_success": true,
+  "reference_path_count_match": true,
+  "robot": "arm",
+  "success_match": true,
+  "target": "arm",
+  "variant": "stsm",
+  "warning": []
+}

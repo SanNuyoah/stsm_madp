@@ -1,0 +1,15 @@
+task_type: arm
+task_mode: handover
+base_config: handover_scene.yaml
+topology_config: topology.yaml
+morse_roles:
+  minima: handover_stable_region
+  saddle: arm_connection_channel
+semantic_constraints:
+  prefer_side_approach: true
+  avoid_head_chest: true
+  link_risk_enabled: true
+outputs:
+  topology_summary: results/run/topology_summary.json
+  trajectory: results/run/arm/trajectory.csv
+  metrics: results/run/metrics/arm_metrics.csv

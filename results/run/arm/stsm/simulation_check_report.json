@@ -1,0 +1,12 @@
+{
+  "constraint_violation": false,
+  "goal_reached": true,
+  "missing_files": [],
+  "mpc_feasibility_status": "feasible_with_soft_violation",
+  "mpc_feasible": true,
+  "passed": true,
+  "result_files_complete": true,
+  "robot": "arm",
+  "trajectory_empty": false,
+  "variant": "stsm"
+}

@@ -1,0 +1,11 @@
+{
+  "failed_constraint": "",
+  "failed_constraint_type": "",
+  "failure_reason": "minor_manifold_violation",
+  "failure_type": "",
+  "replan_required": false,
+  "robot": "arm",
+  "selected_corridor_id": "arm_c0001",
+  "target": "arm",
+  "variant": "stsm"
+}

@@ -1,0 +1,3 @@
+git rev-parse --show-toplevel failed: Command '['git', 'rev-parse', '--show-toplevel']' returned non-zero exit status 128.
+git rev-parse HEAD failed: Command '['git', 'rev-parse', 'HEAD']' returned non-zero exit status 128.
+git status --short failed: Command '['git', 'status', '--short']' returned non-zero exit status 128.

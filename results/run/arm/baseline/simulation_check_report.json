@@ -1,0 +1,15 @@
+{
+  "constraint_violation": false,
+  "goal_reached": true,
+  "missing_files": [
+    "mpc_diagnostics.json"
+  ],
+  "mpc_feasibility_status": "feasible",
+  "mpc_feasible": true,
+  "passed": false,
+  "result_files_complete": false,
+  "robot": "arm",
+  "trajectory_empty": false,
+  "trajectory_rows": 480,
+  "variant": "baseline"
+}

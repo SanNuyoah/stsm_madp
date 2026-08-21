@@ -1,0 +1,80 @@
+candidate_source_required: morse_topology_graph
+generation_flow:
+  - risk_field
+  - safety_manifold
+  - morse_critical_points
+  - topology_graph
+  - candidate_corridor
+node_types:
+  minima: stable_safe_region
+  saddle: connection_channel
+semantic_types:
+  saddle:
+    - passage
+    - bypass
+  minima:
+    - waiting
+    - parking
+    - handover
+candidate_patterns:
+  - start-saddle-goal
+  - start-saddle-saddle-goal
+  - start-saddle-minima-goal
+candidate_required_fields:
+  - corridor_id
+  - node_sequence
+  - node_type_sequence
+  - semantic_sequence
+  - topology_class
+  - waypoints
+  - refined_waypoints
+  - risk_cost
+  - length_cost
+  - task_cost
+  - smooth_cost
+  - execution_cost
+  - topology_diversity
+  - total_score
+decision_score:
+  formula: "J=w_risk*risk_cost+w_length*length_cost+w_smooth*smooth_cost+w_task*task_cost+w_execution*execution_cost-w_topology*topology_value-w_diversity*topology_diversity"
+task_config:
+  handover:
+    task_weight:
+      risk: 0.5
+      distance: 0.3
+      task: 0.2
+  navigation:
+    task_weight:
+      risk: 0.7
+      distance: 0.2
+      task: 0.1
+filters:
+  topology_validity:
+    require_morse_graph: true
+    allow_semantic_topology_recovery: false
+    require_valid_saddle: true
+    reject_duplicate_topology_path: true
+  geometry:
+    reject_backtracking: true
+    reject_extreme_curvature: true
+    reject_meaningless_detour: true
+  task_semantics:
+    arm:
+      avoid_head_chest: true
+      prefer_side_approach: true
+    wheelchair:
+      enforce_waiting_parking: true
+      check_footprint_risk: true
+critical_point_processing:
+  smoothing: true
+  merge_radius_fixed: true
+  saddle_filtering:
+    hessian_structure: true
+    gradient_structure: true
+    risk_structure: true
+  stats:
+    - raw_minima
+    - raw_saddle
+    - filtered_minima
+    - filtered_saddle
+    - used_nodes

@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>stsm_madp</name>
+  <version>0.1.0</version>
+  <description>Social-Topological Safety Manifold with MPC-ADP planning (STSM-MADP) for eldercare wheelchair berthing and manipulator handover, validated on elfin3 (E3 pro) and a differential-drive wheelchair in Gazebo.</description>
+  <maintainer email="user@example.com">linux</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <build_depend>rospy</build_depend>
+  <build_depend>std_msgs</build_depend>
+  <build_depend>geometry_msgs</build_depend>
+  <build_depend>gazebo_msgs</build_depend>
+  <build_depend>nav_msgs</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>trajectory_msgs</build_depend>
+  <build_depend>tf</build_depend>
+  <build_depend>visualization_msgs</build_depend>
+
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>gazebo_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>tf</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>gazebo_ros</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>joint_state_controller</exec_depend>
+  <exec_depend>position_controllers</exec_depend>
+  <exec_depend>diff_drive_controller</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>elfin_description</exec_depend>
+  <exec_depend>elfin_gazebo</exec_depend>
+  <exec_depend>moveit_commander</exec_depend>
+  <exec_depend>moveit_ros_move_group</exec_depend>
+
+  <test_depend>python-nose</test_depend>
+</package>

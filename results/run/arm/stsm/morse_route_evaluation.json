@@ -1,0 +1,416 @@
+[
+  {
+    "failure_reason": [], 
+    "length": 0.8803122018952229, 
+    "manifold_valid": true, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 0.7838457372517363, 
+    "min_clearance": 0.05807555020503881, 
+    "route_id": "morse_topology_candidate_0001", 
+    "route_valid": true, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 0, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.05807555020503881, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": true
+    }, 
+    "turning_cost": 1.9117802809334636
+  }, 
+  {
+    "failure_reason": [
+      "clearance_failure"
+    ], 
+    "length": 0.957332008180888, 
+    "manifold_valid": false, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 1.6189442942683134, 
+    "min_clearance": 0.006496612584655414, 
+    "route_id": "morse_topology_candidate_0002", 
+    "route_valid": false, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 2, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.006496612584655414, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": false
+    }, 
+    "turning_cost": 7.013425225272686
+  }, 
+  {
+    "failure_reason": [
+      "clearance_failure"
+    ], 
+    "length": 1.159025613270119, 
+    "manifold_valid": false, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 1.9443912739762212, 
+    "min_clearance": 0.022685730871420832, 
+    "route_id": "morse_topology_candidate_0003", 
+    "route_valid": false, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 3, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.022685730871420832, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": false
+    }, 
+    "turning_cost": 8.670329884909826
+  }, 
+  {
+    "failure_reason": [
+      "clearance_failure"
+    ], 
+    "length": 2.235293314589527, 
+    "manifold_valid": false, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 3.141592653589793, 
+    "min_clearance": 0.01980449930902916, 
+    "route_id": "morse_topology_candidate_0004", 
+    "route_valid": false, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 7, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.01980449930902916, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": false
+    }, 
+    "turning_cost": 14.746085466420162
+  }, 
+  {
+    "failure_reason": [
+      "clearance_failure"
+    ], 
+    "length": 1.159025613270119, 
+    "manifold_valid": false, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 1.9443912739762212, 
+    "min_clearance": 0.022685730871420832, 
+    "route_id": "morse_topology_candidate_0005", 
+    "route_valid": false, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 3, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.022685730871420832, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": false
+    }, 
+    "turning_cost": 8.670329884909826
+  }, 
+  {
+    "failure_reason": [
+      "clearance_failure"
+    ], 
+    "length": 1.2751230377275156, 
+    "manifold_valid": false, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 3.141592653589793, 
+    "min_clearance": 0.012578423154387529, 
+    "route_id": "morse_topology_candidate_0006", 
+    "route_valid": false, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 7, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.012578423154387529, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": false
+    }, 
+    "turning_cost": 15.105140774985188
+  }, 
+  {
+    "failure_reason": [
+      "clearance_failure"
+    ], 
+    "length": 2.235293314589527, 
+    "manifold_valid": false, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 3.141592653589793, 
+    "min_clearance": 0.01980449930902916, 
+    "route_id": "morse_topology_candidate_0007", 
+    "route_valid": false, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 7, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.01980449930902916, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": false
+    }, 
+    "turning_cost": 14.746085466420162
+  }, 
+  {
+    "failure_reason": [
+      "clearance_failure"
+    ], 
+    "length": 2.3537372983800027, 
+    "manifold_valid": false, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 3.141592653589793, 
+    "min_clearance": 0.012578423154387529, 
+    "route_id": "morse_topology_candidate_0008", 
+    "route_valid": false, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 7, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.012578423154387529, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": false
+    }, 
+    "turning_cost": 14.943710240658463
+  }, 
+  {
+    "failure_reason": [
+      "clearance_failure"
+    ], 
+    "length": 2.229033899018756, 
+    "manifold_valid": false, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 3.141592653589793, 
+    "min_clearance": 0.01980449930902916, 
+    "route_id": "morse_topology_candidate_0009", 
+    "route_valid": false, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 7, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.01980449930902916, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": false
+    }, 
+    "turning_cost": 15.037018466426051
+  }, 
+  {
+    "failure_reason": [
+      "clearance_failure"
+    ], 
+    "length": 2.235293314589527, 
+    "manifold_valid": false, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 3.141592653589793, 
+    "min_clearance": 0.01980449930902916, 
+    "route_id": "morse_topology_candidate_0010", 
+    "route_valid": false, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 7, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.01980449930902916, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": false
+    }, 
+    "turning_cost": 14.746085466420162
+  }, 
+  {
+    "failure_reason": [
+      "clearance_failure"
+    ], 
+    "length": 2.235293314589527, 
+    "manifold_valid": false, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 3.141592653589793, 
+    "min_clearance": 0.01980449930902916, 
+    "route_id": "morse_topology_candidate_0011", 
+    "route_valid": false, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 7, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.01980449930902916, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": false
+    }, 
+    "turning_cost": 14.746085466420162
+  }, 
+  {
+    "failure_reason": [
+      "clearance_failure"
+    ], 
+    "length": 2.229033899018756, 
+    "manifold_valid": false, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 3.141592653589793, 
+    "min_clearance": 0.01980449930902916, 
+    "route_id": "morse_topology_candidate_0012", 
+    "route_valid": false, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 7, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.01980449930902916, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": false
+    }, 
+    "turning_cost": 15.037018466426051
+  }, 
+  {
+    "failure_reason": [
+      "clearance_failure"
+    ], 
+    "length": 2.347477882809232, 
+    "manifold_valid": false, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 3.141592653589793, 
+    "min_clearance": 0.012578423154387529, 
+    "route_id": "morse_topology_candidate_0013", 
+    "route_valid": false, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 7, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.012578423154387529, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": false
+    }, 
+    "turning_cost": 15.234643240664356
+  }, 
+  {
+    "failure_reason": [
+      "clearance_failure"
+    ], 
+    "length": 2.346836791513521, 
+    "manifold_valid": false, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 3.141592653589793, 
+    "min_clearance": 0.012578423154387529, 
+    "route_id": "morse_topology_candidate_0014", 
+    "route_valid": false, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 7, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.012578423154387529, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": false
+    }, 
+    "turning_cost": 15.396073774991079
+  }, 
+  {
+    "failure_reason": [
+      "clearance_failure"
+    ], 
+    "length": 2.472270445455302, 
+    "manifold_valid": false, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 3.141592653589793, 
+    "min_clearance": 0.003509943557169753, 
+    "route_id": "morse_topology_candidate_0015", 
+    "route_valid": false, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 18, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.003509943557169753, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": false
+    }, 
+    "turning_cost": 33.16286173789639
+  }, 
+  {
+    "failure_reason": [
+      "clearance_failure"
+    ], 
+    "length": 2.4739759134926707, 
+    "manifold_valid": false, 
+    "max_risk": 1.9933859879631295, 
+    "max_route_turn": 3.141592653589793, 
+    "min_clearance": 0.003509943557169774, 
+    "route_id": "morse_topology_candidate_0016", 
+    "route_valid": false, 
+    "safety_status": {
+      "corridor_violation_count": 0, 
+      "effective_minimum_clearance": 0.03, 
+      "manifold_violation_count": 11, 
+      "max_risk": 1.9933859879631295, 
+      "min_clearance": 0.003509943557169774, 
+      "minimum_clearance": 0.03, 
+      "nominal_minimum_clearance": 0.03, 
+      "planning_clearance_margin": 0.0, 
+      "required_clearance": 0.03, 
+      "risk_threshold": 2.4, 
+      "valid": false
+    }, 
+    "turning_cost": 27.087106156386056
+  }
+]

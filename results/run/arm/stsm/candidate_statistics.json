@@ -1,0 +1,11 @@
+{
+  "candidate_after_recovery": 2, 
+  "candidate_feasible": 1, 
+  "candidate_generated": 16, 
+  "candidate_recovery_used": true, 
+  "candidate_selected": "arm_c0001", 
+  "local_refinement_used": false, 
+  "morse_routes": 16, 
+  "recovery_used": true, 
+  "selected_candidate_source": "morse_topology"
+}

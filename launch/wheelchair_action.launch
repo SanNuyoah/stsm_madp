@@ -1,0 +1,224 @@
+<launch>
+  <arg name="baseline" default="false"/>
+  <arg name="baseline_type" default="direct"/>
+  <arg name="experiment_mode" default="paper"/>
+  <arg name="reset_on_start" default="true"/>
+  <arg name="goal_tolerance" default="0.08"/>
+  <arg name="completion_tolerance" default="0.25"/>
+  <arg name="completion_hold_s" default="1.5"/>
+  <arg name="max_runtime_s" default="180.0"/>
+  <arg name="no_progress_timeout_s" default="45.0"/>
+  <arg name="no_progress_epsilon" default="0.02"/>
+  <arg name="replan_period" default="5.0"/>
+  <arg name="no_progress_replan_time" default="5.0"/>
+  <arg name="progress_eps" default="0.01"/>
+  <arg name="replan_tube_margin" default="0.08"/>
+  <arg name="near_goal_radius" default="0.50"/>
+  <arg name="near_goal_adp_scale" default="0.20"/>
+  <arg name="min_progress_per_solve" default="0.005"/>
+  <arg name="near_goal_goal_weight" default="18.0"/>
+  <arg name="near_goal_social_scale" default="0.5"/>
+  <arg name="lam_stall" default="10.0"/>
+  <arg name="progress_reward_weight" default="2.8"/>
+  <arg name="speed_reward_weight" default="0.25"/>
+  <arg name="ref_progress_reward_weight" default="1.0"/>
+  <arg name="corridor_speed_slowdown_gain" default="0.18"/>
+  <arg name="corridor_tube_gain" default="0.80"/>
+  <arg name="baseline_grid_resolution" default="0.10"/>
+  <arg name="baseline_risk_weight" default="2.5"/>
+  <arg name="baseline_turn_weight" default="0.08"/>
+  <arg name="baseline_min_lateral_deviation" default="0.25"/>
+  <arg name="baseline_direct_retry_weight" default="8.0"/>
+  <arg name="final_approach_radius" default="0.90"/>
+  <arg name="final_heading_threshold" default="0.75"/>
+  <arg name="final_heading_gain" default="1.6"/>
+  <arg name="final_creep_v" default="0.10"/>
+  <arg name="final_min_v" default="0.16"/>
+  <arg name="final_max_v" default="0.30"/>
+  <arg name="final_forward_gain" default="0.75"/>
+  <arg name="lam_heading" default="2.5"/>
+  <arg name="final_direct_override_enabled" default="true"/>
+  <arg name="final_direct_override_radius" default="0.90"/>
+  <arg name="gate_enabled" default="true"/>
+  <arg name="rho_warn" default="1.6"/>
+  <arg name="rho_stop" default="2.5"/>
+  <arg name="gate_min_scale" default="0.20"/>
+  <arg name="abort_on_stop" default="true"/>
+  <arg name="start_pose" default="[2.0, 1.5, -2.4]"/>
+  <arg name="interest_enabled" default="true"/>
+  <arg name="interest_gate_enabled" default="true"/>
+  <arg name="footprint_rho_warn" default="5.0"/>
+  <arg name="footprint_rho_stop" default="7.0"/>
+  <arg name="footprint_gate_min_scale" default="0.20"/>
+  <arg name="footprint_forbidden_stop_enabled" default="true"/>
+  <arg name="adp_enabled" default="true"/>
+  <arg name="adp_model" default="$(find stsm_madp)/config/adp_critic.yaml"/>
+  <arg name="lambda_adp" default="0.005"/>
+  <arg name="lambda_adp_corridor" default="0.05"/>
+  <arg name="lambda_adp_terminal" default="0.0015"/>
+  <arg name="mpc_use_adp_terminal" default="true"/>
+  <arg name="adp_post_scale_enabled" default="false"/>
+  <arg name="adp_min_scale" default="0.35"/>
+  <arg name="adp_debug" default="false"/>
+  <arg name="topology_enabled" default="true"/>
+  <arg name="topology_profile" default="wheelchair"/>
+  <arg name="topology_grid_resolution" default="auto"/>
+  <arg name="topology_merge_radius" default="auto"/>
+  <arg name="topology_min_clearance" default="auto"/>
+  <arg name="topology_hard_clearance" default="auto"/>
+  <arg name="topology_neighbor_k" default="auto"/>
+  <arg name="topology_saddle_tie_ratio" default="0.05"/>
+  <arg name="topology_morse_priority_ratio" default="0.25"/>
+  <arg name="topology_morse_saddle_priority_ratio" default="0.50"/>
+  <arg name="topology_morse_mix_priority_ratio" default="0.50"/>
+  <arg name="topology_morse_minima_priority_ratio" default="0.25"/>
+  <arg name="topology_morse_core_required" default="true"/>
+  <arg name="topology_morse_decision_mode" default="priority"/>
+  <arg name="topology_morse_w_goal" default="0.35"/>
+  <arg name="topology_morse_w_social" default="1.0"/>
+  <arg name="topology_morse_w_barrier" default="0.6"/>
+  <arg name="topology_morse_grad_eps" default="0.6"/>
+  <arg name="topology_k_paths" default="3"/>
+  <arg name="topology_candidate_pool_min" default="3"/>
+  <arg name="topology_max_graph_nodes" default="32"/>
+  <arg name="topology_allow_semantic_with_morse" default="false"/>
+  <arg name="topology_allow_semantic_topology_recovery" default="false"/>
+  <arg name="topology_allow_ring_with_morse" default="false"/>
+  <arg name="topology_allow_graph_fallback_with_morse" default="false"/>
+  <arg name="topology_lambda_execution" default="0.20"/>
+  <arg name="topology_lambda_tracking" default="0.35"/>
+  <arg name="topology_lambda_saddle_value" default="0.35"/>
+  <arg name="topology_max_corridor_turn" default="3.40"/>
+  <arg name="topology_max_corridor_curvature" default="40.0"/>
+  <arg name="topology_min_segment_length" default="0.01"/>
+  <arg name="topology_candidate_max_risk" default="7.0"/>
+  <arg name="topology_fallback_enabled" default="false"/>
+  <arg name="topology_periodic_replan" default="false"/>
+  <arg name="topology_replan_min_interval" default="30.0"/>
+  <arg name="topology_replan_on_tube_exit" default="true"/>
+  <arg name="topology_replan_on_no_progress" default="true"/>
+  <arg name="topology_refinement_enabled" default="true"/>
+  <arg name="topology_refinement_samples_per_segment" default="14"/>
+  <arg name="topology_refinement_max_candidates" default="2"/>
+  <arg name="decision_trace_out" default=""/>
+  <arg name="mpc_reference_out" default=""/>
+  <arg name="mpc_diagnostics_out" default=""/>
+  <arg name="mpc_cost_breakdown_out" default=""/>
+  <arg name="manifold_constraint_mode" default="soft"/>
+  <arg name="mpc_manifold_constraint_mode" default="$(arg manifold_constraint_mode)"/>
+  <arg name="manifold_soft_tolerance" default="0.08"/>
+  <arg name="manifold_hard_tolerance" default="0.25"/>
+
+  <node pkg="stsm_madp" type="wheelchair_node.py"
+        name="stsm_wheelchair" output="screen">
+    <param name="baseline" value="$(arg baseline)"/>
+    <param name="baseline_type" value="$(arg baseline_type)"/>
+    <param name="experiment_mode" value="$(arg experiment_mode)"/>
+    <param name="reset_on_start" value="$(arg reset_on_start)"/>
+    <param name="goal_tolerance" value="$(arg goal_tolerance)"/>
+    <param name="completion_tolerance" value="$(arg completion_tolerance)"/>
+    <param name="completion_hold_s" value="$(arg completion_hold_s)"/>
+    <param name="max_runtime_s" value="$(arg max_runtime_s)"/>
+    <param name="no_progress_timeout_s" value="$(arg no_progress_timeout_s)"/>
+    <param name="no_progress_epsilon" value="$(arg no_progress_epsilon)"/>
+    <param name="replan_period" value="$(arg replan_period)"/>
+    <param name="no_progress_replan_time" value="$(arg no_progress_replan_time)"/>
+    <param name="progress_eps" value="$(arg progress_eps)"/>
+    <param name="replan_tube_margin" value="$(arg replan_tube_margin)"/>
+    <param name="near_goal_radius" value="$(arg near_goal_radius)"/>
+    <param name="near_goal_adp_scale" value="$(arg near_goal_adp_scale)"/>
+    <param name="min_progress_per_solve" value="$(arg min_progress_per_solve)"/>
+    <param name="near_goal_goal_weight" value="$(arg near_goal_goal_weight)"/>
+    <param name="near_goal_social_scale" value="$(arg near_goal_social_scale)"/>
+    <param name="lam_stall" value="$(arg lam_stall)"/>
+    <param name="progress_reward_weight" value="$(arg progress_reward_weight)"/>
+    <param name="speed_reward_weight" value="$(arg speed_reward_weight)"/>
+    <param name="ref_progress_reward_weight" value="$(arg ref_progress_reward_weight)"/>
+    <param name="corridor_speed_slowdown_gain" value="$(arg corridor_speed_slowdown_gain)"/>
+    <param name="corridor_tube_gain" value="$(arg corridor_tube_gain)"/>
+    <param name="baseline_grid_resolution" value="$(arg baseline_grid_resolution)"/>
+    <param name="baseline_risk_weight" value="$(arg baseline_risk_weight)"/>
+    <param name="baseline_turn_weight" value="$(arg baseline_turn_weight)"/>
+    <param name="baseline_min_lateral_deviation" value="$(arg baseline_min_lateral_deviation)"/>
+    <param name="baseline_direct_retry_weight" value="$(arg baseline_direct_retry_weight)"/>
+    <param name="final_approach_radius" value="$(arg final_approach_radius)"/>
+    <param name="final_heading_threshold" value="$(arg final_heading_threshold)"/>
+    <param name="final_heading_gain" value="$(arg final_heading_gain)"/>
+    <param name="final_creep_v" value="$(arg final_creep_v)"/>
+    <param name="final_min_v" value="$(arg final_min_v)"/>
+    <param name="final_max_v" value="$(arg final_max_v)"/>
+    <param name="final_forward_gain" value="$(arg final_forward_gain)"/>
+    <param name="lam_heading" value="$(arg lam_heading)"/>
+    <param name="final_direct_override_enabled" value="$(arg final_direct_override_enabled)"/>
+    <param name="final_direct_override_radius" value="$(arg final_direct_override_radius)"/>
+    <param name="safety_gate/enabled" value="$(arg gate_enabled)"/>
+    <param name="safety_gate/rho_warn" value="$(arg rho_warn)"/>
+    <param name="safety_gate/rho_stop" value="$(arg rho_stop)"/>
+    <param name="safety_gate/min_scale" value="$(arg gate_min_scale)"/>
+    <param name="safety_gate/abort_on_stop" value="$(arg abort_on_stop)"/>
+    <param name="interest_points/enabled" value="$(arg interest_enabled)"/>
+    <param name="interest_points/gate_enabled" value="$(arg interest_gate_enabled)"/>
+    <param name="interest_points/rho_warn" value="$(arg footprint_rho_warn)"/>
+    <param name="interest_points/rho_stop" value="$(arg footprint_rho_stop)"/>
+    <param name="interest_points/min_scale" value="$(arg footprint_gate_min_scale)"/>
+    <param name="interest_points/forbidden_stop_enabled" value="$(arg footprint_forbidden_stop_enabled)"/>
+    <param name="adp_enabled" value="$(arg adp_enabled)"/>
+    <param name="adp_model" value="$(arg adp_model)"/>
+    <param name="lambda_adp" value="$(arg lambda_adp)"/>
+    <param name="lambda_adp_corridor" value="$(arg lambda_adp_corridor)"/>
+    <param name="lambda_adp_terminal" value="$(arg lambda_adp_terminal)"/>
+    <param name="mpc_use_adp_terminal" value="$(arg mpc_use_adp_terminal)"/>
+    <param name="adp_post_scale_enabled" value="$(arg adp_post_scale_enabled)"/>
+    <param name="adp_min_scale" value="$(arg adp_min_scale)"/>
+    <param name="adp_debug" value="$(arg adp_debug)"/>
+    <param name="topology/enabled" value="$(arg topology_enabled)"/>
+    <param name="topology/profile" value="$(arg topology_profile)"/>
+    <param name="topology/grid_resolution" value="$(arg topology_grid_resolution)"/>
+    <param name="topology/merge_radius" value="$(arg topology_merge_radius)"/>
+    <param name="topology/min_clearance" value="$(arg topology_min_clearance)"/>
+    <param name="topology/hard_clearance" value="$(arg topology_hard_clearance)"/>
+    <param name="topology/neighbor_k" value="$(arg topology_neighbor_k)"/>
+    <param name="topology/saddle_tie_ratio" value="$(arg topology_saddle_tie_ratio)"/>
+    <param name="topology/morse_priority_ratio" value="$(arg topology_morse_priority_ratio)"/>
+    <param name="topology/morse_saddle_priority_ratio" value="$(arg topology_morse_saddle_priority_ratio)"/>
+    <param name="topology/morse_mix_priority_ratio" value="$(arg topology_morse_mix_priority_ratio)"/>
+    <param name="topology/morse_minima_priority_ratio" value="$(arg topology_morse_minima_priority_ratio)"/>
+    <param name="topology/morse_core_required" value="$(arg topology_morse_core_required)"/>
+    <param name="topology/morse_decision_mode" value="$(arg topology_morse_decision_mode)"/>
+    <param name="topology/morse_w_goal" value="$(arg topology_morse_w_goal)"/>
+    <param name="topology/morse_w_social" value="$(arg topology_morse_w_social)"/>
+    <param name="topology/morse_w_barrier" value="$(arg topology_morse_w_barrier)"/>
+    <param name="topology/morse_grad_eps" value="$(arg topology_morse_grad_eps)"/>
+    <param name="topology/k_paths" value="$(arg topology_k_paths)"/>
+    <param name="topology/candidate_pool_min" value="$(arg topology_candidate_pool_min)"/>
+    <param name="topology/max_graph_nodes" value="$(arg topology_max_graph_nodes)"/>
+  <param name="topology/allow_semantic_with_morse" value="$(arg topology_allow_semantic_with_morse)"/>
+  <param name="topology/allow_semantic_topology_recovery" value="$(arg topology_allow_semantic_topology_recovery)"/>
+    <param name="topology/allow_ring_with_morse" value="$(arg topology_allow_ring_with_morse)"/>
+    <param name="topology/allow_graph_fallback_with_morse" value="$(arg topology_allow_graph_fallback_with_morse)"/>
+    <param name="topology/lambda_execution" value="$(arg topology_lambda_execution)"/>
+    <param name="topology/lambda_tracking" value="$(arg topology_lambda_tracking)"/>
+    <param name="topology/lambda_saddle_value" value="$(arg topology_lambda_saddle_value)"/>
+    <param name="topology/max_corridor_turn" value="$(arg topology_max_corridor_turn)"/>
+    <param name="topology/max_corridor_curvature" value="$(arg topology_max_corridor_curvature)"/>
+    <param name="topology/min_segment_length" value="$(arg topology_min_segment_length)"/>
+    <param name="topology/candidate_max_risk" value="$(arg topology_candidate_max_risk)"/>
+    <param name="topology/fallback_enabled" value="$(arg topology_fallback_enabled)"/>
+    <param name="topology/periodic_replan" value="$(arg topology_periodic_replan)"/>
+    <param name="topology/replan_min_interval" value="$(arg topology_replan_min_interval)"/>
+    <param name="topology/replan_on_tube_exit" value="$(arg topology_replan_on_tube_exit)"/>
+    <param name="topology/replan_on_no_progress" value="$(arg topology_replan_on_no_progress)"/>
+    <param name="topology/refinement_enabled" value="$(arg topology_refinement_enabled)"/>
+    <param name="topology/refinement_samples_per_segment" value="$(arg topology_refinement_samples_per_segment)"/>
+    <param name="topology/refinement_max_candidates" value="$(arg topology_refinement_max_candidates)"/>
+    <param name="decision_trace_out" value="$(arg decision_trace_out)"/>
+    <param name="mpc_reference_out" value="$(arg mpc_reference_out)"/>
+    <param name="mpc_diagnostics_out" value="$(arg mpc_diagnostics_out)"/>
+    <param name="mpc_cost_breakdown_out" value="$(arg mpc_cost_breakdown_out)"/>
+    <param name="mpc/manifold_constraint_mode" value="$(arg manifold_constraint_mode)"/>
+    <param name="mpc/mpc_manifold_constraint_mode" value="$(arg mpc_manifold_constraint_mode)"/>
+    <param name="mpc/manifold_soft_tolerance" value="$(arg manifold_soft_tolerance)"/>
+    <param name="mpc/manifold_hard_tolerance" value="$(arg manifold_hard_tolerance)"/>
+    <rosparam param="start_pose" subst_value="true">$(arg start_pose)</rosparam>
+  </node>
+</launch>

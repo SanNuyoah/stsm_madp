@@ -1,0 +1,52 @@
+[
+  {
+    "arm_route_valid": false, 
+    "candidate_filter_class": "recoverable", 
+    "candidate_id": "morse_topology_candidate_0004", 
+    "candidate_status": "recoverable", 
+    "clearance_value": 0.0034838868880118583, 
+    "failure_reason": [
+      "end_effector_clearance_violation"
+    ], 
+    "geometry_valid": false, 
+    "manifold_valid": false, 
+    "raw_recovery_cost": 9966925.939815648, 
+    "recovery_cost": 9966925.939815648, 
+    "risk_value": 1.9933859879631295, 
+    "tube_valid": false
+  }, 
+  {
+    "arm_route_valid": false, 
+    "candidate_filter_class": "recoverable", 
+    "candidate_id": "morse_topology_candidate_0007", 
+    "candidate_status": "recoverable", 
+    "clearance_value": 0.0034838868880118583, 
+    "failure_reason": [
+      "end_effector_clearance_violation"
+    ], 
+    "geometry_valid": false, 
+    "manifold_valid": false, 
+    "raw_recovery_cost": 9966925.939815648, 
+    "recovery_cost": 9966925.939815648, 
+    "risk_value": 1.9933859879631295, 
+    "tube_valid": false
+  }, 
+  {
+    "arm_ik_candidate_count": 37, 
+    "arm_pose_optimization_used": true, 
+    "arm_route_valid": true, 
+    "candidate_filter_class": "safe", 
+    "candidate_id": "morse_topology_candidate_0001", 
+    "candidate_status": "feasible", 
+    "clearance_value": 0.010795390046145548, 
+    "failure_reason": [], 
+    "geometry_valid": true, 
+    "ik_valid": true, 
+    "link_collision_valid": true, 
+    "manifold_valid": true, 
+    "raw_recovery_cost": 0.0, 
+    "recovery_cost": 0.0, 
+    "risk_value": 1.9933859879631295, 
+    "tube_valid": true
+  }
+]

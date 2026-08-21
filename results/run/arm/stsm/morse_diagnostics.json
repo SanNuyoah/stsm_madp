@@ -1,0 +1,55 @@
+{
+  "candidate_count": 16, 
+  "failure_reason": "success", 
+  "goal_node": "goal", 
+  "graph_edges": 21, 
+  "graph_nodes": 7, 
+  "num_critical_points": 5, 
+  "num_minima": 1, 
+  "num_saddle": 4, 
+  "planning_history": [
+    {
+      "count": 16, 
+      "stage": "morse", 
+      "status": "success"
+    }, 
+    {
+      "count": 16, 
+      "stage": "candidate_generation", 
+      "status": "success"
+    }, 
+    {
+      "count": 1, 
+      "rejected": 15, 
+      "stage": "filter", 
+      "status": "partial_failure"
+    }, 
+    {
+      "count": 2, 
+      "stage": "local_refinement", 
+      "status": "not_used"
+    }, 
+    {
+      "count": 1, 
+      "stage": "ranking", 
+      "status": "success"
+    }, 
+    {
+      "count": 1, 
+      "stage": "mpc", 
+      "status": "pending"
+    }
+  ], 
+  "planning_stage_status": {
+    "candidate_filter": "partial_failure", 
+    "candidate_generation": "success", 
+    "candidate_selection": "success", 
+    "morse_route_generation": "success"
+  }, 
+  "robot_type": "arm", 
+  "route_count": 16, 
+  "route_generation_status": "ok", 
+  "route_source": "morse_topology", 
+  "semantic_topology_recovery_used": false, 
+  "start_node": "start"
+}

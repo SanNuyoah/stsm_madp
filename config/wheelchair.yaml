@@ -1,0 +1,15 @@
+task_type: wheelchair
+task_mode: navigation
+experiment_mode: paper
+base_config: wheelchair_control.yaml
+topology_config: topology.yaml
+morse_roles:
+  minima: waiting_or_parking_region
+  saddle: wheelchair_connection_channel
+semantic_constraints:
+  enforce_waiting_parking: true
+  footprint_risk_enabled: true
+outputs:
+  topology_summary: results/run/topology_summary.json
+  trajectory: results/run/wheelchair/trajectory.csv
+  metrics: results/run/metrics/wheelchair_metrics.csv

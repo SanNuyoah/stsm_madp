@@ -1,0 +1,23 @@
+{
+  "clearance_violation_count": 3280,
+  "constraint_mode": "soft",
+  "controller_success": true,
+  "corridor_violation_count": 0,
+  "failure_reason": "",
+  "hard_violation_count": 0,
+  "manifold_violation_count": 3280,
+  "mpc_status": "feasible_with_soft_violation",
+  "mpc_used": true,
+  "overall_success": true,
+  "planner_success": true,
+  "predicted_max_risk": "",
+  "predicted_min_clearance": "",
+  "reference_path_count": 350,
+  "robot_type": "arm",
+  "safety_success": true,
+  "success": true,
+  "task_success": true,
+  "tube_constraint_used": true,
+  "violation_count": 3280,
+  "warning_reason": "minor_soft_violation"
+}

@@ -1,0 +1,11 @@
+{
+  "candidate_manifold_valid": false,
+  "candidate_tube_valid": false,
+  "predicted_corridor_violation_count": 0,
+  "predicted_manifold_violation_count": 0,
+  "predicted_max_risk": "",
+  "predicted_min_clearance": "",
+  "refinement_tube_valid": false,
+  "tube_constraint_mode": "",
+  "tube_constraint_used": false
+}

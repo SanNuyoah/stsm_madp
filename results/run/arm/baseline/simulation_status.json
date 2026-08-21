@@ -1,0 +1,10 @@
+{
+  "goal_reached": true,
+  "mpc_finished": true,
+  "planning_finished": true,
+  "result_saved": false,
+  "robot": "arm",
+  "scenario": "eldercare",
+  "simulation_started": true,
+  "variant": "baseline"
+}

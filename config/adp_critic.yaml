@@ -1,0 +1,93 @@
+clip_value: 200.0
+cost_weights:
+  w_corr: 0.5
+  w_exceed: 3.0
+  w_ip: 0.6
+  w_phi: 1.0
+  w_prog: 0.4
+  w_stop: 20.0
+  w_u: 0.05
+critic_version: linear_adp_v1
+feature_names:
+- bias
+- phi_total
+- phi_prox
+- phi_close
+- phi_body
+- phi_env
+- risk_exceed
+- gate_slow
+- gate_stop
+- d_goal
+- progress
+- speed
+- ip_phi_max
+- ip_phi_mean
+- d_corridor
+- phase_norm
+gamma: 0.97
+mean:
+- 0.0
+- 1.5822094504501876
+- 0.38818602601133695
+- 0.0
+- 0.17528046444229697
+- 0.8576691676955682
+- 0.5018355359765051
+- 0.5
+- 0.0007342143906020558
+- 0.33916679576719416
+- 0.002493089162765907
+- 0.032124515151881416
+- 3.362714626306128
+- 1.9515363089379056
+- 0.0
+- 0.13937836514929033
+metadata:
+  clip_ratio: 0.09030837004405286
+  train_episodes: 4
+  train_loss: 630.859048522435
+  train_samples: 2724
+  train_sources:
+  - /home/sun/LLL/catkin_ws/src/stsm_madp/results/wc_baseline_traj.csv
+  - /home/sun/LLL/catkin_ws/src/stsm_madp/results/wc_stsm_traj.csv
+  - /home/sun/LLL/catkin_ws/src/stsm_madp/results/arm_baseline_traj.csv
+  - /home/sun/LLL/catkin_ws/src/stsm_madp/results/arm_stsm_traj.csv
+  trained_at: 2026-06-30T14:55:02+0800
+  value_mean: 145.21086162346444
+  value_min: 0.03172848775103754
+  value_p95: 200.0
+std:
+- 1.0
+- 0.6640856453308814
+- 0.27189933628133733
+- 1.0
+- 0.32993360691388907
+- 0.5883927427349045
+- 0.49999663079632145
+- 0.5
+- 0.02708644162363681
+- 0.4425790640267828
+- 0.0063531476820891455
+- 0.0672127774193671
+- 1.9708126856173371
+- 0.9519289683069694
+- 1.0
+- 0.2791749585113545
+theta:
+- 145.35480230045007
+- 2302.230331929637
+- -1336.3561681772537
+- 0.0
+- -1160.397950480936
+- -2035.7648571282816
+- 26.57503696407023
+- -13.8502931905285
+- -5.190256633354022
+- 21.72385099180894
+- 2.3767365423319857
+- 3.62987870773385
+- 210.99811476004234
+- -49.45899509164775
+- 0.0
+- -7.834785611528821
