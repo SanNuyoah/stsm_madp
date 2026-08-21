@@ -492,3 +492,11 @@ def test_strict_risk_query_fails_closed_without_social_field():
     assert result["mpc_feasibility_status"] == "risk_query_invalid"
     assert result["failure_reason"] == "risk_query_invalid"
     assert result["success"] is False
+
+
+def test_metrics_does_not_read_output_row_before_it_is_built():
+    """Shutdown aggregation may only use loaded diagnostics before ``base`` exists."""
+    with open(os.path.join(ROOT, "nodes", "metrics_node.py"), "r") as handle:
+        source = handle.read()
+    base_assignment = source.index("        base = {")
+    assert 'base.get("safety_success"' not in source[:base_assignment]

@@ -1095,8 +1095,7 @@ class MetricsNode:
             mpc_success_allowed = True
         else:
             diag_safety_success = str(
-                mpc_diag.get("safety_success",
-                             base.get("safety_success", ""))).strip().lower()
+                mpc_diag.get("safety_success", "")).strip().lower()
             safety_contract_ok = diag_safety_success in (
                 "1", "1.0", "true", "yes")
             if variant_name == "baseline":
