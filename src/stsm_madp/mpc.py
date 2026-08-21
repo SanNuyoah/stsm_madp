@@ -4276,12 +4276,14 @@ class ArmMPC:
 class WheelchairMPC:
     def __init__(self, horizon=12, dt=0.2, v_max=0.6, w_max=1.0,
                  a_max=0.5, lam_track=1.0, lam_social=0.6, lam_u=0.05,
-                 lam_du=0.2):
+                 lam_du=0.2, alpha_max=1.5, beam_width=12):
         self.N = horizon
         self.dt = dt
         self.v_max = v_max
         self.w_max = w_max
         self.a_max = a_max
+        self.alpha_max = alpha_max
+        self.beam_width = max(2, int(beam_width))
         self.lam_track = lam_track
         self.lam_social = lam_social
         self.lam_u = lam_u
@@ -4317,59 +4319,55 @@ class WheelchairMPC:
         self.first_predicted_forbidden_reason = ""
         self.last_solver_status = "not_called"
         self.last_topology_constraint = {}
-
-    def solve(self, state, ref_points, field, corridor=None, u_prev=None,
-              critic=None, feature_builder=None, lambda_adp_terminal=0.0,
-              goal=None, gate_info=None, interest_risk=None,
-              use_adp_terminal=False, interest_constraints=None,
-              topology_constraint=None):
-        x0 = np.asarray(state, float)
-        ref = np.asarray(ref_points, float)
-        u_prev = np.zeros(2) if u_prev is None else np.asarray(u_prev, float)
-        self.last_final_approach_used = 0
-        self.last_topology_constraint = dict(topology_constraint or {})
-
-        if ref.size == 0:
-            self.last_solver_status = "fallback: empty_ref"
-            return self._greedy(x0, ref, field, corridor)
-
-        goal_arr = ref[-1] if goal is None else np.asarray(goal, float)
-        dist_goal = float(np.linalg.norm(x0[:2] - goal_arr[:2]))
-        has_interest_constraints = bool(
-            (interest_constraints or {}).get("enabled", False))
-        if ((critic is not None and feature_builder is not None and use_adp_terminal) or
-                has_interest_constraints or
-                dist_goal < self.final_approach_radius):
-            return self._sampled_predictive_solve(
-                x0, ref, field, corridor, u_prev, critic, feature_builder,
-                lambda_adp_terminal, goal, gate_info, interest_risk,
-                interest_constraints)
-
-        look = ref[min(3, ref.shape[0] - 1)]
-        desired = np.arctan2(look[1] - x0[1], look[0] - x0[0])
-        herr = np.arctan2(np.sin(desired - x0[2]), np.cos(desired - x0[2]))
-        w = float(np.clip(2.0 * herr, -self.w_max, self.w_max))
-
-        dist = float(np.linalg.norm(look - x0[:2]))
-
-        align = max(0.0, np.cos(herr))
-        v = self.v_max * align * np.clip(dist / 0.6, 0.0, 1.0)
-
-        risk = field.phi_s(np.array([x0[0], x0[1], 0.0]))
-        slow = 1.0 / (1.0 + self.lam_social * min(risk, 3.0))
-        v *= max(slow, 0.35)
-
-        v = float(np.clip(v, u_prev[0] - self.a_max * self.dt,
-                          u_prev[0] + self.a_max * self.dt))
-        v = float(np.clip(v, 0.0, self.v_max))
+        self.last_predicted_states = []
+        self.last_predicted_controls = []
+        self.last_objective_terms = {}
+        self.last_constraint_violation = {}
+        self.last_control_sequence_varies = False
         self.last_terminal_adp_cost = 0.0
         self.last_total_cost = 0.0
         self.last_social_cost = 0.0
         self.last_tube_cost = 0.0
         self.last_track_cost = 0.0
         self.last_control_cost = 0.0
-        self.last_solver_status = "pure_pursuit"
-        return v, w
+        self.last_reject_forbidden_count = 0
+        self.last_reject_interest_phi_count = 0
+        self.first_predicted_forbidden_reason = ""
+
+    def solve(self, state, ref_points, field, corridor=None, u_prev=None,
+              critic=None, feature_builder=None, lambda_adp_terminal=0.0,
+              goal=None, gate_info=None, interest_risk=None,
+              use_adp_terminal=False, interest_constraints=None,
+              topology_constraint=None, predictive=True):
+        x0 = np.asarray(state, float)
+        ref = np.asarray(ref_points, float)
+        u_prev = np.zeros(2) if u_prev is None else np.asarray(u_prev, float)
+        self.last_final_approach_used = 0
+        self.last_topology_constraint = dict(topology_constraint or {})
+        self.last_predicted_states = []
+        self.last_predicted_controls = []
+        self.last_objective_terms = {}
+        self.last_constraint_violation = {}
+        self.last_control_sequence_varies = False
+
+        if ref.size == 0:
+            self.last_solver_status = "safe_stop: empty_ref"
+            return 0.0, 0.0
+
+        goal_arr = ref[-1] if goal is None else np.asarray(goal, float)
+        dist_goal = float(np.linalg.norm(x0[:2] - goal_arr[:2]))
+        if not bool(predictive):
+            warm = self._pure_pursuit_u(x0, ref, field, u_prev)
+            self.last_predicted_controls = [warm.tolist()]
+            self.last_predicted_states = [self._step(x0, warm).tolist()]
+            self.last_objective_terms = {"baseline_pure_pursuit": 0.0}
+            self.last_solver_status = "baseline_pure_pursuit"
+            return float(warm[0]), float(warm[1])
+
+        return self._sampled_predictive_solve(
+            x0, ref, field, corridor, u_prev, critic, feature_builder,
+            lambda_adp_terminal, goal_arr, gate_info, interest_risk,
+            interest_constraints)
 
     def _step(self, x, u):
         v, w = float(u[0]), float(u[1])
@@ -4398,32 +4396,40 @@ class WheelchairMPC:
             v = float(np.clip(v, 0.0, self.final_max_v))
         return np.array([v, w], float)
 
-    def _candidate_controls(self, u_prev, pure_u=None, goal_u=None):
-        v_hi = min(self.v_max, max(0.15, float(u_prev[0]) + self.a_max * self.dt))
-        v_vals = np.linspace(0.0, v_hi, 5)
-        w_center = float(u_prev[1])
-        w_span = min(self.w_max, 0.9)
-        w_vals = np.linspace(
-            max(-self.w_max, w_center - w_span),
-            min(self.w_max, w_center + w_span),
-            7)
-        controls = []
-        for v in v_vals:
-            for w in w_vals:
-                controls.append(np.array([v, w], float))
-        if pure_u is not None:
-            controls.append(np.asarray(pure_u, float))
-        if goal_u is not None:
-            controls.append(np.asarray(goal_u, float))
-        return controls
+    def _sequence_step_controls(self, u_prev, warm_u=None, goal_u=None):
+        """Return rate-limited controls for one prediction step."""
+        prev = np.asarray(u_prev, float)
+        dv = float(self.a_max) * float(self.dt)
+        dw = float(self.alpha_max) * float(self.dt)
+        candidates = []
+        for delta_v in (-dv, 0.0, dv):
+            for delta_w in (-dw, 0.0, dw):
+                candidates.append(prev + np.array([delta_v, delta_w], float))
+        for seed in (warm_u, goal_u):
+            if seed is None:
+                continue
+            seed = np.asarray(seed, float)
+            candidates.append(np.array([
+                np.clip(seed[0], prev[0] - dv, prev[0] + dv),
+                np.clip(seed[1], prev[1] - dw, prev[1] + dw),
+            ], float))
+        unique = []
+        seen = set()
+        for item in candidates:
+            item = np.array([
+                np.clip(item[0], 0.0, self.v_max),
+                np.clip(item[1], -self.w_max, self.w_max),
+            ], float)
+            key = (round(float(item[0]), 8), round(float(item[1]), 8))
+            if key not in seen:
+                seen.add(key)
+                unique.append(item)
+        return unique
 
     def _sampled_predictive_solve(self, x0, ref, field, corridor, u_prev,
                                   critic, feature_builder,
                                   lambda_adp_terminal, goal, gate_info,
                                   interest_risk, interest_constraints=None):
-        best_u = None
-        best_cost = np.inf
-        best_parts = None
         has_adp_terminal = (
             lambda_adp_terminal > 0.0 and
             critic is not None and feature_builder is not None)
@@ -4431,13 +4437,9 @@ class WheelchairMPC:
         goal = ref[-1] if goal is None else np.asarray(goal, float)
         gate_info = gate_info or {}
         interest_risk = interest_risk or {}
-        pure_u = self._pure_pursuit_u(x0, ref, field, u_prev)
         dist0 = float(np.linalg.norm(x0[:2] - goal[:2]))
-        goal_u = None
         if dist0 < self.final_approach_radius:
-            goal_u = self._goal_seek_u(x0, goal)
             self.last_final_approach_used = 1
-        records = []
         interest_constraints = interest_constraints or {}
         interest_enabled = bool(interest_constraints.get("enabled", False))
         interest_rho = float(interest_constraints.get("rho", float("inf")))
@@ -4453,69 +4455,153 @@ class WheelchairMPC:
             corridor_constraint=dict(
                 self.last_topology_constraint.get("corridor_constraint", {}) or {}),
             risk_field=field)
-        for u in self._candidate_controls(u_prev, pure_u=pure_u, goal_u=goal_u):
-            x = np.array(x0, float)
-            track_cost = 0.0
-            social_cost = 0.0
-            tube_cost = 0.0
-            hard_violation = False
-            control_cost = self.lam_u * float(np.dot(u, u))
-            control_cost += self.lam_du * float(np.sum((u - u_prev) ** 2))
-            for k in range(horizon):
-                x = self._step(x, u)
-                manifold_state = manifold_evaluator.evaluate_state(
-                    [x[0], x[1], 0.0])
-                manifold_risk_violation = max(
-                    0.0, float(manifold_state.get("risk", 0.0)) -
-                    float(manifold_evaluator.risk_threshold))
-                manifold_clearance_violation = 0.0
-                if bool(manifold_state.get("clearance_available", False)):
-                    manifold_clearance_violation = max(
-                        0.0, float(manifold_evaluator.required_clearance) -
-                        float(manifold_state.get("clearance", 0.0)))
-                manifold_violation = max(
-                    manifold_risk_violation, manifold_clearance_violation)
-                if manifold_violation > 1e-9:
-                    if manifold_mode == "hard" or manifold_violation > 0.08:
-                        hard_violation = True
-                        break
-                    social_cost += 10.0 * float(manifold_violation ** 2)
-                if interest_enabled:
-                    summary = pose_interest_risk(
-                        field, x,
-                        local_points=interest_constraints.get("local_points"),
-                        labels=interest_constraints.get("labels"))
-                    hit, _label, _anchor, reason = forbidden_anchor_hit(
-                        field, summary.get("labels", []),
-                        summary.get("points", []))
-                    if hit:
-                        hard_violation = True
-                        self.last_reject_forbidden_count += 1
-                        if not self.first_predicted_forbidden_reason:
-                            self.first_predicted_forbidden_reason = reason
-                        break
-                    if float(summary.get("phi_max", 0.0)) > interest_rho:
-                        hard_violation = True
-                        self.last_reject_interest_phi_count += 1
-                        break
-                r = ref[min(k, ref.shape[0] - 1)]
-                track_cost += self.lam_track * float(np.sum((x[:2] - r[:2]) ** 2))
-                social_weight = self.lam_social
-                if dist0 < self.near_goal_radius:
-                    social_weight *= self.near_goal_social_scale
-                social_cost += social_weight * float(
-                    field.phi_s(np.array([x[0], x[1], 0.0])))
-                if corridor is not None:
-                    _, d = corridor.project(np.array([x[0], x[1], 0.0]))
-                    if d > corridor.radius:
-                        tube_cost += self.lam_tube * float((d - corridor.radius) ** 2)
-            if hard_violation:
-                continue
+        corridor_payload = dict(
+            self.last_topology_constraint.get("corridor_constraint", {}) or {})
+        tube_payload = dict(corridor_payload.get("tube_constraint", {}) or {})
+        tube_mode = str(
+            tube_payload.get(
+                "mode", self.last_topology_constraint.get(
+                    "tube_constraint_mode", "hard")) or "hard").lower()
+        soft_tolerance = float(manifold_payload.get("soft_tolerance", 0.08) or 0.08)
+        violation_counts = {
+            "control_bounds": 0,
+            "control_rate": 0,
+            "trajectory_tube": 0,
+            "manifold": 0,
+            "interest_point": 0,
+            "forbidden": 0,
+        }
+        empty_parts = {
+            "tracking": 0.0,
+            "social": 0.0,
+            "tube": 0.0,
+            "control": 0.0,
+            "smooth": 0.0,
+        }
+        beam = [{
+            "cost": 0.0,
+            "state": np.array(x0, float),
+            "controls": [],
+            "states": [],
+            "parts": dict(empty_parts),
+        }]
+        for k in range(horizon):
+            expanded = []
+            for item in beam:
+                x = np.asarray(item["state"], float)
+                previous = (
+                    np.asarray(item["controls"][-1], float)
+                    if item["controls"] else np.asarray(u_prev, float))
+                local_ref = ref[min(k, ref.shape[0] - 1):]
+                warm = self._pure_pursuit_u(
+                    x, local_ref if len(local_ref) else ref, field, previous)
+                local_goal_u = (
+                    self._goal_seek_u(x, goal)
+                    if dist0 < self.final_approach_radius else None)
+                for u in self._sequence_step_controls(
+                        previous, warm_u=warm, goal_u=local_goal_u):
+                    if (abs(float(u[0] - previous[0])) >
+                            self.a_max * self.dt + 1e-9 or
+                            abs(float(u[1] - previous[1])) >
+                            self.alpha_max * self.dt + 1e-9):
+                        violation_counts["control_rate"] += 1
+                        continue
+                    x_next = self._step(x, u)
+                    parts = dict(item["parts"])
+                    hard_violation = False
+                    step_soft_cost = 0.0
+                    manifold_state = manifold_evaluator.evaluate_state(
+                        [x_next[0], x_next[1], 0.0])
+                    manifold_risk_violation = max(
+                        0.0, float(manifold_state.get("risk", 0.0)) -
+                        float(manifold_evaluator.risk_threshold))
+                    manifold_clearance_violation = 0.0
+                    if bool(manifold_state.get("clearance_available", False)):
+                        manifold_clearance_violation = max(
+                            0.0, float(manifold_evaluator.required_clearance) -
+                            float(manifold_state.get("clearance", 0.0)))
+                    manifold_violation = max(
+                        manifold_risk_violation, manifold_clearance_violation)
+                    if manifold_violation > 1e-9:
+                        if (manifold_mode == "hard" or
+                                manifold_violation > soft_tolerance):
+                            hard_violation = True
+                            violation_counts["manifold"] += 1
+                        else:
+                            step_soft_cost += 10.0 * float(
+                                manifold_violation ** 2)
+                    if hard_violation:
+                        continue
+                    if interest_enabled:
+                        summary = pose_interest_risk(
+                            field, x_next,
+                            local_points=interest_constraints.get("local_points"),
+                            labels=interest_constraints.get("labels"))
+                        hit, _label, _anchor, reason = forbidden_anchor_hit(
+                            field, summary.get("labels", []),
+                            summary.get("points", []))
+                        if hit:
+                            violation_counts["forbidden"] += 1
+                            self.last_reject_forbidden_count += 1
+                            if not self.first_predicted_forbidden_reason:
+                                self.first_predicted_forbidden_reason = reason
+                            continue
+                        if float(summary.get("phi_max", 0.0)) > interest_rho:
+                            violation_counts["interest_point"] += 1
+                            self.last_reject_interest_phi_count += 1
+                            continue
+                    r = ref[min(k, ref.shape[0] - 1)]
+                    track = self.lam_track * float(
+                        np.sum((x_next[:2] - r[:2]) ** 2))
+                    social_weight = self.lam_social
+                    if dist0 < self.near_goal_radius:
+                        social_weight *= self.near_goal_social_scale
+                    social = social_weight * float(
+                        field.phi_s(np.array([x_next[0], x_next[1], 0.0])))
+                    tube = 0.0
+                    if corridor is not None:
+                        _, d = corridor.project(np.array([
+                            x_next[0], x_next[1], 0.0]))
+                        tube_violation = max(
+                            0.0, float(d) - float(corridor.radius))
+                        if tube_violation > 1e-9 and tube_mode == "hard":
+                            violation_counts["trajectory_tube"] += 1
+                            continue
+                        tube = self.lam_tube * float(tube_violation ** 2)
+                    control = self.lam_u * float(np.dot(u, u))
+                    smooth = self.lam_du * float(np.sum((u - previous) ** 2))
+                    parts["tracking"] += track
+                    parts["social"] += social + step_soft_cost
+                    parts["tube"] += tube
+                    parts["control"] += control
+                    parts["smooth"] += smooth
+                    expanded.append({
+                        "cost": float(item["cost"] + track + social +
+                                      step_soft_cost + tube + control + smooth),
+                        "state": x_next,
+                        "controls": item["controls"] + [u.copy()],
+                        "states": item["states"] + [x_next.copy()],
+                        "parts": parts,
+                    })
+            if not expanded:
+                self.last_solver_status = "safe_stop: no_feasible_sequence"
+                self.last_constraint_violation = violation_counts
+                return 0.0, 0.0
+            expanded.sort(key=lambda value: value["cost"])
+            beam = expanded[:self.beam_width]
+
+        records = []
+        for item in beam:
+            x = np.asarray(item["state"], float)
+            controls = list(item["controls"])
+            parts = dict(item["parts"])
+            u_terminal = controls[-1] if controls else np.asarray(u_prev, float)
             terminal_adp = 0.0
             if has_adp_terminal:
                 features = feature_builder.build_wheelchair(
                     x, goal, field, gate_info=gate_info,
-                    interest_risk=interest_risk, corridor=corridor, u=u)
+                    interest_risk=interest_risk, corridor=corridor,
+                    u=u_terminal)
                 terminal_adp = max(0.0, critic.predict(features))
             distN = float(np.linalg.norm(x[:2] - goal[:2]))
             progress = dist0 - distN
@@ -4525,56 +4611,74 @@ class WheelchairMPC:
                 np.linalg.norm(x[:2] - ref_goal[:2]))
             progress_reward = self.lam_progress * max(0.0, progress)
             ref_progress_reward = self.lam_ref_progress * max(0.0, ref_progress)
-            speed_reward = self.lam_speed * max(0.0, float(u[0])) * horizon * self.dt
+            speed_reward = self.lam_speed * sum(
+                max(0.0, float(u[0])) for u in controls) * self.dt
             terminal_goal_cost = self.lam_goal_terminal * float(distN ** 2)
             if dist0 < self.near_goal_radius:
                 terminal_goal_cost += self.near_goal_goal_weight * float(distN ** 2)
             stall_cost = 0.0
             if dist0 > 0.12 and progress < self.min_progress_per_solve:
-                stall_cost = self.lam_stall * float(dist0 - min(progress, 0.0))
-            adp_scale = 1.0
-            if dist0 < self.near_goal_radius:
-                adp_scale = self.near_goal_adp_scale
+                stall_cost = self.lam_stall * float(
+                    dist0 - min(progress, 0.0))
+            adp_scale = (
+                self.near_goal_adp_scale
+                if dist0 < self.near_goal_radius else 1.0)
             heading_cost = 0.0
             if dist0 < self.final_approach_radius:
                 heading_err = self._goal_heading_error(x, goal)
                 heading_cost = self.lam_heading * float(heading_err ** 2)
             total = (
-                track_cost + social_cost + tube_cost + control_cost +
-                terminal_goal_cost + stall_cost + heading_cost +
-                float(lambda_adp_terminal) * adp_scale * terminal_adp -
-                progress_reward - ref_progress_reward - speed_reward)
-            records.append((
-                total, u.copy(), progress, distN,
-                (terminal_adp, track_cost, social_cost, tube_cost, control_cost)))
+                float(item["cost"]) + terminal_goal_cost + stall_cost +
+                heading_cost + float(lambda_adp_terminal) * adp_scale *
+                terminal_adp - progress_reward - ref_progress_reward -
+                speed_reward)
+            objective = dict(parts)
+            objective.update({
+                "terminal_goal": terminal_goal_cost,
+                "stall": stall_cost,
+                "heading": heading_cost,
+                "terminal_adp": float(lambda_adp_terminal) * adp_scale * terminal_adp,
+                "progress_reward": -progress_reward,
+                "reference_progress_reward": -ref_progress_reward,
+                "speed_reward": -speed_reward,
+            })
+            records.append((total, progress, distN, item, terminal_adp, objective))
+
         valid = [
-            r for r in records
-            if r[2] >= self.min_progress_per_solve or dist0 < 0.12
-        ]
-        if valid:
-            records = valid
-        for total, u, _progress, _distN, parts in records:
-            if total < best_cost:
-                best_cost = total
-                best_u = u.copy()
-                best_parts = parts
-        if best_u is None:
-            self.last_solver_status = "safe_stop: no_candidate"
+            item for item in records
+            if item[1] >= self.min_progress_per_solve or dist0 < 0.12]
+        if not valid:
+            self.last_solver_status = "safe_stop: insufficient_progress"
+            self.last_constraint_violation = violation_counts
             return 0.0, 0.0
-        self.last_terminal_adp_cost = float(best_parts[0])
-        self.last_track_cost = float(best_parts[1])
-        self.last_social_cost = float(best_parts[2])
-        self.last_tube_cost = float(best_parts[3])
-        self.last_control_cost = float(best_parts[4])
+        best = min(valid, key=lambda value: value[0])
+        best_cost, _progress, _distN, best_item, terminal_adp, objective = best
+        controls = list(best_item["controls"])
+        states = list(best_item["states"])
+        best_u = controls[0]
+        self.last_terminal_adp_cost = float(terminal_adp)
+        self.last_track_cost = float(objective.get("tracking", 0.0))
+        self.last_social_cost = float(objective.get("social", 0.0))
+        self.last_tube_cost = float(objective.get("tube", 0.0))
+        self.last_control_cost = float(
+            objective.get("control", 0.0) + objective.get("smooth", 0.0))
         self.last_total_cost = float(best_cost)
+        self.last_predicted_controls = [
+            np.asarray(u, float).tolist() for u in controls]
+        self.last_predicted_states = [
+            np.asarray(x, float).tolist() for x in states]
+        self.last_objective_terms = dict(objective)
+        self.last_constraint_violation = violation_counts
+        self.last_control_sequence_varies = bool(any(
+            not np.allclose(controls[0], item) for item in controls[1:]))
         if self.last_final_approach_used and has_adp_terminal:
-            self.last_solver_status = "sampled_adp_terminal_final"
+            self.last_solver_status = "predictive_beam_adp_terminal_final"
         elif self.last_final_approach_used:
-            self.last_solver_status = "sampled_final_approach"
+            self.last_solver_status = "predictive_beam_final_approach"
         elif has_adp_terminal:
-            self.last_solver_status = "sampled_adp_terminal"
+            self.last_solver_status = "predictive_beam_adp_terminal"
         else:
-            self.last_solver_status = "sampled"
+            self.last_solver_status = "predictive_beam"
         return float(best_u[0]), float(best_u[1])
 
     def _pure_pursuit_u(self, x0, ref, field, u_prev):

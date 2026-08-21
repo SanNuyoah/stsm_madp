@@ -190,6 +190,11 @@ def command_repair_run(args):
         "WC_LAM_HEADING": args.wc_lam_heading,
         "WC_FINAL_DIRECT_OVERRIDE_ENABLED": args.wc_final_direct_override_enabled,
         "WC_FINAL_DIRECT_OVERRIDE_RADIUS": args.wc_final_direct_override_radius,
+        "WC_MPC_HORIZON": args.wc_mpc_horizon,
+        "WC_MPC_DT": args.wc_mpc_dt,
+        "WC_MPC_A_MAX": args.wc_mpc_a_max,
+        "WC_MPC_ALPHA_MAX": args.wc_mpc_alpha_max,
+        "WC_MPC_BEAM_WIDTH": args.wc_mpc_beam_width,
     }
     cfg = os.path.join(rd, "config")
     os.makedirs(cfg, exist_ok=True)
@@ -228,9 +233,9 @@ def command_repair_run(args):
                 "end_time": "",
                 "status": status,
                 "exit_code": "0" if status == "ok" else "",
-                "metrics_path": metrics,
-                "traj_path": traj,
-                "log_path": log,
+                "metrics_path": os.path.relpath(metrics, rd),
+                "traj_path": os.path.relpath(traj, rd),
+                "log_path": os.path.relpath(log, rd),
             })
             if row:
                 compare_rows.append(row)
@@ -354,6 +359,11 @@ def main():
     p.add_argument("--wc-lam-heading", default="2.5")
     p.add_argument("--wc-final-direct-override-enabled", default="true")
     p.add_argument("--wc-final-direct-override-radius", default="0.90")
+    p.add_argument("--wc-mpc-horizon", default="12")
+    p.add_argument("--wc-mpc-dt", default="0.2")
+    p.add_argument("--wc-mpc-a-max", default="0.5")
+    p.add_argument("--wc-mpc-alpha-max", default="1.5")
+    p.add_argument("--wc-mpc-beam-width", default="12")
     p.set_defaults(func=command_repair_run)
 
     p = sub.add_parser("archive-pictures")

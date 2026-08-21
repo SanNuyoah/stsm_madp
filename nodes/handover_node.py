@@ -2468,10 +2468,13 @@ class HandoverNode:
 
         rospy.loginfo("[handover] phase 3: retreat after handover")
         self.handover_protection_active = False
+        # The selected Morse corridor ends at the handover target.  Retreat
+        # and home-return are separate task phases, not hidden extensions of
+        # the selected approach tube.
+        self.corridor_evaluation_active = False
         self._set_phase(4)
         if not self._servo_to_path(
-                self._nominal_path(self._ee_pos(), self.wait),
-                reference_corridor=self.execution_corridor):
+                self._nominal_path(self._ee_pos(), self.wait)):
             self.corridor_evaluation_active = False
             self._return_home()
             if self.abort_on_stop:
@@ -2508,6 +2511,7 @@ class HandoverNode:
             "x": float(p[0]),
             "y": float(p[1]),
             "z": float(p[2]) if len(p) > 2 else 0.0,
+            "corridor_active": bool(self.corridor_evaluation_active),
         })
         self._mpc_reference_solve_index += 1
 
@@ -2520,7 +2524,7 @@ class HandoverNode:
         fields = [
             "robot", "corridor_id", "reference_source", "phase", "solve_index",
             "path_point_index", "trajectory_point_index",
-            "timestamp_or_s_index", "x", "y", "z",
+            "timestamp_or_s_index", "x", "y", "z", "corridor_active",
         ]
         with open(self.mpc_reference_out, "w") as f:
             writer = csv.DictWriter(f, fieldnames=fields)
@@ -2712,20 +2716,24 @@ class HandoverNode:
             return
         corr = self.execution_corridor
         cid = str(getattr(corr, "corridor_id", getattr(corr, "label", "")))
-        ref = [dict(row) for row in self.mpc_reference_records]
+        ref = [
+            dict(row) for row in self.mpc_reference_records
+            if bool(row.get("corridor_active", True))]
+        if not ref:
+            rospy.logerr(
+                "[handover][mpc] no active selected-corridor reference rows")
+            return
         ref_points = [
             [row.get("x", 0.0), row.get("y", 0.0), row.get("z", 0.0)]
             for row in ref
         ]
+        diagnostic_phase = str(ref[0].get("phase", "approach") or "approach")
         constraints = {
             "joint_velocity_max": float(self.mpc.dq_max),
             "ee_speed_max": float(self.mpc.v_cap),
             "control_delta_max": 0.1,
             "robot_type": "arm",
-            "phase": (
-                "handover" if int(self.phase) == 3 else
-                "return" if int(self.phase) == 4 else
-                "approach"),
+            "phase": diagnostic_phase,
             "risk_threshold": float(self.arm_interest_rho_stop),
             "manifold_threshold": float(self.arm_interest_rho_stop),
             "clearance_threshold": 0.08,
@@ -2739,16 +2747,15 @@ class HandoverNode:
             "strict_risk_query": bool(
                 self.experiment_mode == "paper" and not self.baseline),
         }
-        state = self.last_ee if self.last_ee is not None else ref_points[0]
+        # Replay diagnostics from the selected corridor entry, not from the
+        # post-task home pose that exists when evidence is written.
+        state = np.asarray(ref_points[0], float)
         topology_info, corridor_info, manifold_info, topology_constraint_info = (
             build_mpc_constraint_inputs(
                 corr, self.manifold, ref_points,
                 safe_threshold=float(self.arm_interest_rho_stop),
                 minimum_clearance=0.08,
-                phase=(
-                    "handover" if int(self.phase) == 3 else
-                    "return" if int(self.phase) == 4 else
-                    "approach"),
+                phase=diagnostic_phase,
                 robot_type="arm",
                 manifold_constraint_mode=self.manifold_constraint_mode,
                 phase_params=self.manifold_phase_config,
@@ -2779,6 +2786,7 @@ class HandoverNode:
                     for row in self.mpc_executed_records],
                 "executed_evidence_required": True,
             })
+        result["selected_corridor_label"] = str(getattr(corr, "label", cid))
         if corr is not None:
             result.update({
                 "raw_candidate_corridor_violation_count": int(getattr(

@@ -10,7 +10,9 @@ from datetime import date
 sys.dont_write_bytecode = True
 
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 RESULTS = os.path.join(ROOT, "results")
 ARCHIVE_ROOT = os.path.expanduser("~/stsm_madp_results_archive")
 VARIANTS = ("baseline", "stsm")
@@ -73,6 +75,8 @@ def write_config(run_dir):
         "WC_FINAL_HEADING_GAIN", "WC_FINAL_CREEP_V", "WC_FINAL_MIN_V",
         "WC_FINAL_MAX_V", "WC_FINAL_FORWARD_GAIN", "WC_LAM_HEADING",
         "WC_FINAL_DIRECT_OVERRIDE_ENABLED", "WC_FINAL_DIRECT_OVERRIDE_RADIUS",
+        "WC_MPC_HORIZON", "WC_MPC_DT", "WC_MPC_A_MAX",
+        "WC_MPC_ALPHA_MAX", "WC_MPC_BEAM_WIDTH",
     ]
     with open(os.path.join(cfg_dir, "launch_args.txt"), "w") as f:
         for key in interesting:

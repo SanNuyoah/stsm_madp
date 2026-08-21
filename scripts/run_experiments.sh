@@ -127,6 +127,11 @@ wc_final_forward_gain="${WC_FINAL_FORWARD_GAIN:-0.75}"
 wc_lam_heading="${WC_LAM_HEADING:-2.5}"
 wc_final_direct_override_enabled="${WC_FINAL_DIRECT_OVERRIDE_ENABLED:-true}"
 wc_final_direct_override_radius="${WC_FINAL_DIRECT_OVERRIDE_RADIUS:-0.90}"
+wc_mpc_horizon="${WC_MPC_HORIZON:-12}"
+wc_mpc_dt="${WC_MPC_DT:-0.2}"
+wc_mpc_a_max="${WC_MPC_A_MAX:-0.5}"
+wc_mpc_alpha_max="${WC_MPC_ALPHA_MAX:-1.5}"
+wc_mpc_beam_width="${WC_MPC_BEAM_WIDTH:-12}"
 wc_interest_enabled="${WC_INTEREST_ENABLED:-true}"
 wc_interest_gate_enabled="${WC_INTEREST_GATE_ENABLED:-true}"
 wc_footprint_rho_warn="${WC_FOOTPRINT_RHO_WARN:-5.0}"
@@ -1213,6 +1218,11 @@ run_one() {
       lam_heading:="${wc_lam_heading}" \
       final_direct_override_enabled:="${wc_final_direct_override_enabled}" \
       final_direct_override_radius:="${wc_final_direct_override_radius}" \
+      mpc_horizon:="${wc_mpc_horizon}" \
+      mpc_dt:="${wc_mpc_dt}" \
+      mpc_a_max:="${wc_mpc_a_max}" \
+      mpc_alpha_max:="${wc_mpc_alpha_max}" \
+      mpc_beam_width:="${wc_mpc_beam_width}" \
       interest_enabled:="${wc_interest_enabled}" \
       interest_gate_enabled:="${wc_interest_gate_enabled}" \
       footprint_rho_warn:="${wc_footprint_rho_warn}" \
@@ -1272,8 +1282,8 @@ run_one() {
   fi
   printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "${run_id}" "${metrics_target}" "${variant}" "${mode}" "${start_time}" "${end_time}" \
-    "${status}" "${exit_code}" "${tmp_metrics_csv}" "${tmp_traj_csv}" \
-    "${log_path}" >> "${manifest_csv}"
+    "${status}" "${exit_code}" "${target}/${variant}/metrics.csv" \
+    "${target}/${variant}/traj.csv" "${target}/${variant}/ros.log" >> "${manifest_csv}"
   if [ "${exit_code}" -ne 0 ]; then
     failed=1
     echo "ERROR: roslaunch failed for ${target}/${mode}, see ${log_path}" >&2
@@ -1324,6 +1334,11 @@ export WC_FINAL_FORWARD_GAIN="${wc_final_forward_gain}"
 export WC_LAM_HEADING="${wc_lam_heading}"
 export WC_FINAL_DIRECT_OVERRIDE_ENABLED="${wc_final_direct_override_enabled}"
 export WC_FINAL_DIRECT_OVERRIDE_RADIUS="${wc_final_direct_override_radius}"
+export WC_MPC_HORIZON="${wc_mpc_horizon}"
+export WC_MPC_DT="${wc_mpc_dt}"
+export WC_MPC_A_MAX="${wc_mpc_a_max}"
+export WC_MPC_ALPHA_MAX="${wc_mpc_alpha_max}"
+export WC_MPC_BEAM_WIDTH="${wc_mpc_beam_width}"
 
 python3 -B "${pkg_dir}/scripts/analysis/results_manager.py" organize \
   --run-id "${run_id}" \

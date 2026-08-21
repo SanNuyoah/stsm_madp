@@ -236,6 +236,7 @@ class WheelchairNode:
         self.mpc_cost_breakdown_out = rospy.get_param("~mpc_cost_breakdown_out", "")
         self.mpc_reference_records = []
         self.mpc_executed_records = []
+        self.mpc_runtime_records = []
         self.baseline_reference_records = []
         self.baseline_mpc_output_records = []
         self._baseline_reference_solve_index = 0
@@ -460,6 +461,7 @@ class WheelchairNode:
         return str(source or "") in (
             "refined", "refined_waypoints", "turn_recovered_refined",
             "candidate_fallback", "refinement", "candidate", "fallback",
+            "selected_candidate_waypoints", "raw_waypoints",
             "runtime_replan_fallback")
 
     def _ensure_corridor_runtime_contract(self, corridor,
@@ -579,8 +581,13 @@ class WheelchairNode:
         self.field.set_scene([self.human], [bed, transfer, table])
         self.manifold = SafetyManifold(self.field, rho=2.0, lam_s=1.0)
         self.mpc = WheelchairMPC(
+            horizon=int(rospy.get_param("~mpc/horizon", 12)),
+            dt=float(rospy.get_param("~mpc/dt", 0.2)),
             v_max=0.75,
             w_max=(1.2 if self.baseline else self.stsm_w_max),
+            a_max=float(rospy.get_param("~mpc/a_max", 0.5)),
+            alpha_max=float(rospy.get_param("~mpc/alpha_max", 1.5)),
+            beam_width=int(rospy.get_param("~mpc/beam_width", 12)),
             lam_social=0.4)
         self.mpc_base_v_max = float(self.mpc.v_max)
         self.mpc_base_lam_tube = float(self.mpc.lam_tube)
@@ -3241,7 +3248,9 @@ class WheelchairNode:
                 minimum_clearance=0.10,
                 phase="navigation",
                 robot_type="wheelchair",
-                manifold_constraint_mode=self.manifold_constraint_mode))
+                manifold_constraint_mode=self.manifold_constraint_mode,
+                strict_stsm=bool(not self.baseline),
+                expected_corridor_id=cid))
         if len(final_trajectory) > 0:
             corridor_info["centerline"] = final_trajectory.tolist()
         dbg = dict(getattr(self.manifold, "last_topology_debug", {}) or {})
@@ -3275,6 +3284,27 @@ class WheelchairNode:
         result["success"] = bool(result["overall_success"])
         if not result["task_success"]:
             result["failure_reason"] = self.stop_reason or "task_not_completed"
+        runtime_last = (
+            dict(self.mpc_runtime_records[-1])
+            if self.mpc_runtime_records else {})
+        result.update({
+            "selected_corridor_label": self._corridor_label(corridor),
+            "runtime_solver_status": str(runtime_last.get(
+                "solver_status", self.mpc.last_solver_status)),
+            "runtime_horizon": int(self.mpc.N),
+            "runtime_predicted_states": list(runtime_last.get(
+                "predicted_states", [])),
+            "runtime_predicted_controls": list(runtime_last.get(
+                "predicted_controls", [])),
+            "runtime_objective_terms": dict(runtime_last.get(
+                "objective_terms", {})),
+            "runtime_constraint_violation": dict(runtime_last.get(
+                "constraint_violation", {})),
+            "runtime_control_sequence_varies": bool(runtime_last.get(
+                "control_sequence_varies", False)),
+            "runtime_corridor_id": str(runtime_last.get("corridor_id", cid)),
+            "runtime_mpc_records": list(self.mpc_runtime_records),
+        })
         diag, breakdown = self._mpc_output_paths()
         topology_constraint_path = os.path.join(
             os.path.dirname(diag), "topology_constraint.json")
@@ -4506,7 +4536,33 @@ class WheelchairNode:
                                       "labels": self.wc_ip_labels,
                                       "rho": self.footprint_gate.rho_stop,
                                   },
-                                  topology_constraint=topology_constraint_for_mpc)
+                                  topology_constraint=topology_constraint_for_mpc,
+                                  predictive=bool(not self.baseline))
+            runtime_record = {
+                "solve_index": int(len(self.mpc_runtime_records)),
+                "corridor_id": self._corridor_id(corridor),
+                "solver_status": str(self.mpc.last_solver_status),
+                "horizon": int(self.mpc.N),
+                "predicted_states": list(self.mpc.last_predicted_states),
+                "predicted_controls": list(self.mpc.last_predicted_controls),
+                "objective_terms": dict(self.mpc.last_objective_terms),
+                "constraint_violation": dict(
+                    self.mpc.last_constraint_violation),
+                "control_sequence_varies": bool(
+                    self.mpc.last_control_sequence_varies),
+                "first_control": [float(v), float(w)],
+            }
+            self.mpc_runtime_records.append(runtime_record)
+            if len(self.mpc_runtime_records) > 200:
+                self.mpc_runtime_records = self.mpc_runtime_records[-200:]
+            if (not self.baseline and
+                    str(self.mpc.last_solver_status).startswith("safe_stop:")):
+                self._publish_runtime_stop(
+                    "mpc:%s" % self.mpc.last_solver_status)
+                rospy.logerr(
+                    "[wc][mpc] no feasible predictive sequence: %s",
+                    self.mpc.last_solver_status)
+                break
             v, w = self._baseline_corridor_follow_control(
                 corridor, ref, v, w, dist)
             v_mpc_raw = float(v)
@@ -4515,7 +4571,7 @@ class WheelchairNode:
             stsm_final_radius = max(
                 float(self.goal_tolerance),
                 float(self.final_direct_override_radius))
-            if (not self.baseline and self.final_direct_override_enabled and
+            if (self.baseline and self.final_direct_override_enabled and
                     final_approach_active and dist < stsm_final_radius and
                     not gate.stop):
                 if self._corridor_is_topological(corridor):

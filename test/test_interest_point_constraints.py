@@ -904,3 +904,98 @@ def test_wheelchair_predictive_solver_speed_reward_improves_forward_motion():
         np.array([0.0, 0.0, 0.0]), np.array([0.1, 0.0]))
     assert rotate[0] == 0.0
     assert 0.0 < closer[0] < approach[0]
+
+
+def test_wheelchair_stsm_mpc_optimizes_time_varying_control_sequence():
+    mpc = WheelchairMPC(
+        horizon=4, dt=0.2, v_max=0.75, w_max=1.0,
+        a_max=0.5, alpha_max=1.5, beam_width=20)
+    mpc.lam_progress = 8.0
+    mpc.lam_speed = 2.0
+    mpc.min_progress_per_solve = 0.0
+    x0 = np.array([0.0, 0.0, 0.0])
+    ref = np.array([
+        [0.1, 0.0], [0.25, 0.02], [0.4, 0.08], [0.55, 0.18]])
+    corridor = Corridor(np.array([
+        [0.0, 0.0, 0.0], [0.55, 0.18, 0.0]]), radius=0.5,
+        label="predictive")
+
+    v, w = mpc.solve(
+        x0, ref, ZeroField(), corridor=corridor, u_prev=np.zeros(2),
+        goal=ref[-1], predictive=True,
+        topology_constraint={
+            "tube_constraint_mode": "hard",
+            "corridor_constraint": {
+                "used": True,
+                "tube_constraint": {"mode": "hard"},
+            },
+        })
+
+    controls = np.asarray(mpc.last_predicted_controls, float)
+    states = np.asarray(mpc.last_predicted_states, float)
+    assert mpc.last_solver_status.startswith("predictive_beam")
+    assert controls.shape == (4, 2)
+    assert states.shape == (4, 3)
+    assert np.allclose([v, w], controls[0])
+    assert mpc.last_control_sequence_varies is True
+    assert np.all(controls[:, 0] >= 0.0)
+    assert np.all(controls[:, 0] <= mpc.v_max + 1e-9)
+    assert np.all(np.abs(controls[:, 1]) <= mpc.w_max + 1e-9)
+    prior = np.vstack([np.zeros((1, 2)), controls[:-1]])
+    delta = np.abs(controls - prior)
+    assert np.all(delta[:, 0] <= mpc.a_max * mpc.dt + 1e-9)
+    assert np.all(delta[:, 1] <= mpc.alpha_max * mpc.dt + 1e-9)
+    assert "tracking" in mpc.last_objective_terms
+    assert "terminal_goal" in mpc.last_objective_terms
+
+
+def test_wheelchair_stsm_mpc_hard_tube_infeasible_is_safe_stop():
+    mpc = WheelchairMPC(horizon=3, dt=0.2, v_max=0.75)
+    mpc.min_progress_per_solve = 0.0
+    x0 = np.array([0.0, 0.0, 0.0])
+    ref = np.array([[0.1, 0.0], [0.2, 0.0], [0.3, 0.0]])
+    corridor = Corridor(np.array([
+        [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]]), radius=0.01,
+        label="disconnected")
+
+    control = mpc.solve(
+        x0, ref, ZeroField(), corridor=corridor, u_prev=np.zeros(2),
+        goal=ref[-1], predictive=True,
+        topology_constraint={
+            "tube_constraint_mode": "hard",
+            "corridor_constraint": {
+                "used": True,
+                "tube_constraint": {"mode": "hard"},
+            },
+        })
+
+    assert control == (0.0, 0.0)
+    assert mpc.last_solver_status == "safe_stop: no_feasible_sequence"
+    assert mpc.last_constraint_violation["trajectory_tube"] > 0
+
+
+def test_wheelchair_baseline_keeps_pure_pursuit_outside_stsm_optimizer():
+    mpc = WheelchairMPC(horizon=3, dt=0.2, v_max=0.75)
+    ref = np.array([[0.1, 0.0], [0.2, 0.0], [0.3, 0.0]])
+
+    control = mpc.solve(
+        np.array([0.0, 0.0, 0.0]), ref, ZeroField(),
+        u_prev=np.zeros(2), goal=ref[-1], predictive=False)
+
+    assert control[0] >= 0.0
+    assert mpc.last_solver_status == "baseline_pure_pursuit"
+    assert len(mpc.last_predicted_controls) == 1
+
+
+def test_arm_mpc_evidence_excludes_out_of_scope_return_from_corridor_reference():
+    path = os.path.abspath(os.path.join(
+        os.path.dirname(__file__), "..", "nodes", "handover_node.py"))
+    with open(path, "r") as handle:
+        source = handle.read()
+
+    assert '"corridor_active": bool(self.corridor_evaluation_active)' in source
+    assert 'if bool(row.get("corridor_active", True))' in source
+    retreat = source[source.index(
+        'rospy.loginfo("[handover] phase 3: retreat after handover")'):]
+    retreat = retreat[:retreat.index("self.task_completed")]
+    assert "reference_corridor=self.execution_corridor" not in retreat

@@ -24,7 +24,10 @@ def configure_plot_fonts():
     import matplotlib
     from matplotlib import font_manager
 
-    cjk_font = None
+    # Older Matplotlib releases call ``copy()`` on ``fontproperties`` and
+    # crash when it is explicitly None.  Always return a FontProperties
+    # instance; use the bundled CJK font when the container provides it.
+    cjk_font = font_manager.FontProperties()
     if os.path.isfile(CJK_FONT_PATH):
         try:
             font_manager.fontManager.addfont(CJK_FONT_PATH)
