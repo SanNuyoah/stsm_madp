@@ -323,7 +323,7 @@ def audit_reference_safety(reference_path, context, robot_type="",
                 "centerline": (context or {}).get("centerline", []),
                 "radius": (context or {}).get("radius", 0.0),
             },
-            risk_field=None,
+            risk_field=(context or {}).get("social_field"),
             planning_clearance_margin=0.0,
             soft_tolerance=(context or {}).get("manifold_soft_tolerance", 0.005),
             hard_tolerance=(context or {}).get("manifold_hard_tolerance", 0.25))
@@ -554,6 +554,7 @@ def _extract_constraint_context(topology_info, corridor_info, manifold_info,
         "topology_info": topology_info,
         "corridor_info": corridor_info,
         "manifold_info": manifold_info,
+        "social_field": social_field,
         "centerline": _as_optional_points(centerline),
         "reference_path": _as_optional_points(reference_path),
         "radius": float(radius),
@@ -961,7 +962,7 @@ def _constraint_step_metrics(point, risk_value, context, phase=None,
             "safe_threshold": safe_threshold,
         },
         corridor_constraint=corridor_constraint,
-        risk_field=None,
+        risk_field=context.get("social_field"),
         planning_clearance_margin=0.0,
         soft_tolerance=context.get("manifold_soft_tolerance", 0.08),
         hard_tolerance=context.get("manifold_hard_tolerance", 0.25))
@@ -1490,7 +1491,9 @@ def _apply_acceptance_diagnostics(result, context):
         constraint.get("planning_clearance_margin",
                        context.get("planning_clearance_margin", 0.0)) or 0.0)
     boundary = constraint.get("boundary", context.get("manifold_boundary", []))
-    clearance_source = "boundary_distance" if bool(boundary) else "risk_surrogate"
+    clearance_source = (
+        "risk_manifold_boundary" if bool(boundary) else
+        "risk_threshold_only")
     reference_path = context.get("reference_path", [])
     if _as_optional_points(reference_path).size:
         evaluator = ManifoldConstraintEvaluator(
@@ -1506,7 +1509,7 @@ def _apply_acceptance_diagnostics(result, context):
                 "centerline": context.get("centerline", []),
                 "radius": context.get("radius", 0.0),
             },
-            risk_field=None,
+            risk_field=context.get("social_field"),
             planning_clearance_margin=0.0)
         reference_status = evaluator.evaluate_trajectory(reference_path)
         reference_clearance = float(reference_status.get("min_clearance", 0.0))
@@ -1560,19 +1563,34 @@ def _apply_success_contract(result, reference_audit=None):
             "feasible", "feasible_with_soft_violation",
             "feasible_with_soft_violations") and
         consecutive_override < override_limit)
-    manifold_v = int(result.get("manifold_violation_count", 0) or 0)
-    corridor_v = int(result.get("corridor_violation_count", 0) or 0)
-    major_v = int(result.get("major_violation_count", 0) or 0)
-    max_soft = float(result.get("max_manifold_violation", 0.0) or 0.0)
+    executed_required = bool(result.get("executed_evidence_required", False))
+    executed_count = int(result.get("actual_executed_trajectory_count", 0) or 0)
+    use_executed = bool(executed_count > 0)
+    prefix = "executed_" if use_executed else ""
+    manifold_v = int(result.get(
+        prefix + "manifold_violation_count",
+        result.get("manifold_violation_count", 0)) or 0)
+    corridor_v = int(result.get(
+        prefix + "corridor_violation_count",
+        result.get("corridor_violation_count", 0)) or 0)
+    major_v = int(result.get(
+        prefix + "major_violation_count",
+        result.get("major_violation_count", 0)) or 0)
+    max_soft = float(result.get(
+        prefix + "max_manifold_violation",
+        result.get("max_manifold_violation", 0.0)) or 0.0)
     soft_tol = float(result.get("manifold_soft_tolerance", 0.005) or 0.005)
-    step_count = int(result.get(
-        "executed_trajectory_count",
-        result.get("rollout_solve_count", 0)) or 0)
+    step_count = int(
+        executed_count if use_executed else result.get(
+            "executed_trajectory_count",
+            result.get("rollout_solve_count", 0)) or 0)
     soft_ratio = (
         float(manifold_v) / float(step_count)
         if step_count > 0 else (1.0 if manifold_v > 0 else 0.0))
     soft_ratio_limit = float(result.get("soft_violation_ratio_limit", 0.0) or 0.0)
-    if mode == "hard":
+    if executed_required and not use_executed:
+        safety_success = False
+    elif mode == "hard":
         safety_success = bool(manifold_v == 0 and corridor_v == 0)
     else:
         safety_success = bool(
@@ -1593,6 +1611,9 @@ def _apply_success_contract(result, reference_audit=None):
         "success": bool(overall_success),
         "soft_violation_ratio": float(soft_ratio),
         "soft_violation_ratio_limit": float(soft_ratio_limit),
+        "safety_truth_source": "executed" if use_executed else "predicted",
+        "executed_evidence_complete": bool(
+            use_executed or not executed_required),
     })
     if not overall_success and not str(result.get("failure_reason", "")).strip():
         result["failure_reason"] = (
@@ -1603,6 +1624,46 @@ def _apply_success_contract(result, reference_audit=None):
     if overall_success:
         result["failure_reason"] = ""
     return result
+
+
+def evaluate_executed_trajectory(trajectory, context, social_field=None,
+                                 robot_type="", phase_sequence=None):
+    """Evaluate measured states with the same constraint truth as MPC rollout."""
+    points = _as_points(trajectory)
+    phases = list(phase_sequence or _reference_phases(
+        trajectory, len(points), robot_type))
+    rows = []
+    for index, point in enumerate(points):
+        phase = phases[min(index, len(phases) - 1)] if phases else (
+            "navigation" if str(robot_type).lower() == "wheelchair" else "approach")
+        progress = _phase_local_progress(phases, index) if phases else 0.0
+        risk_info = query_social_risk(point, robot_type, social_field)
+        metrics = _constraint_step_metrics(
+            point, float(risk_info.get("risk_value", 0.0)), context,
+            phase=phase, progress=progress)
+        row = {
+            "step": int(index),
+            "global_step": int(index),
+            "x": float(point[0]),
+            "y": float(point[1]),
+            "z": float(point[2]),
+            "pred_x": float(point[0]),
+            "pred_y": float(point[1]),
+            "pred_z": float(point[2]),
+            "phase": str(phase),
+            "progress": float(progress),
+            "trajectory_source": "executed",
+            "risk": float(risk_info.get("risk_value", 0.0)),
+            "risk_value": float(risk_info.get("risk_value", 0.0)),
+            "risk_query_valid": int(bool(risk_info.get("risk_query_valid", False))),
+            "risk_query_source": str(risk_info.get("risk_query_source", "")),
+            "feasibility_status": "measured",
+            "manifold_override": False,
+            "corridor_override": False,
+        }
+        row.update(metrics)
+        rows.append(row)
+    return rows, _constraint_summary(rows)
 
 
 def _weighted_total(costs, weights):
@@ -2092,6 +2153,34 @@ def run_mpc_tracking(robot_type, current_state, reference_path,
     feedback.setdefault("failure_type", result.get("mpc_feasibility_status", ""))
     feedback.setdefault("failed_constraint", result.get("failed_constraint_type", ""))
     result["mpc_feedback"] = feedback
+    measured = cfg.get("executed_trajectory", [])
+    if _as_optional_points(measured).size:
+        executed_rows, executed_summary = evaluate_executed_trajectory(
+            measured, context, social_field=social_field, robot_type=robot,
+            phase_sequence=cfg.get("executed_phase_sequence", []))
+        result["executed_trajectory_rows"] = executed_rows
+        result["actual_executed_trajectory_count"] = len(executed_rows)
+        result["executed_trajectory_count"] = len(executed_rows)
+        result["predicted_trajectory_count"] = len(
+            result.get("predicted_states", []))
+        result["actual_executable_trajectory"] = _jsonable_points(measured)
+        for key, value in executed_summary.items():
+            result["executed_" + key] = value
+        result["actual_execution_min_clearance"] = float(
+            executed_summary.get("min_manifold_clearance", 0.0))
+        result["execution_clearance"] = float(
+            executed_summary.get("min_manifold_clearance", 0.0))
+        result["executed_min_clearance"] = float(
+            executed_summary.get("min_manifold_clearance", 0.0))
+        result["trajectory_evidence"] = {
+            "reference": "mpc_reference_path.csv",
+            "predicted": "mpc_rollout_log.csv",
+            "executed": "mpc_executed_trajectory.csv",
+        }
+    else:
+        result["actual_executed_trajectory_count"] = 0
+    result["executed_evidence_required"] = bool(
+        cfg.get("executed_evidence_required", False))
     return _apply_success_contract(result, reference_audit)
 
 
@@ -3113,7 +3202,7 @@ def _task_weight_diagnostics_payload(diag, rows, rollout_rows):
 
 
 def _phase_constraint_diagnostics_payload(diag, rows, rollout_rows):
-    source_rows = list(rollout_rows or rows or [])
+    source_rows = list(rows or rollout_rows or [])
     phases = {}
     records = []
     for row in source_rows:
@@ -3131,12 +3220,19 @@ def _phase_constraint_diagnostics_payload(diag, rows, rollout_rows):
         hard_clearance_violation = bool(
             bool(row.get("major_violation", False)) or
             constraint_status == "infeasible")
-        violation_count = int(
+        numeric_violation = bool(
             float(row.get("risk_constraint_violation", 0.0) or 0.0) > 1e-9 or
             float(row.get("clearance_constraint_violation", 0.0) or 0.0) > 1e-9 or
             float(row.get("manifold_violation", 0.0) or 0.0) > 1e-9)
+        geometric_violation = bool(
+            clearance_threshold > 0.0 and
+            actual_clearance + 1e-9 < clearance_threshold)
+        violation_count = int(
+            numeric_violation or geometric_violation or
+            constraint_status in ("soft_violation", "infeasible"))
         records.append({
-            "trajectory_source": "executed",
+            "trajectory_source": str(row.get(
+                "trajectory_source", "executed" if rows else "predicted")),
             "phase": phase,
             "progress": float(progress),
             "return_progress": float(progress) if phase == "return" else "",
@@ -3193,7 +3289,8 @@ def _phase_constraint_diagnostics_payload(diag, rows, rollout_rows):
                              for r in records
                              if r.get("trajectory_source") == "executed"))
     validation_total = int(diag.get(
-        "manifold_violation_count", executed_total) or 0)
+        "executed_manifold_violation_count",
+        diag.get("manifold_violation_count", executed_total)) or 0)
     return {
         "robot_type": str(diag.get("robot_type", "")),
         "selected_corridor_id": str(diag.get("selected_corridor_id", "")),
@@ -3644,7 +3741,7 @@ def write_mpc_outputs(result, diagnostics_path, breakdown_path, rollout_path=Non
     task_weight_payload = _task_weight_diagnostics_payload(
         diag, rows, rollout_rows)
     phase_payload = _phase_constraint_diagnostics_payload(
-        diag, rows, rollout_rows)
+        diag, executed_rows, rollout_rows)
     task_state_payload = _task_state_diagnostics_payload(
         diag, rows, rollout_rows)
     task_opt_payload = _mpc_task_optimization_diagnostics_payload(
@@ -3773,7 +3870,12 @@ def write_mpc_outputs(result, diagnostics_path, breakdown_path, rollout_path=Non
         "joint_state", "control_norm", "tracking_error", "risk_value",
         "phase", "task_state", "state_transition", "risk_weight",
         "tracking_weight", "smoothness_weight", "task_weight",
-        "feasibility_status",
+        "feasibility_status", "trajectory_source", "clearance_source",
+        "manifold_clearance", "minimum_clearance", "clearance_threshold",
+        "actual_clearance", "clearance_constraint_violation",
+        "risk_threshold", "risk_constraint_violation",
+        "manifold_violation", "manifold_constraint_status",
+        "corridor_violation", "corridor_constraint_status",
     ]
     with open(executed_path, "w") as f:
         writer = csv.DictWriter(f, fieldnames=executed_fields)
@@ -4253,10 +4355,10 @@ class WheelchairMPC:
         w = float(np.clip(
             self.final_heading_gain * herr, -self.w_max, self.w_max))
         if abs(herr) > self.final_heading_threshold:
-            v = self.final_creep_v
+            v = 0.0
         else:
             v = self.final_forward_gain * dist
-            v = float(np.clip(v, self.final_min_v, self.final_max_v))
+            v = float(np.clip(v, 0.0, self.final_max_v))
         return np.array([v, w], float)
 
     def _candidate_controls(self, u_prev, pure_u=None, goal_u=None):
@@ -4305,6 +4407,15 @@ class WheelchairMPC:
         self.last_reject_forbidden_count = 0
         self.last_reject_interest_phi_count = 0
         self.first_predicted_forbidden_reason = ""
+        manifold_payload = dict(
+            self.last_topology_constraint.get("manifold_constraint", {}) or {})
+        manifold_mode = str(manifold_payload.get(
+            "manifold_constraint_mode", manifold_payload.get("mode", "soft"))).lower()
+        manifold_evaluator = ManifoldConstraintEvaluator(
+            manifold_constraint=manifold_payload,
+            corridor_constraint=dict(
+                self.last_topology_constraint.get("corridor_constraint", {}) or {}),
+            risk_field=field)
         for u in self._candidate_controls(u_prev, pure_u=pure_u, goal_u=goal_u):
             x = np.array(x0, float)
             track_cost = 0.0
@@ -4315,6 +4426,23 @@ class WheelchairMPC:
             control_cost += self.lam_du * float(np.sum((u - u_prev) ** 2))
             for k in range(horizon):
                 x = self._step(x, u)
+                manifold_state = manifold_evaluator.evaluate_state(
+                    [x[0], x[1], 0.0])
+                manifold_risk_violation = max(
+                    0.0, float(manifold_state.get("risk", 0.0)) -
+                    float(manifold_evaluator.risk_threshold))
+                manifold_clearance_violation = 0.0
+                if bool(manifold_state.get("clearance_available", False)):
+                    manifold_clearance_violation = max(
+                        0.0, float(manifold_evaluator.required_clearance) -
+                        float(manifold_state.get("clearance", 0.0)))
+                manifold_violation = max(
+                    manifold_risk_violation, manifold_clearance_violation)
+                if manifold_violation > 1e-9:
+                    if manifold_mode == "hard" or manifold_violation > 0.08:
+                        hard_violation = True
+                        break
+                    social_cost += 10.0 * float(manifold_violation ** 2)
                 if interest_enabled:
                     summary = pose_interest_risk(
                         field, x,

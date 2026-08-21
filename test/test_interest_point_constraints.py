@@ -894,3 +894,13 @@ def test_wheelchair_predictive_solver_speed_reward_improves_forward_motion():
 
     assert v_slow == 0.0
     assert v_fast > v_slow
+
+    fast.final_heading_threshold = 0.5
+    rotate = fast._goal_seek_u(
+        np.array([0.0, 0.0, np.pi]), np.array([0.2, 0.0]))
+    approach = fast._goal_seek_u(
+        np.array([0.0, 0.0, 0.0]), np.array([0.2, 0.0]))
+    closer = fast._goal_seek_u(
+        np.array([0.0, 0.0, 0.0]), np.array([0.1, 0.0]))
+    assert rotate[0] == 0.0
+    assert 0.0 < closer[0] < approach[0]

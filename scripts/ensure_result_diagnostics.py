@@ -87,12 +87,26 @@ def runtime_validation_fields(diag, metrics=None, selected=None, ref_count=0):
         "soft")).strip().lower()
     if mode not in ("soft", "hard"):
         mode = "soft"
-    manifold_v = int(number(diag.get("manifold_violation_count"), 0))
-    corridor_v = int(number(diag.get("corridor_violation_count"), 0))
-    clearance_v = int(number(diag.get("clearance_violation_count"), 0))
+    executed_count = int(number(
+        diag.get("actual_executed_trajectory_count"), 0))
+    executed_required = bool(diag.get("executed_evidence_required", False))
+    prefix = "executed_" if executed_count > 0 else ""
+    manifold_v = int(number(diag.get(
+        prefix + "manifold_violation_count",
+        diag.get("manifold_violation_count")), 0))
+    corridor_v = int(number(diag.get(
+        prefix + "corridor_violation_count",
+        diag.get("corridor_violation_count")), 0))
+    clearance_v = int(number(diag.get(
+        prefix + "clearance_violation_count",
+        diag.get("clearance_violation_count")), 0))
     hard_v = manifold_v + corridor_v if mode == "hard" else 0
-    major_v = int(number(diag.get("major_violation_count"), 0))
-    max_soft_violation = number(diag.get("max_manifold_violation"), None)
+    major_v = int(number(diag.get(
+        prefix + "major_violation_count",
+        diag.get("major_violation_count")), 0))
+    max_soft_violation = number(diag.get(
+        prefix + "max_manifold_violation",
+        diag.get("max_manifold_violation")), None)
     soft_tol = number(first_value(
         diag.get("manifold_soft_tolerance"),
         constraints.get("manifold_soft_tolerance"),
@@ -143,7 +157,9 @@ def runtime_validation_fields(diag, metrics=None, selected=None, ref_count=0):
         metrics.get("success"),
         diag.get("success"),
         False))
-    if mode == "hard":
+    if executed_required and executed_count <= 0:
+        safety_success = False
+    elif mode == "hard":
         safety_success = bool(hard_v == 0 and manifold_v == 0 and corridor_v == 0)
     else:
         soft_evidence_complete = bool(
@@ -186,6 +202,10 @@ def runtime_validation_fields(diag, metrics=None, selected=None, ref_count=0):
         "controller_success": bool(controller_success),
         "safety_success": bool(safety_success),
         "overall_success": bool(overall_success),
+        "safety_truth_source": (
+            "executed" if executed_count > 0 else "predicted"),
+        "executed_evidence_complete": bool(
+            executed_count > 0 or not executed_required),
         "warning_reason": warning_reason,
         "failure_reason": failure_reason,
     }

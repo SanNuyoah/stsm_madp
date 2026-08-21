@@ -179,6 +179,8 @@ class HandoverNode:
         self.mpc_handover_diagnostics_out = rospy.get_param(
             "~mpc_handover_diagnostics_out", "")
         self.mpc_reference_records = []
+        self.mpc_executed_records = []
+        self.task_completed = False
         self.arm_ee_debug_samples = []
         self.arm_handover_debug = {
             "state_machine": [],
@@ -932,6 +934,13 @@ class HandoverNode:
                     alpha * vel_raw + (1.0 - alpha) * self.ee_vel_filtered)
         self.last_ee = np.array(ee, float)
         self.last_ee_time = now
+        phase_name = (
+            "handover" if int(self.phase) == 3 else
+            "return" if int(self.phase) == 4 else "approach")
+        self.mpc_executed_records.append({
+            "point": [float(ee[0]), float(ee[1]), float(ee[2])],
+            "phase": phase_name,
+        })
 
         comp = self.field.risk_components(ee)
         phi_close_monitor = self.field.phi_close_monitor(
@@ -2429,7 +2438,7 @@ class HandoverNode:
             if self.abort_on_stop:
                 self._log_done()
                 return
-        self._return_home()
+        self.task_completed = bool(self._return_home())
         self._log_done()
 
     def _record_mpc_reference(self, corridor, idx, target):
@@ -2719,7 +2728,21 @@ class HandoverNode:
                 "weights": self.mpc_cost_weights,
                 "phase_cost_weights": self.mpc_phase_cost_weights,
                 "phase_clearance_schedule": self.manifold_phase_config,
+                "executed_trajectory": [
+                    row["point"] for row in self.mpc_executed_records],
+                "executed_phase_sequence": [
+                    row["phase"] for row in self.mpc_executed_records],
+                "executed_evidence_required": True,
             })
+        result["task_success"] = bool(self.task_completed)
+        result["overall_success"] = bool(
+            result.get("task_success", False) and
+            result.get("planner_success", False) and
+            result.get("controller_success", False) and
+            result.get("safety_success", False))
+        result["success"] = bool(result["overall_success"])
+        if not result["task_success"]:
+            result["failure_reason"] = self.stop_reason or "task_not_completed"
         diag, breakdown = self._mpc_output_paths()
         topology_constraint_path = os.path.join(
             os.path.dirname(diag), "topology_constraint.json")
@@ -2836,9 +2859,10 @@ class HandoverNode:
             self.group.set_named_target("home")
             self.group.go(wait=True)
             self.group.stop()
-            self._wait_for_task_completion_stable(self.home_ee_ref)
+            return bool(self._wait_for_task_completion_stable(self.home_ee_ref))
         except Exception as exc:
             rospy.logwarn("[handover] return home failed: %s", exc)
+            return False
 
     def _log_done(self):
         self._write_runtime_evidence()

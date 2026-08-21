@@ -144,14 +144,29 @@ class SafetyEvaluator(object):
         point = np.asarray(state, float)[:3]
         clearance = distance_to_manifold_boundary(point, self._boundary())
         risk = manifold_risk_value(point, self.risk_field)
-        if not np.isfinite(clearance):
-            clearance = max(0.0, self.risk_threshold - risk)
+        clearance_source = "risk_manifold_boundary"
+        if not np.isfinite(clearance) and self.risk_field is not None and hasattr(
+                self.risk_field, "grad_phi_s"):
+            try:
+                grad = np.asarray(self.risk_field.grad_phi_s(point), float)[:3]
+                grad_norm = float(np.linalg.norm(grad))
+                if grad_norm > 1e-9:
+                    clearance = float((self.risk_threshold - risk) / grad_norm)
+                    clearance_source = "risk_gradient_distance"
+            except Exception:
+                pass
+        clearance_available = bool(np.isfinite(clearance))
+        if not clearance_available:
+            clearance_source = "risk_threshold_only"
         corridor_distance, inside_corridor = self._corridor_distance(point)
         inside_manifold = bool(
-            clearance + 1e-9 >= self.required_clearance and
+            (not clearance_available or
+             clearance + 1e-9 >= self.required_clearance) and
             risk <= self.risk_threshold + 1e-9)
         return {
             "clearance": float(clearance),
+            "clearance_available": bool(clearance_available),
+            "clearance_source": clearance_source,
             "risk": float(risk),
             "inside_manifold": bool(inside_manifold),
             "inside_corridor": bool(inside_corridor),
@@ -170,7 +185,12 @@ class SafetyEvaluator(object):
                                  effective_minimum_clearance=None,
                                  paper_mode=False):
         points = _as_points(interest_points)
-        clearance_source = "boundary_distance" if bool(self._boundary()) else "risk_surrogate"
+        clearance_source = (
+            "risk_manifold_boundary" if bool(self._boundary()) else
+            "risk_gradient_distance" if (
+                self.risk_field is not None and
+                hasattr(self.risk_field, "grad_phi_s")) else
+            "risk_threshold_only")
         if len(points) == 0:
             if bool(paper_mode):
                 required = (

@@ -427,7 +427,10 @@ def build_manifold_constraint(safe_manifold=None, risk_field=None,
             footprint=footprint,
             selected_corridor=selected_corridor,
             default=0.0))
-    out_boundary = boundary if boundary not in (None, "", [], {}) else _boundary_from_candidate(selected_corridor)
+    out_boundary = boundary if boundary not in (None, "", [], {}) else []
+    if not out_boundary and isinstance(safe_manifold, dict):
+        out_boundary = safe_manifold.get(
+            "risk_manifold_boundary", safe_manifold.get("boundary", []))
     return ManifoldConstraint(
         safe_region=_safe_region_from_manifold(safe_manifold),
         boundary_distance=None,

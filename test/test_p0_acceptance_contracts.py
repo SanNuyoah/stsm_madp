@@ -127,6 +127,7 @@ def test_wheelchair_mpc_constraint_inputs_keep_navigation_clearance():
     assert constraint["effective_minimum_clearance"] == 0.10
     assert constraint["phase_clearance_schedule"] == {"navigation": {}}
     assert topology_info["manifold_constraint"]["minimum_clearance"] == 0.10
+    assert constraint["boundary"] == []
 
 
 def test_hard_manifold_violation_rejects_rollout_before_execution():
@@ -191,6 +192,22 @@ def test_soft_major_violation_is_not_safety_success():
     assert fields["safety_success"] is False
     assert fields["overall_success"] is False
     assert fields["warning_reason"] == "soft_manifold_violation_not_accepted"
+
+    missing_execution = runtime_validation_fields(
+        {
+            "constraints": {"manifold_constraint_mode": "soft"},
+            "executed_evidence_required": True,
+            "actual_executed_trajectory_count": 0,
+            "manifold_violation_count": 0,
+            "corridor_violation_count": 0,
+            "mpc_used": True,
+            "mpc_feasibility_status": "feasible",
+        },
+        metrics={"success_goal": True},
+        selected={"candidate_source": "morse_topology"},
+        ref_count=1)
+    assert missing_execution["safety_success"] is False
+    assert missing_execution["executed_evidence_complete"] is False
 
 
 def test_runtime_validation_uses_runtime_violation_counts():
@@ -388,6 +405,18 @@ def test_phase_violation_sum_matches_validation():
     assert payload["executed_violation_total"] == 1
     assert payload["validation_manifold_violation_count"] == 1
     assert payload["consistency_check"] is True
+
+    derived = _phase_constraint_diagnostics_payload(
+        {"robot_type": "arm", "executed_manifold_violation_count": 1},
+        [{
+            "trajectory_source": "executed",
+            "phase": "return",
+            "actual_clearance": 0.10,
+            "clearance_threshold": 0.30,
+            "manifold_constraint_status": "soft_violation",
+        }], [])
+    assert derived["executed_violation_total"] == 1
+    assert derived["records"][0]["trajectory_source"] == "executed"
 
 
 def test_refinement_source_semantics():

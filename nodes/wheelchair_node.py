@@ -117,7 +117,7 @@ class WheelchairNode:
         self.completion_hold_s = float(rospy.get_param(
             "~completion_hold_s", 1.5))
         self.strict_goal_completion = bool(rospy.get_param(
-            "~strict_goal_completion", not self.baseline))
+            "~strict_goal_completion", False))
         self.max_runtime_s = float(rospy.get_param("~max_runtime_s", 180.0))
         self.no_progress_timeout_s = float(rospy.get_param(
             "~no_progress_timeout_s", 45.0))
@@ -206,6 +206,7 @@ class WheelchairNode:
         self.u_prev = np.zeros(2)
         self.stop_triggered = False
         self.stop_reason = ""
+        self.task_completed = False
         self.adp_requested = bool(rospy.get_param("~adp_enabled", True))
         self.adp_enabled = self.adp_requested and not self.baseline
         self.adp_model = rospy.get_param(
@@ -233,6 +234,7 @@ class WheelchairNode:
         self.mpc_diagnostics_out = rospy.get_param("~mpc_diagnostics_out", "")
         self.mpc_cost_breakdown_out = rospy.get_param("~mpc_cost_breakdown_out", "")
         self.mpc_reference_records = []
+        self.mpc_executed_records = []
         self.baseline_reference_records = []
         self.baseline_mpc_output_records = []
         self._baseline_reference_solve_index = 0
@@ -3198,8 +3200,8 @@ class WheelchairNode:
             "robot_type": "wheelchair",
             "phase": "navigation",
             "task_phase": "navigation",
-            "risk_threshold": float(self.footprint_gate.rho_stop),
-            "manifold_threshold": float(self.footprint_gate.rho_stop),
+            "risk_threshold": float(self.manifold.rho),
+            "manifold_threshold": float(self.manifold.rho),
             "clearance_threshold": 0.10,
             "minimum_clearance": 0.10,
             "manifold_constraint_mode": self.manifold_constraint_mode,
@@ -3213,7 +3215,7 @@ class WheelchairNode:
         topology_info, corridor_info, manifold_info, topology_constraint_info = (
             build_mpc_constraint_inputs(
                 corridor, self.manifold, ref_points,
-                safe_threshold=float(self.footprint_gate.rho_stop),
+                safe_threshold=float(self.manifold.rho),
                 minimum_clearance=0.10,
                 phase="navigation",
                 robot_type="wheelchair",
@@ -3229,14 +3231,28 @@ class WheelchairNode:
             constraints,
             horizon=int(self.mpc.N), dt=float(self.mpc.dt),
             selected_corridor_id=cid,
-            risk_threshold=float(self.footprint_gate.rho_stop),
+            risk_threshold=float(self.manifold.rho),
             config={
                 "task_mode": self.task_mode,
                 "task_config": self.task_config,
                 "task_weight": self.task_weight,
                 "weights": self.mpc_cost_weights,
                 "phase_cost_weights": self.mpc_phase_cost_weights,
+                "executed_trajectory": [
+                    row["point"] for row in self.mpc_executed_records],
+                "executed_phase_sequence": [
+                    row["phase"] for row in self.mpc_executed_records],
+                "executed_evidence_required": True,
             })
+        result["task_success"] = bool(self.task_completed)
+        result["overall_success"] = bool(
+            result.get("task_success", False) and
+            result.get("planner_success", False) and
+            result.get("controller_success", False) and
+            result.get("safety_success", False))
+        result["success"] = bool(result["overall_success"])
+        if not result["task_success"]:
+            result["failure_reason"] = self.stop_reason or "task_not_completed"
         diag, breakdown = self._mpc_output_paths()
         topology_constraint_path = os.path.join(
             os.path.dirname(diag), "topology_constraint.json")
@@ -3272,10 +3288,14 @@ class WheelchairNode:
         if actual_reference_count <= 0 and len(final_trajectory) > 0:
             actual_reference_count = int(len(final_trajectory))
         mpc_ran_with_reference = bool(actual_reference_count > 0)
-        final_status = (
-            "feasible" if mpc_ran_with_reference else
+        final_status = str(result.get(
+            "mpc_feasibility_status", intermediate_status) or
             "infeasible_reference_empty")
-        final_failure_reason = None if mpc_ran_with_reference else "reference_path_empty"
+        final_failure_reason = str(result.get(
+            "failure_reason", intermediate_reason) or "")
+        if not mpc_ran_with_reference:
+            final_status = "infeasible_reference_empty"
+            final_failure_reason = "reference_path_empty"
         temporary_failure_reason = (
             "" if mpc_ran_with_reference else intermediate_reason)
         if (mpc_ran_with_reference and intermediate_reason and
@@ -3297,9 +3317,14 @@ class WheelchairNode:
             "final_mpc_status": final_status,
             "final_failure_reason": final_failure_reason,
             "mpc_feasibility_status": final_status,
-            "success": bool(final_status == "feasible"),
-            "failure_reason": final_failure_reason,
-            "mpc_failure_reason": final_failure_reason,
+            "success": bool(result.get("overall_success", False)),
+            "task_success": bool(result.get("task_success", False)),
+            "planner_success": bool(result.get("planner_success", False)),
+            "controller_success": bool(result.get("controller_success", False)),
+            "safety_success": bool(result.get("safety_success", False)),
+            "overall_success": bool(result.get("overall_success", False)),
+            "failure_reason": final_failure_reason or None,
+            "mpc_failure_reason": final_failure_reason or None,
             "mpc_used": bool(mpc_ran_with_reference),
             "reference_source": (
                 "refinement" if final_source == "refinement" else
@@ -4253,6 +4278,11 @@ class WheelchairNode:
         replan_progress_time = run_start
         last_replan_dist = float("inf")
         while not rospy.is_shutdown():
+            if self.state is not None:
+                self.mpc_executed_records.append({
+                    "point": [float(self.state[0]), float(self.state[1]), 0.0],
+                    "phase": "navigation",
+                })
             self._publish_metrics()
             z = np.array([self.state[0], self.state[1], 0.0])
             vel = self.world_vel if self.velocity_valid else np.zeros(3)
@@ -4337,19 +4367,23 @@ class WheelchairNode:
                     float(getattr(gate, "scale", 0.0)),
                     float(getattr(gate, "risk", 0.0)))
                 break
-            if dist < self.goal_tolerance:
-                rospy.loginfo("[wc] berth reached, dist=%.3f", dist)
-                break
-            if (not self.strict_goal_completion and
-                    dist < self.completion_tolerance):
+            completion_radius = (
+                self.goal_tolerance if self.strict_goal_completion else
+                self.completion_tolerance)
+            if dist < completion_radius:
+                self.cmd_pub.publish(Twist())
+                self.u_prev = np.zeros(2)
                 if near_goal_since is None:
                     near_goal_since = now
                 elif (now - near_goal_since).to_sec() >= self.completion_hold_s:
+                    self.task_completed = True
                     rospy.loginfo(
                         "[wc] completion tolerance reached, dist=%.3f "
                         "(goal_tolerance=%.3f, completion_tolerance=%.3f)",
                         dist, self.goal_tolerance, self.completion_tolerance)
                     break
+                rate.sleep()
+                continue
             else:
                 near_goal_since = None
             if (not self.baseline):
@@ -4414,7 +4448,10 @@ class WheelchairNode:
                 _ti, _ci, _mi, topology_constraint_for_mpc = (
                     build_mpc_constraint_inputs(
                         corridor, self.manifold, ref,
-                        safe_threshold=float(self.footprint_gate.rho_stop)))
+                        safe_threshold=float(self.manifold.rho),
+                        minimum_clearance=0.10,
+                        phase="navigation", robot_type="wheelchair",
+                        manifold_constraint_mode=self.manifold_constraint_mode))
             except Exception:
                 topology_constraint_for_mpc = {}
             v, w = self.mpc.solve(self.state, ref, self.field,
@@ -4455,12 +4492,10 @@ class WheelchairNode:
                 if self._corridor_is_topological(corridor):
                     v_goal, w_goal = self._direct_goal_control(dist)
                     heading_error = abs(self._goal_heading_error())
-                    if heading_error < 0.75:
-                        v_goal = max(
-                            float(v_goal),
-                            min(0.30, max(0.18, 0.45 * float(dist))))
+                    if heading_error >= self.final_heading_threshold:
+                        v_goal = 0.0
                     else:
-                        v_goal = min(float(v_goal), 0.08)
+                        v_goal = min(float(v_goal), 0.45 * float(dist))
                 else:
                     v_goal, w_goal = self.mpc._goal_seek_u(self.state, self.goal)
                 v, w = float(v_goal), float(w_goal)
