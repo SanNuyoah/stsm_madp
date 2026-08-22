@@ -55,7 +55,11 @@ def copy_if_exists(src, dst):
 
 def command_output(cmd):
     try:
-        return subprocess.check_output(cmd, cwd=ROOT, stderr=subprocess.STDOUT).decode()
+        safe_cmd = list(cmd)
+        if safe_cmd and safe_cmd[0] == "git":
+            safe_cmd[1:1] = ["-c", "safe.directory={}".format(ROOT)]
+        return subprocess.check_output(
+            safe_cmd, cwd=ROOT, stderr=subprocess.STDOUT).decode()
     except Exception as exc:
         return "%s failed: %s\n" % (" ".join(cmd), exc)
 

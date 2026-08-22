@@ -50,10 +50,19 @@ def sha256(path, block=1024 * 1024):
 
 
 def list_runs(results_root):
-    runs = os.path.join(results_root, "run")
-    if not os.path.isdir(runs):
-        return []
-    return [("run", runs, os.path.getmtime(runs))]
+    runs_root = os.path.join(results_root, "runs")
+    runs = []
+    if os.path.isdir(runs_root):
+        for name in os.listdir(runs_root):
+            path = os.path.join(runs_root, name)
+            if os.path.isdir(path):
+                runs.append((name, path, os.path.getmtime(path)))
+    runs.sort(key=lambda item: item[2], reverse=True)
+    if not runs:
+        current = os.path.join(results_root, "run")
+        if os.path.isdir(current):
+            runs.append(("run", current, os.path.getmtime(current)))
+    return runs
 
 
 def remove_path(path, execute):
@@ -466,7 +475,9 @@ def main():
     parser.add_argument("--results-root", default=RESULTS)
     parser.add_argument("--archive-root", default=os.path.expanduser(
         "~/stsm_madp_results_archive"))
-    parser.add_argument("--keep-runs", type=int, default=3)
+    parser.add_argument(
+        "--keep-runs", type=int, default=-1,
+        help="historical runs to keep; negative preserves all runs")
     parser.add_argument("--keep-latest", type=int, default=None,
                         help="alias for --keep-runs")
     parser.add_argument("--move-archive", action="store_true",
@@ -492,7 +503,8 @@ def main():
     clean_figures(results_root, args.execute)
     archive_debug_figures(results_root, args.execute)
     clean_current_run(results_root, args.execute)
-    remove_summary_dir(results_root, args.execute)
+    # Summary tables and historical run directories are formal experiment
+    # evidence. Cleanup may compact the current run but must not erase them.
 
     runs = list_runs(results_root)
     protected_run_path = ""
@@ -505,7 +517,7 @@ def main():
         if protected_run_path and os.path.abspath(path) == protected_run_path:
             print("KEEP protected finalize source {}".format(path))
             continue
-        if idx >= max(0, keep_runs):
+        if keep_runs >= 0 and idx >= keep_runs:
             planned_bytes += dir_size(path)
             if args.move_archive:
                 planned_archive += 1

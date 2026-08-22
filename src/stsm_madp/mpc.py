@@ -3942,13 +3942,21 @@ def _cvx_matvec(cp, A, x):
 
 class ArmMPC:
     def __init__(self, n_joints=6, dq_max=0.8, v_cap=0.25, damping=0.05,
-                 lam_nominal=0.3, adp_grad_clip=8.0):
+                 lam_nominal=0.3, adp_grad_clip=8.0, horizon=6,
+                 beam_width=10, ddq_max=1.2, joint_lower=None,
+                 joint_upper=None, phase_cost_weights=None):
         self.n = n_joints
         self.dq_max = dq_max
         self.v_cap = v_cap
         self.damping = damping
         self.lam_nominal = lam_nominal
         self.adp_grad_clip = float(adp_grad_clip)
+        self.N = max(2, int(horizon))
+        self.beam_width = max(2, int(beam_width))
+        self.ddq_max = float(ddq_max)
+        self.joint_lower = self._joint_bound(joint_lower, -np.inf)
+        self.joint_upper = self._joint_bound(joint_upper, np.inf)
+        self.phase_cost_weights = dict(phase_cost_weights or {})
         self.solve_count = 0
         self.solve_success_count = 0
         self.fallback_count = 0
@@ -3968,6 +3976,23 @@ class ArmMPC:
         self.last_reject_interest_phi_count = 0
         self.first_predicted_forbidden_reason = ""
         self.last_handover_protection = {}
+        self.last_predicted_joint_states = []
+        self.last_predicted_controls = []
+        self.last_predicted_ee_states = []
+        self.last_objective_terms = {}
+        self.last_constraint_violation = {}
+        self.last_control_sequence_varies = False
+        self.last_kinematics_source = "unreported"
+        self.last_interest_kinematics_source = "unreported"
+        self.last_prediction_model = "none"
+
+    def _joint_bound(self, values, default):
+        if values is None:
+            return np.full(self.n, float(default), float)
+        arr = np.asarray(values, float).reshape(-1)
+        if arr.size != self.n:
+            raise ValueError("joint bound must contain {} values".format(self.n))
+        return arr
 
     def solve(self, J, v_des, dq_nom=None, v_cap=None, ee_pos=None, dt=0.1,
               critic=None, feature_builder=None, field=None, gate_info=None,
@@ -3975,8 +4000,10 @@ class ArmMPC:
               lambda_adp_arm=0.0, adp_grad_eps=0.01,
               adp_descent_gain=0.04, solver_mode="dls_adp",
               adp_blend_alpha=0.08, use_cvxpy=False,
-              interest_constraints=None, handover_protect=False,
-              handover_target=None, handover_tracking_weight=8.0):
+               interest_constraints=None, handover_protect=False,
+               handover_target=None, handover_tracking_weight=8.0,
+               q=None, corridor=None, predictive=False,
+               kinematics_source="real", phase_cost_weights=None):
         self.solve_count += 1
         J = np.asarray(J, float)
         v_des = np.asarray(v_des, float)
@@ -3988,12 +4015,28 @@ class ArmMPC:
             "active": bool(protect),
             "phase": phase,
         }
+        self.last_predicted_joint_states = []
+        self.last_predicted_controls = []
+        self.last_predicted_ee_states = []
+        self.last_objective_terms = {}
+        self.last_constraint_violation = {}
+        self.last_control_sequence_varies = False
+        self.last_kinematics_source = str(kinematics_source or "unreported")
+        self.last_interest_kinematics_source = "unreported"
+        self.last_prediction_model = "none"
         gradV, v_avoid = self._adp_avoidance(
             ee_pos, critic, feature_builder, field, gate_info, interest_risk,
             target_pos, phase, lambda_adp_arm, adp_grad_eps, adp_descent_gain)
         if protect:
             v_avoid = None
             lambda_adp_arm = 0.0
+
+        if bool(predictive):
+            return self._sampled_predictive_solve(
+                J, v_des, dq_nom, cap, q, ee_pos, dt, field,
+                interest_constraints, target_pos, phase, corridor, v_avoid,
+                lambda_adp_arm, adp_blend_alpha, handover_target, protect,
+                handover_tracking_weight, phase_cost_weights)
 
         mode = str(solver_mode or "dls_adp").lower()
         if mode in ("dls", "dls_adp") or not bool(use_cvxpy):
@@ -4087,6 +4130,182 @@ class ArmMPC:
                 J, dq_out, dq_nominal, ee_pos, dt, handover_target, protect)
             self._update_adp_solution_stats(J, dq_out, gradV, v_avoid)
             return dq_out
+
+    def _phase_weights(self, phase, override=None):
+        phase_name = str(phase or "approach")
+        if phase_name.lstrip("-").isdigit():
+            phase_name = (
+                "handover" if int(phase_name) == 3 else
+                "return" if int(phase_name) == 4 else "approach")
+        configured = dict(self.phase_cost_weights)
+        configured.update(dict(override or {}))
+        row = dict(configured.get(phase_name, {}) or {})
+        return phase_name, {
+            "tracking": float(row.get("tracking_multiplier", 1.0)),
+            "risk": float(row.get("risk_multiplier", 1.0)),
+            "smooth": float(row.get("smooth_multiplier", 1.0)),
+            "task": float(row.get("task_multiplier", 1.0)),
+        }
+
+    def _arm_step_controls(self, previous, warm, dt):
+        previous = np.asarray(previous, float)
+        warm = np.asarray(warm, float)
+        delta = max(0.0, self.ddq_max) * float(dt)
+        seeds = [previous, warm, 0.75 * warm, 0.5 * warm, np.zeros(self.n)]
+        if delta > 0.0:
+            order = np.argsort(-np.abs(warm - previous))[:min(3, self.n)]
+            for idx in order:
+                for sign in (-1.0, 1.0):
+                    cand = previous.copy()
+                    cand[int(idx)] += sign * delta
+                    seeds.append(cand)
+        unique = []
+        seen = set()
+        for seed in seeds:
+            cand = np.clip(seed, previous - delta, previous + delta)
+            cand = np.clip(cand, -self.dq_max, self.dq_max)
+            key = tuple(np.round(cand, 8).tolist())
+            if key not in seen:
+                seen.add(key)
+                unique.append(cand)
+        return unique
+
+    def _sampled_predictive_solve(
+            self, J, v_des, dq_nom, cap, q, ee_pos, dt, field,
+            interest_constraints, target_pos, phase, corridor, v_avoid,
+            lambda_adp_arm, adp_blend_alpha, handover_target, protect,
+            handover_tracking_weight, phase_cost_weights):
+        """Optimize a short joint-velocity sequence; DLS is only its seed."""
+        J = np.asarray(J, float)
+        q0 = np.zeros(self.n, float) if q is None else np.asarray(q, float)
+        ee0 = (np.zeros(J.shape[0], float) if ee_pos is None
+               else np.asarray(ee_pos, float))
+        if q0.size != self.n or J.shape[1] != self.n:
+            raise ValueError("ArmMPC predictive state/Jacobian dimension mismatch")
+        dt = max(float(dt), 1e-4)
+        v_cmd = self._compose_adp_velocity(
+            v_des, v_avoid, cap, lambda_adp_arm=lambda_adp_arm,
+            adp_blend_alpha=adp_blend_alpha, preserve_progress=True)
+        warm = self._dls(J, v_cmd, dq_nom, cap)
+        target = (ee0 + v_cmd * dt * self.N if target_pos is None
+                  else np.asarray(target_pos, float))
+        phase_name, weights = self._phase_weights(phase, phase_cost_weights)
+        cfg = dict(interest_constraints or {})
+        interest_enabled = bool(cfg.get("enabled", False) and field is not None)
+        interest_rho = float(cfg.get("rho", float("inf")))
+        offsets = cfg.get("offsets")
+        labels = cfg.get("labels")
+        self.last_interest_kinematics_source = (
+            "proxy_rigid_offset" if offsets is not None else "not_used")
+        violations = {
+            "joint_position": 0, "joint_velocity": 0,
+            "joint_acceleration": 0, "ee_speed": 0,
+            "trajectory_tube": 0, "interest_point": 0, "forbidden": 0,
+        }
+        empty = {"tracking": 0.0, "task": 0.0, "risk": 0.0,
+                 "tube": 0.0, "control": 0.0, "smooth": 0.0}
+        beam = [{"cost": 0.0, "q": q0.copy(), "ee": ee0.copy(),
+                 "dq": np.asarray(dq_nom, float).copy(), "controls": [],
+                 "joints": [], "ees": [], "parts": dict(empty)}]
+        for k in range(self.N):
+            expanded = []
+            for item in beam:
+                previous = np.asarray(item["dq"], float)
+                for cand in self._arm_step_controls(previous, warm, dt):
+                    if np.any(np.abs(cand) > self.dq_max + 1e-9):
+                        violations["joint_velocity"] += 1
+                        continue
+                    if np.any(np.abs(cand - previous) >
+                              self.ddq_max * dt + 1e-9):
+                        violations["joint_acceleration"] += 1
+                        continue
+                    ee_vel = np.dot(J, cand)
+                    if np.linalg.norm(ee_vel) > cap + 1e-9:
+                        violations["ee_speed"] += 1
+                        continue
+                    q_next = np.asarray(item["q"], float) + cand * dt
+                    if (np.any(q_next < self.joint_lower - 1e-9) or
+                            np.any(q_next > self.joint_upper + 1e-9)):
+                        violations["joint_position"] += 1
+                        continue
+                    ee_next = np.asarray(item["ee"], float) + ee_vel * dt
+                    tube_cost = 0.0
+                    if corridor is not None:
+                        _projection, distance = corridor.project(ee_next[:3])
+                        if float(distance) > float(corridor.radius) + 1e-9:
+                            violations["trajectory_tube"] += 1
+                            continue
+                    risk_cost = 0.0
+                    if interest_enabled and offsets is not None:
+                        risk = pose_interest_risk(
+                            field, ee_next[:3], offsets=offsets, labels=labels)
+                        hit, _label, _anchor, reason = forbidden_anchor_hit(
+                            field, risk.get("labels", []), risk.get("points", []))
+                        if hit:
+                            violations["forbidden"] += 1
+                            self.last_reject_forbidden_count += 1
+                            if not self.first_predicted_forbidden_reason:
+                                self.first_predicted_forbidden_reason = reason
+                            continue
+                        phi = float(risk.get("phi_max", 0.0))
+                        if phi > interest_rho:
+                            violations["interest_point"] += 1
+                            self.last_reject_interest_phi_count += 1
+                            continue
+                        risk_cost = weights["risk"] * phi
+                    fraction = float(k + 1) / float(self.N)
+                    reference = ee0 + fraction * (target - ee0)
+                    tracking = weights["tracking"] * float(
+                        np.sum((ee_next - reference) ** 2))
+                    task_cost = weights["task"] * float(
+                        np.sum((ee_next - target) ** 2)) / float(self.N)
+                    control = self.damping * float(np.dot(cand, cand))
+                    smooth = weights["smooth"] * self.lam_nominal * float(
+                        np.sum((cand - previous) ** 2))
+                    if protect:
+                        tracking *= max(1.0, float(handover_tracking_weight))
+                    parts = dict(item["parts"])
+                    for key, value in (("tracking", tracking), ("task", task_cost),
+                                       ("risk", risk_cost), ("tube", tube_cost),
+                                       ("control", control), ("smooth", smooth)):
+                        parts[key] += float(value)
+                    step_cost = sum((tracking, task_cost, risk_cost,
+                                     tube_cost, control, smooth))
+                    expanded.append({
+                        "cost": float(item["cost"] + step_cost),
+                        "q": q_next, "ee": ee_next, "dq": cand,
+                        "controls": item["controls"] + [cand.copy()],
+                        "joints": item["joints"] + [q_next.copy()],
+                        "ees": item["ees"] + [ee_next.copy()], "parts": parts,
+                    })
+            if not expanded:
+                self.fallback_count += 1
+                self.last_solver_status = "safe_stop: no_feasible_joint_sequence"
+                self.last_constraint_violation = violations
+                self.last_prediction_model = "linearized_jacobian"
+                return np.zeros(self.n, float)
+            expanded.sort(key=lambda item: item["cost"])
+            beam = expanded[:self.beam_width]
+        best = min(beam, key=lambda item: item["cost"])
+        controls = list(best["controls"])
+        out = np.asarray(controls[0], float)
+        self.solve_success_count += 1
+        self.last_solver_status = "predictive_joint_beam"
+        self.last_prediction_model = "linearized_jacobian"
+        self.last_dls_adp_used = 0
+        self.last_qp_used = 0
+        self.last_predicted_joint_states = [x.tolist() for x in best["joints"]]
+        self.last_predicted_controls = [x.tolist() for x in controls]
+        self.last_predicted_ee_states = [x.tolist() for x in best["ees"]]
+        self.last_objective_terms = dict(best["parts"])
+        self.last_objective_terms["phase"] = phase_name
+        self.last_objective_terms["phase_weights"] = weights
+        self.last_constraint_violation = violations
+        self.last_control_sequence_varies = bool(any(
+            not np.allclose(controls[0], item) for item in controls[1:]))
+        self._update_control_delta_stats(v_des, np.dot(J, out), warm, out)
+        self._update_adp_solution_stats(J, out, np.zeros(3), v_avoid)
+        return out
 
     def _apply_handover_target_guard(self, J, dq, dq_nominal, ee_pos, dt,
                                      handover_target, protect):
@@ -4307,6 +4526,8 @@ class WheelchairMPC:
         self.final_max_v = 0.30
         self.final_forward_gain = 0.75
         self.lam_heading = 2.5
+        self.lam_heading_stage = 1.5
+        self.min_heading_improvement = 0.08
         self.last_final_approach_used = 0
         self.last_terminal_adp_cost = 0.0
         self.last_total_cost = 0.0
@@ -4324,6 +4545,8 @@ class WheelchairMPC:
         self.last_objective_terms = {}
         self.last_constraint_violation = {}
         self.last_control_sequence_varies = False
+        self.last_sequence_progress = 0.0
+        self.last_heading_improvement = 0.0
         self.last_terminal_adp_cost = 0.0
         self.last_total_cost = 0.0
         self.last_social_cost = 0.0
@@ -4349,6 +4572,8 @@ class WheelchairMPC:
         self.last_objective_terms = {}
         self.last_constraint_violation = {}
         self.last_control_sequence_varies = False
+        self.last_sequence_progress = 0.0
+        self.last_heading_improvement = 0.0
 
         if ref.size == 0:
             self.last_solver_status = "safe_stop: empty_ref"
@@ -4473,6 +4698,7 @@ class WheelchairMPC:
         }
         empty_parts = {
             "tracking": 0.0,
+            "heading_tracking": 0.0,
             "social": 0.0,
             "tube": 0.0,
             "control": 0.0,
@@ -4553,6 +4779,9 @@ class WheelchairMPC:
                     r = ref[min(k, ref.shape[0] - 1)]
                     track = self.lam_track * float(
                         np.sum((x_next[:2] - r[:2]) ** 2))
+                    heading_target = ref[min(k + 1, ref.shape[0] - 1)]
+                    heading_tracking = self.lam_heading_stage * float(
+                        self._goal_heading_error(x_next, heading_target) ** 2)
                     social_weight = self.lam_social
                     if dist0 < self.near_goal_radius:
                         social_weight *= self.near_goal_social_scale
@@ -4571,12 +4800,13 @@ class WheelchairMPC:
                     control = self.lam_u * float(np.dot(u, u))
                     smooth = self.lam_du * float(np.sum((u - previous) ** 2))
                     parts["tracking"] += track
+                    parts["heading_tracking"] += heading_tracking
                     parts["social"] += social + step_soft_cost
                     parts["tube"] += tube
                     parts["control"] += control
                     parts["smooth"] += smooth
                     expanded.append({
-                        "cost": float(item["cost"] + track + social +
+                        "cost": float(item["cost"] + track + heading_tracking + social +
                                       step_soft_cost + tube + control + smooth),
                         "state": x_next,
                         "controls": item["controls"] + [u.copy()],
@@ -4605,6 +4835,9 @@ class WheelchairMPC:
                 terminal_adp = max(0.0, critic.predict(features))
             distN = float(np.linalg.norm(x[:2] - goal[:2]))
             progress = dist0 - distN
+            initial_heading_error = abs(self._goal_heading_error(x0, ref[0]))
+            final_heading_error = abs(self._goal_heading_error(x, ref[0]))
+            heading_improvement = initial_heading_error - final_heading_error
             ref_goal = ref[min(horizon - 1, ref.shape[0] - 1)]
             ref_progress = float(
                 np.linalg.norm(x0[:2] - ref_goal[:2]) -
@@ -4642,17 +4875,19 @@ class WheelchairMPC:
                 "reference_progress_reward": -ref_progress_reward,
                 "speed_reward": -speed_reward,
             })
-            records.append((total, progress, distN, item, terminal_adp, objective))
+            records.append((total, progress, heading_improvement, distN,
+                            item, terminal_adp, objective))
 
         valid = [
             item for item in records
-            if item[1] >= self.min_progress_per_solve or dist0 < 0.12]
+            if (item[1] >= self.min_progress_per_solve or dist0 < 0.12 or
+                item[2] >= self.min_heading_improvement)]
         if not valid:
             self.last_solver_status = "safe_stop: insufficient_progress"
             self.last_constraint_violation = violation_counts
             return 0.0, 0.0
         best = min(valid, key=lambda value: value[0])
-        best_cost, _progress, _distN, best_item, terminal_adp, objective = best
+        best_cost, progress, heading_improvement, _distN, best_item, terminal_adp, objective = best
         controls = list(best_item["controls"])
         states = list(best_item["states"])
         best_u = controls[0]
@@ -4671,6 +4906,8 @@ class WheelchairMPC:
         self.last_constraint_violation = violation_counts
         self.last_control_sequence_varies = bool(any(
             not np.allclose(controls[0], item) for item in controls[1:]))
+        self.last_sequence_progress = float(progress)
+        self.last_heading_improvement = float(heading_improvement)
         if self.last_final_approach_used and has_adp_terminal:
             self.last_solver_status = "predictive_beam_adp_terminal_final"
         elif self.last_final_approach_used:

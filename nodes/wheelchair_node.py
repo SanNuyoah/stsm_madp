@@ -229,6 +229,8 @@ class WheelchairNode:
         self.adp_features = ADPFeatureBuilder()
         self.last_adp_value = 0.0
         self.selected_corridor = None
+        self.execution_corridor = None
+        self.last_valid_topology_debug = {}
         self.runtime_replan_fallback_count = 0
         self.decision_trace_out = rospy.get_param("~decision_trace_out", "")
         self.mpc_reference_out = rospy.get_param("~mpc_reference_out", "")
@@ -1288,8 +1290,11 @@ class WheelchairNode:
         if selected is None:
             raise RuntimeError("topology candidate selection returned no corridor")
         self.selected_corridor = selected
+        self.execution_corridor = selected
         self._sync_selected_corridor_geometry(self.selected_corridor)
         self._sync_runtime_topology_debug(corrs, selected)
+        self.last_valid_topology_debug = dict(
+            getattr(self.manifold, "last_topology_debug", {}) or {})
         self._publish_topology_info(used_topology, fallback_used)
         execution_id = self._corridor_id(selected, "wheelchair_selected")
         self.selected_corridor_pub.publish(String(execution_id))
@@ -2799,6 +2804,13 @@ class WheelchairNode:
                 self.last_topology_replan_time = now
             return new_corridor, True
         except Exception as exc:
+            # A failed trial replan is diagnostic evidence, but it must not
+            # replace the selected corridor/debug state used by execution.
+            self.selected_corridor = corridor
+            self.execution_corridor = corridor
+            if self.last_valid_topology_debug:
+                self.manifold.last_topology_debug = dict(
+                    self.last_valid_topology_debug)
             if (self.experiment_mode == "paper" and not self.baseline and
                     not self.topology_fallback_enabled):
                 rospy.logerr(
@@ -3151,16 +3163,13 @@ class WheelchairNode:
     def _write_mpc_diagnostics(self):
         if self.baseline:
             return
-        corridor = self.selected_corridor
+        corridor = self.execution_corridor or self.selected_corridor
         final_trajectory, final_source = self._sync_selected_corridor_geometry(corridor)
         cid = str(getattr(corridor, "corridor_id", getattr(corridor, "label", "")))
         valid_stsm_cid = bool(cid)
-        valid_sources = set([
-            "refined", "refined_waypoints", "candidate_fallback",
-            "turn_recovered_refined", "refinement", "candidate", "fallback",
-            "runtime_replan_fallback"])
         if (not valid_stsm_cid or
-                any(str(row.get("reference_source", "")) not in valid_sources
+                any(not self._valid_reference_source(
+                        row.get("reference_source", ""))
                     for row in self.mpc_reference_records)):
             rospy.logerr(
                 "[wc][mpc] refusing formal rolling MPC diagnostics: "
@@ -3302,6 +3311,10 @@ class WheelchairNode:
                 "constraint_violation", {})),
             "runtime_control_sequence_varies": bool(runtime_last.get(
                 "control_sequence_varies", False)),
+            "runtime_sequence_progress": float(runtime_last.get(
+                "sequence_progress", 0.0)),
+            "runtime_heading_improvement": float(runtime_last.get(
+                "heading_improvement", 0.0)),
             "runtime_corridor_id": str(runtime_last.get("corridor_id", cid)),
             "runtime_mpc_records": list(self.mpc_runtime_records),
         })
@@ -4492,6 +4505,7 @@ class WheelchairNode:
                 rospy.logerr("[wc] stopping: no valid corridor before MPC")
                 break
             self.selected_corridor = corridor
+            self.execution_corridor = corridor
             self._apply_corridor_execution_profile(corridor)
             final_approach_active = self._apply_final_approach_profile(dist)
             ref = self._horizon_ref(corridor)
@@ -4550,6 +4564,9 @@ class WheelchairNode:
                     self.mpc.last_constraint_violation),
                 "control_sequence_varies": bool(
                     self.mpc.last_control_sequence_varies),
+                "sequence_progress": float(self.mpc.last_sequence_progress),
+                "heading_improvement": float(
+                    self.mpc.last_heading_improvement),
                 "first_control": [float(v), float(w)],
             }
             self.mpc_runtime_records.append(runtime_record)

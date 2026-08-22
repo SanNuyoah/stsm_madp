@@ -740,6 +740,7 @@ def write_consistency_report(run_root):
     diagnostics_consistent = bool(robots)
     metrics_consistent = bool(robots)
     topology_mpc_closed_loop = bool(robots)
+    execution_success_valid = bool(robots)
     for robot in robots:
         robot_root = os.path.join(run_root, robot)
         for variant in VARIANTS:
@@ -799,6 +800,11 @@ def write_consistency_report(run_root):
             metric_status = str(metric.get("mpc_feasibility_status", ""))
             if diag_status and metric_status and diag_status != metric_status:
                 metrics_consistent = False
+            execution_success_valid = execution_success_valid and truthy(
+                first_value(
+                    diag.get("overall_success"), diag.get("task_success"),
+                    metric.get("overall_success"), metric.get("task_success"),
+                    metric.get("success"), False))
     root_duplicates = []
     for robot in robots:
         for name in (
@@ -822,6 +828,7 @@ def write_consistency_report(run_root):
         "diagnostics_metrics_consistent": bool(diagnostics_metrics_consistent),
         "topology_constraint_consistent": bool(topology_constraint_consistent),
         "variant_isolated": bool(variant_isolated and no_root_duplicates),
+        "execution_success_valid": bool(execution_success_valid),
     }
     report["overall_pass"] = all(bool(report[key]) for key in (
         "topology_mpc_closed_loop",
@@ -830,6 +837,7 @@ def write_consistency_report(run_root):
         "result_structure_valid",
         "baseline_valid",
         "stsm_valid",
+        "execution_success_valid",
     ))
     write_json(os.path.join(run_root, "experiment_consistency_report.json"), report)
 

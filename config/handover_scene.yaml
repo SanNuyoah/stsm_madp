@@ -130,6 +130,12 @@ topology:
     topology: 0.35
 
 mpc:
+  optimizer: sampled_joint_space_sequence
+  dls_role: warm_start_only
+  horizon: 6
+  beam_width: 10
+  ddq_max: 1.2
+  joint_limit_source: moveit_robot_model
   manifold_threshold: 6.0
   clearance_threshold: 0.08
   risk_threshold: 6.0

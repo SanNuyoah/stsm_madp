@@ -532,9 +532,19 @@ class HandoverNode:
         self.mpc_phase_cost_weights = dict(mp.get("phase_cost_weights", {}) or {})
         self.stsm_speed_scale = float(mp.get("stsm_speed_scale", 0.60))
         speed_scale = 1.0 if self.baseline else self.stsm_speed_scale
-        self.mpc = ArmMPC(dq_max=mp.get("dq_max", 0.6),
-                          v_cap=mp.get("v_cap_far", 0.18) * speed_scale,
-                          adp_grad_clip=self.adp_grad_clip)
+        joint_lower, joint_upper, joint_limit_source = (
+            self._resolve_mpc_joint_limits(mp))
+        self.arm_joint_limit_source = joint_limit_source
+        self.mpc = ArmMPC(
+            dq_max=mp.get("dq_max", 0.6),
+            v_cap=mp.get("v_cap_far", 0.18) * speed_scale,
+            adp_grad_clip=self.adp_grad_clip,
+            horizon=mp.get("horizon", 6),
+            beam_width=mp.get("beam_width", 10),
+            ddq_max=mp.get("ddq_max", 1.2),
+            joint_lower=joint_lower,
+            joint_upper=joint_upper,
+            phase_cost_weights=self.mpc_phase_cost_weights)
         self.v_cap_far = mp.get("v_cap_far", 0.18) * speed_scale
         self.v_cap_near = mp.get("v_cap_near", 0.04) * speed_scale
         self.near_radius = mp.get("near_radius", 0.12)
@@ -786,6 +796,32 @@ class HandoverNode:
     def _jacobian(self, q):
         J = np.array(self.group.get_jacobian_matrix(list(q)))
         return J[:3, :]
+
+    def _resolve_mpc_joint_limits(self, config):
+        lower = config.get("joint_lower")
+        upper = config.get("joint_upper")
+        if (lower is None) != (upper is None):
+            raise ValueError(
+                "mpc joint_lower and joint_upper must be configured together")
+        if lower is not None:
+            return list(lower), list(upper), "explicit_config"
+        try:
+            names = list(self.group.get_active_joints())
+            bounds = [self.robot.get_joint(name).bounds() for name in names]
+            if len(bounds) != 6 or any(len(item) != 2 for item in bounds):
+                raise RuntimeError("expected six bounded active arm joints")
+            return ([float(item[0]) for item in bounds],
+                    [float(item[1]) for item in bounds],
+                    "moveit_robot_model")
+        except Exception as exc:
+            if self.experiment_mode == "paper" and not self.baseline:
+                raise RuntimeError(
+                    "cannot load real MoveIt joint limits for STSM MPC: {}".format(
+                        exc))
+            rospy.logwarn(
+                "[handover][mpc] joint limits unavailable outside paper STSM: %s",
+                exc)
+            return None, None, "unbounded_debug_fallback"
 
     def _send_joint(self, q, dt):
         msg = JointTrajectory()
@@ -2214,6 +2250,9 @@ class HandoverNode:
                     pull[:len(q_corr)] = q_corr - ee[:len(q_corr)]
                     v_des += self.corridor_violation_gain * pull
             v_cap = self._ee_v_cap(ee) * gate.scale * self._adp_scale(adp_value)
+            phase_name = (
+                "handover" if int(self.phase) == 3 else
+                "return" if int(self.phase) == 4 else "approach")
             dq = self.mpc.solve(J, v_des, dq_nom=np.zeros(6),
                                 v_cap=v_cap, ee_pos=ee, dt=dt,
                                 critic=(
@@ -2228,7 +2267,7 @@ class HandoverNode:
                                 },
                                 interest_risk=interest_eval or {},
                                 target_pos=target,
-                                phase=self.phase,
+                                phase=phase_name,
                                 lambda_adp_arm=(
                                     self.lambda_adp_arm
                                     if self.adp_enabled else 0.0),
@@ -2247,7 +2286,13 @@ class HandoverNode:
                                 handover_target=(
                                     self.handover if handover_protect else None),
                                 handover_tracking_weight=(
-                                    self.handover_tracking_weight))
+                                    self.handover_tracking_weight),
+                                q=q,
+                                corridor=(
+                                    corridor if not handover_protect else None),
+                                predictive=bool(not self.baseline),
+                                kinematics_source="real",
+                                phase_cost_weights=self.mpc_phase_cost_weights)
             self._record_mpc_handover_diagnostic(target, ee, J, dq, dt)
             self.adp_control_info_pub.publish(Float64MultiArray(data=[
                 float(self.mpc.last_adp_grad_norm),
@@ -2787,6 +2832,27 @@ class HandoverNode:
                 "executed_evidence_required": True,
             })
         result["selected_corridor_label"] = str(getattr(corr, "label", cid))
+        result.update({
+            "runtime_solver_status": str(self.mpc.last_solver_status),
+            "runtime_horizon": int(self.mpc.N),
+            "runtime_predicted_joint_states": list(
+                self.mpc.last_predicted_joint_states),
+            "runtime_predicted_controls": list(
+                self.mpc.last_predicted_controls),
+            "runtime_predicted_ee_states": list(
+                self.mpc.last_predicted_ee_states),
+            "runtime_objective_terms": dict(self.mpc.last_objective_terms),
+            "runtime_constraint_violation": dict(
+                self.mpc.last_constraint_violation),
+            "runtime_control_sequence_varies": bool(
+                self.mpc.last_control_sequence_varies),
+            "kinematics_source": str(self.mpc.last_kinematics_source),
+            "interest_point_kinematics_source": str(
+                self.mpc.last_interest_kinematics_source),
+            "joint_limit_source": str(self.arm_joint_limit_source),
+            "prediction_model": str(self.mpc.last_prediction_model),
+            "dls_role": "warm_start_only",
+        })
         if corr is not None:
             result.update({
                 "raw_candidate_corridor_violation_count": int(getattr(

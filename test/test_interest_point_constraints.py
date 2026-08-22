@@ -796,6 +796,103 @@ def test_arm_mpc_limits_step_when_predicted_interest_point_crosses_rho():
     assert mpc.last_solver_status.endswith("_ip_limited")
 
 
+def test_arm_stsm_mpc_optimizes_multistep_joint_sequence_from_dls_seed():
+    mpc = ArmMPC(
+        n_joints=3, dq_max=1.0, v_cap=1.0, horizon=4,
+        beam_width=16, ddq_max=0.5)
+    dq = mpc.solve(
+        np.eye(3), np.array([0.5, 0.0, 0.0]), q=np.zeros(3),
+        ee_pos=np.zeros(3), target_pos=np.array([0.4, 0.0, 0.0]),
+        dt=0.2, field=ZeroField(), predictive=True,
+        kinematics_source="real")
+
+    controls = np.asarray(mpc.last_predicted_controls, float)
+    joints = np.asarray(mpc.last_predicted_joint_states, float)
+    ees = np.asarray(mpc.last_predicted_ee_states, float)
+    assert mpc.last_solver_status == "predictive_joint_beam"
+    assert mpc.last_prediction_model == "linearized_jacobian"
+    assert mpc.last_kinematics_source == "real"
+    assert controls.shape == (4, 3)
+    assert joints.shape == (4, 3)
+    assert ees.shape == (4, 3)
+    assert np.allclose(dq, controls[0])
+    assert np.all(np.abs(np.diff(
+        np.vstack([np.zeros((1, 3)), controls]), axis=0)) <= 0.1 + 1e-9)
+    assert "phase_weights" in mpc.last_objective_terms
+
+
+def test_arm_stsm_mpc_enforces_joint_limits_at_every_predicted_step():
+    mpc = ArmMPC(
+        n_joints=3, dq_max=1.0, v_cap=1.0, horizon=4,
+        beam_width=12, ddq_max=2.0,
+        joint_lower=[-0.02, -1.0, -1.0],
+        joint_upper=[0.02, 1.0, 1.0])
+    mpc.solve(
+        np.eye(3), np.array([1.0, 0.0, 0.0]), q=np.zeros(3),
+        ee_pos=np.zeros(3), target_pos=np.array([1.0, 0.0, 0.0]),
+        dt=0.2, field=ZeroField(), predictive=True)
+
+    predicted = np.asarray(mpc.last_predicted_joint_states, float)
+    assert predicted.shape == (4, 3)
+    assert np.all(predicted[:, 0] <= 0.02 + 1e-9)
+    assert np.all(predicted[:, 0] >= -0.02 - 1e-9)
+    assert mpc.last_constraint_violation["joint_position"] > 0
+
+
+def test_arm_stsm_mpc_rejects_interest_risk_across_prediction_horizon():
+    mpc = ArmMPC(
+        n_joints=3, dq_max=1.0, v_cap=1.0, horizon=4,
+        beam_width=16, ddq_max=2.0)
+    mpc.solve(
+        np.eye(3), np.array([1.0, 0.0, 0.0]), q=np.zeros(3),
+        ee_pos=np.zeros(3), target_pos=np.array([1.0, 0.0, 0.0]),
+        dt=0.2, field=StepField(0.25), predictive=True,
+        interest_constraints={
+            "enabled": True,
+            "offsets": {"ee": [0.0, 0.0, 0.0]},
+            "labels": ["ee"],
+            "rho": 1.0,
+        })
+
+    predicted = np.asarray(mpc.last_predicted_ee_states, float)
+    assert np.all(predicted[:, 0] <= 0.25 + 1e-9)
+    assert mpc.last_constraint_violation["interest_point"] > 0
+
+
+def test_arm_stsm_mpc_hard_tube_violation_fails_closed_without_dls_fallback():
+    mpc = ArmMPC(n_joints=3, horizon=3, beam_width=8)
+    corridor = Corridor(np.array([
+        [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]]), radius=0.01,
+        label="disconnected")
+    dq = mpc.solve(
+        np.eye(3), np.array([0.2, 0.0, 0.0]), q=np.zeros(3),
+        ee_pos=np.zeros(3), target_pos=np.array([0.5, 0.0, 0.0]),
+        dt=0.1, field=ZeroField(), corridor=corridor, predictive=True)
+
+    assert np.allclose(dq, np.zeros(3))
+    assert mpc.last_solver_status == "safe_stop: no_feasible_joint_sequence"
+    assert mpc.last_constraint_violation["trajectory_tube"] > 0
+
+
+def test_arm_stsm_mpc_uses_phase_weight_configuration():
+    mpc = ArmMPC(
+        n_joints=3, horizon=3,
+        phase_cost_weights={
+            "handover": {"tracking_multiplier": 3.0,
+                         "risk_multiplier": 0.7,
+                         "smooth_multiplier": 2.0,
+                         "task_multiplier": 4.0}})
+    mpc.solve(
+        np.eye(3), np.array([0.2, 0.0, 0.0]), q=np.zeros(3),
+        ee_pos=np.zeros(3), target_pos=np.array([0.2, 0.0, 0.0]),
+        dt=0.1, field=ZeroField(), phase="handover", predictive=True)
+
+    terms = mpc.last_objective_terms
+    assert terms["phase"] == "handover"
+    assert terms["phase_weights"] == {
+        "tracking": 3.0, "risk": 0.7, "smooth": 2.0, "task": 4.0}
+
+
 def test_shortcut_trajectory_reduces_safe_redundant_handover_path():
     path = np.array([
         [0.0, 0.0, 0.0],
@@ -947,6 +1044,24 @@ def test_wheelchair_stsm_mpc_optimizes_time_varying_control_sequence():
     assert np.all(delta[:, 1] <= mpc.alpha_max * mpc.dt + 1e-9)
     assert "tracking" in mpc.last_objective_terms
     assert "terminal_goal" in mpc.last_objective_terms
+
+
+def test_wheelchair_stsm_mpc_accepts_rotate_then_progress_alignment_sequence():
+    mpc = WheelchairMPC(
+        horizon=8, dt=0.2, v_max=0.75, w_max=1.0,
+        a_max=0.5, alpha_max=1.5, beam_width=24)
+    mpc.min_progress_per_solve = 0.01
+    mpc.min_heading_improvement = 0.05
+    ref = np.array([[0.1, 0.0], [0.2, 0.0], [0.3, 0.0], [0.5, 0.0]])
+
+    v, w = mpc.solve(
+        np.array([0.0, 0.0, np.pi]), ref, ZeroField(),
+        u_prev=np.zeros(2), goal=ref[-1], predictive=True)
+
+    assert mpc.last_solver_status.startswith("predictive_beam")
+    assert abs(w) > 0.0
+    assert mpc.last_heading_improvement >= mpc.min_heading_improvement
+    assert v >= 0.0
 
 
 def test_wheelchair_stsm_mpc_hard_tube_infeasible_is_safe_stop():

@@ -1299,6 +1299,10 @@ class MetricsNode:
                 "refinement_tube_valid",
                 "reference_source",
                 "reference_path_count",
+                "selected_corridor_id", "selected_corridor_label",
+                "module_chain_valid", "risk_field_used", "manifold_used",
+                "morse_used", "topology_graph_used",
+                "candidate_corridor_used", "candidate_ranking_used",
             ]
             for key in diag_fields:
                 if key in mpc_diag:
@@ -1358,21 +1362,30 @@ class MetricsNode:
                 (refinement_success_flag and refinement_tube_valid_flag and reference_is_refined) or
                 reference_is_candidate_fallback))
         selected_label = str(base.get("selected_corridor_label", "") or "")
+        selected_id = str(
+            base.get("selected_corridor_id", base.get("corridor_id", "")) or "")
         formal_selected = bool(
-            selected_label and selected_label != "planning_failed" and
+            (selected_id or selected_label) and
+            selected_id != "planning_failed" and selected_label != "planning_failed" and
             str(base.get("selected_corridor_type", "")) != "fallback")
         if (self.target == "arm" and reference_is_refined and
                 reference_path_count > 0.0 and formal_selected):
             refinement_trace_valid = 1
-        module_chain_valid = int(
+        explicit_chain = mpc_diag.get("module_chain_valid") if mpc_diag else None
+        constraint_chain = bool(
+            float(base.get("topology_constraint_used") or 0.0) > 0.5 and
+            float(base.get("corridor_constraint_used") or 0.0) > 0.5 and
+            float(base.get("manifold_constraint_used") or 0.0) > 0.5)
+        inferred_chain = bool(
             str(base.get("variant", base.get("mode", ""))).lower() == "stsm" and
             formal_selected and
             float(base.get("topology_used") or 0.0) > 0.5 and
             float(base.get("topology_fallback_used") or 0.0) < 0.5 and
             float(base.get("num_topology_nodes") or 0.0) > 0.0 and
             float(base.get("num_candidate_corridors") or 0.0) > 0.0 and
-            float(base.get("num_used_saddles") or 0.0) > 0.0 and
-            refinement_trace_valid)
+            refinement_trace_valid and constraint_chain)
+        module_chain_valid = int(
+            bool(explicit_chain) if explicit_chain is not None else inferred_chain)
         selected_rank = 1 if (
             str(base.get("variant", base.get("mode", ""))).lower() == "stsm"
             and formal_selected) else 0
@@ -1450,14 +1463,20 @@ class MetricsNode:
         adp_affects_control = int(
             adp_role in ("control_modifier", "ranking_and_control_modifier"))
         base.update({
-            "risk_field_used": int(module_chain_valid),
-            "manifold_used": int(module_chain_valid),
-            "morse_used": int(module_chain_valid),
-            "topology_graph_used": int(module_chain_valid),
-            "candidate_corridor_used": int(module_chain_valid),
-            "candidate_ranking_used": int(module_chain_valid),
+            "risk_field_used": int(float(base.get(
+                "risk_field_used", module_chain_valid) or 0.0) > 0.5),
+            "manifold_used": int(float(base.get(
+                "manifold_used", module_chain_valid) or 0.0) > 0.5),
+            "morse_used": int(float(base.get(
+                "morse_used", module_chain_valid) or 0.0) > 0.5),
+            "topology_graph_used": int(float(base.get(
+                "topology_graph_used", module_chain_valid) or 0.0) > 0.5),
+            "candidate_corridor_used": int(float(base.get(
+                "candidate_corridor_used", module_chain_valid) or 0.0) > 0.5),
+            "candidate_ranking_used": int(float(base.get(
+                "candidate_ranking_used", module_chain_valid) or 0.0) > 0.5),
             "fallback_used": int(float(base.get("topology_fallback_used") or 0.0)),
-            "selected_corridor_id": base.get("selected_corridor_label", ""),
+            "selected_corridor_id": selected_id,
             "selected_rank": selected_rank,
             "selected_total_score": base.get("corridor_total_cost", ""),
             "total_score": base.get("corridor_total_cost", ""),

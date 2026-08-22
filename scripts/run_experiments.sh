@@ -1481,6 +1481,7 @@ stsm_valid = bool(robots)
 diagnostics_consistent = bool(robots)
 metrics_consistent = bool(robots)
 topology_mpc_closed_loop = bool(robots)
+execution_success_valid = bool(robots)
 for robot in robots:
     robot_root = os.path.join(run_root, robot)
     baseline_traj = load_last_csv(os.path.join(robot_root, "baseline", "traj.csv"))
@@ -1553,10 +1554,15 @@ for robot in robots:
             else metric_json.get("success", "")).strip().lower()
         if success_value in ("1", "true", "yes") and diag_status not in allowed:
             metrics_consistent = False
+        outcome = first_value(
+            diag.get("overall_success"), diag.get("task_success"),
+            metric_json.get("overall_success"), metric_json.get("task_success"),
+            metric.get("overall_success"), metric.get("task_success"),
+            metric.get("success"), False)
+        execution_success_valid = execution_success_valid and truthy(outcome)
 
 result_structure_valid = bool(
-    variant_isolated and no_root_duplicates and figures_clean and
-    not os.path.isdir(os.path.join(os.path.dirname(run_root), "summary")))
+    variant_isolated and no_root_duplicates and figures_clean)
 diagnostics_metrics_consistent = bool(
     diagnostics_consistent and metrics_consistent)
 topology_constraint_consistent = bool(
@@ -1571,6 +1577,7 @@ report = {
     "diagnostics_metrics_consistent": bool(diagnostics_metrics_consistent),
     "topology_constraint_consistent": bool(topology_constraint_consistent),
     "variant_isolated": bool(variant_isolated and no_root_duplicates),
+    "execution_success_valid": bool(execution_success_valid),
 }
 report["overall_pass"] = all(bool(report[key]) for key in (
     "topology_mpc_closed_loop",
@@ -1579,6 +1586,7 @@ report["overall_pass"] = all(bool(report[key]) for key in (
     "result_structure_valid",
     "baseline_valid",
     "stsm_valid",
+    "execution_success_valid",
 ))
 out = os.path.join(run_root, "experiment_consistency_report.json")
 with open(out, "w") as f:
@@ -1611,9 +1619,6 @@ if [ "${plot}" = "true" ]; then
     echo "WARNING: final result plotting exited with code ${plot_exit}; results are still finalized." >&2
   fi
 fi
-
-rm -rf "${results_dir}/runs" "${results_dir}/paper_figures" \
-  "${results_dir}/archive" "${results_dir}/final" "${results_dir}/latest_run"
 
 find "${pkg_dir}" -type f -name '*.pyc' -delete
 find "${pkg_dir}" -type d -name '__pycache__' -empty -delete
