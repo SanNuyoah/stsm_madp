@@ -18,6 +18,7 @@ from visualization.generate_results_figures import as_float
 from stsm_madp.manifold_constraint import (
     ManifoldConstraint,
     assert_manifold_mode_consistency,
+    distance_to_manifold_boundary,
 )
 from stsm_madp.manifold_constraint_evaluator import ManifoldConstraintEvaluator
 from stsm_madp.mpc import ArmMPC, WheelchairMPC, run_mpc_tracking
@@ -44,6 +45,30 @@ class ZeroField(object):
 
     def grad_phi_s(self, point):
         return np.zeros_like(np.asarray(point, float))
+
+
+def test_manifold_boundary_distance_handles_segments_and_degenerate_points():
+    boundary = [
+        [0.0, 0.0, 0.0],
+        [2.0, 0.0, 0.0],
+        [2.0, 0.0, 0.0],
+        [2.0, 2.0, 0.0],
+    ]
+
+    assert np.isclose(
+        distance_to_manifold_boundary([1.0, 0.5, 0.0], boundary), 0.5)
+    assert np.isclose(
+        distance_to_manifold_boundary([2.5, 1.0, 0.0], boundary), 0.5)
+
+
+def test_manifold_boundary_distance_preserves_named_boundary_minimum():
+    boundary = {
+        "left": [[0.0, 0.0], [0.0, 2.0]],
+        "right": [[3.0, 0.0], [3.0, 2.0]],
+    }
+
+    assert np.isclose(
+        distance_to_manifold_boundary([2.75, 1.0], boundary), 0.25)
 
 
 def test_topology_uses_runtime_manifold_mode_instead_of_hard_default():

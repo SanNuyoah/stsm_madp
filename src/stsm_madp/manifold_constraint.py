@@ -243,15 +243,20 @@ def distance_to_manifold_boundary(point, boundary):
     wps = pts[:, :dim]
     if len(wps) == 1:
         return float(np.linalg.norm(p - wps[0]))
-    best = float("inf")
-    for a, b in zip(wps[:-1], wps[1:]):
-        ab = b - a
-        denom = float(np.dot(ab, ab))
-        t = 0.0 if denom <= 1e-12 else np.clip(
-            float(np.dot(p - a, ab)) / denom, 0.0, 1.0)
-        q = a + t * ab
-        best = min(best, float(np.linalg.norm(p - q)))
-    return best
+    starts = wps[:-1]
+    segments = wps[1:] - starts
+    denom = np.einsum("ij,ij->i", segments, segments)
+    projection = np.zeros(len(segments), float)
+    nondegenerate = denom > 1e-12
+    if np.any(nondegenerate):
+        offsets = p - starts[nondegenerate]
+        projection[nondegenerate] = (
+            np.einsum(
+                "ij,ij->i", offsets, segments[nondegenerate]) /
+            denom[nondegenerate])
+    projection = np.clip(projection, 0.0, 1.0)
+    closest = starts + projection[:, None] * segments
+    return float(np.min(np.linalg.norm(closest - p, axis=1)))
 
 
 def manifold_risk_value(point, risk_field=None):
