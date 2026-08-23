@@ -8,7 +8,7 @@
     <arg name="paused" value="$(arg paused)"/>
   </include>
 
-  <node pkg="stsm_madp" type="social_field_viz_node.py"
+  <node if="$(arg rviz)" pkg="stsm_madp" type="social_field_viz_node.py"
         name="stsm_social_field_viz" output="screen">
     <param name="target" value="wheelchair"/>
   </node>

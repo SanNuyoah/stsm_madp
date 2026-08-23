@@ -1,6 +1,7 @@
 import os
 import sys
 from types import SimpleNamespace
+from xml.etree import ElementTree
 
 import numpy as np
 
@@ -69,6 +70,18 @@ def test_manifold_boundary_distance_preserves_named_boundary_minimum():
 
     assert np.isclose(
         distance_to_manifold_boundary([2.75, 1.0], boundary), 0.25)
+
+
+def test_headless_experiments_do_not_run_social_field_visualizer():
+    for launch_name in ("arm_view.launch", "wheelchair_view.launch"):
+        root = ElementTree.parse(
+            os.path.join(ROOT, "launch", launch_name)).getroot()
+        visualizers = [
+            node for node in root.findall("node")
+            if node.get("type") == "social_field_viz_node.py"
+        ]
+        assert len(visualizers) == 1
+        assert visualizers[0].get("if") == "$(arg rviz)"
 
 
 def test_topology_uses_runtime_manifold_mode_instead_of_hard_default():
