@@ -135,6 +135,12 @@ mpc:
   horizon: 6
   beam_width: 10
   ddq_max: 1.2
+  # Receding-horizon liveness: a feasible STSM sequence must reduce the
+  # terminal task error, and measured execution must keep making progress.
+  min_terminal_progress_ratio: 0.01
+  task_progress_tolerance: 0.001
+  no_progress_cycles: 25
+  progress_epsilon: 0.0001
   joint_limit_source: moveit_robot_model
   manifold_threshold: 6.0
   clearance_threshold: 0.08

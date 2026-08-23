@@ -85,6 +85,8 @@
   <arg name="topology_morse_grad_eps" default="0.6"/>
   <arg name="topology_k_paths" default="3"/>
   <arg name="topology_candidate_pool_min" default="3"/>
+  <arg name="topology_route_max_paths" default="128"/>
+  <arg name="topology_route_max_routes" default="64"/>
   <arg name="topology_max_graph_nodes" default="32"/>
   <arg name="topology_allow_semantic_with_morse" default="false"/>
   <arg name="topology_allow_semantic_topology_recovery" default="false"/>
@@ -104,7 +106,7 @@
   <arg name="topology_replan_on_no_progress" default="true"/>
   <arg name="topology_refinement_enabled" default="true"/>
   <arg name="topology_refinement_samples_per_segment" default="14"/>
-  <arg name="topology_refinement_max_candidates" default="2"/>
+  <arg name="topology_refinement_max_candidates" default="3"/>
   <arg name="decision_trace_out" default=""/>
   <arg name="mpc_reference_out" default=""/>
   <arg name="mpc_diagnostics_out" default=""/>
@@ -201,6 +203,8 @@
     <param name="topology/morse_grad_eps" value="$(arg topology_morse_grad_eps)"/>
     <param name="topology/k_paths" value="$(arg topology_k_paths)"/>
     <param name="topology/candidate_pool_min" value="$(arg topology_candidate_pool_min)"/>
+    <param name="topology/route_max_paths" value="$(arg topology_route_max_paths)"/>
+    <param name="topology/route_max_routes" value="$(arg topology_route_max_routes)"/>
     <param name="topology/max_graph_nodes" value="$(arg topology_max_graph_nodes)"/>
   <param name="topology/allow_semantic_with_morse" value="$(arg topology_allow_semantic_with_morse)"/>
   <param name="topology/allow_semantic_topology_recovery" value="$(arg topology_allow_semantic_topology_recovery)"/>

@@ -3944,7 +3944,9 @@ class ArmMPC:
     def __init__(self, n_joints=6, dq_max=0.8, v_cap=0.25, damping=0.05,
                  lam_nominal=0.3, adp_grad_clip=8.0, horizon=6,
                  beam_width=10, ddq_max=1.2, joint_lower=None,
-                 joint_upper=None, phase_cost_weights=None):
+                 joint_upper=None, phase_cost_weights=None,
+                 min_terminal_progress_ratio=0.01,
+                 task_progress_tolerance=1e-3):
         self.n = n_joints
         self.dq_max = dq_max
         self.v_cap = v_cap
@@ -3957,6 +3959,10 @@ class ArmMPC:
         self.joint_lower = self._joint_bound(joint_lower, -np.inf)
         self.joint_upper = self._joint_bound(joint_upper, np.inf)
         self.phase_cost_weights = dict(phase_cost_weights or {})
+        self.min_terminal_progress_ratio = max(
+            0.0, float(min_terminal_progress_ratio))
+        self.task_progress_tolerance = max(
+            0.0, float(task_progress_tolerance))
         self.solve_count = 0
         self.solve_success_count = 0
         self.fallback_count = 0
@@ -4206,6 +4212,11 @@ class ArmMPC:
         initial_target_error = float(np.linalg.norm(ee0[:3] - target[:3]))
         max_task_regression = max(0.0, float(cfg.get(
             "max_task_regression", 1e-6)))
+        progress_scale = min(
+            max(0.0, initial_target_error - self.task_progress_tolerance),
+            max(0.0, float(cap)) * float(self.N) * float(dt))
+        required_terminal_progress = float(
+            self.min_terminal_progress_ratio * progress_scale)
         empty = {"tracking": 0.0, "task": 0.0, "risk": 0.0,
                  "tube": 0.0, "control": 0.0, "smooth": 0.0}
         beam = [{"cost": 0.0, "q": q0.copy(), "ee": ee0.copy(),
@@ -4216,6 +4227,16 @@ class ArmMPC:
             for item in beam:
                 previous = np.asarray(item["dq"], float)
                 for cand in self._arm_step_controls(previous, warm, dt):
+                    # Project sampled velocity onto the one-step position
+                    # interval.  This retains a boundary-reaching control
+                    # instead of leaving only an oversized sample or hold.
+                    position_velocity_lower = (
+                        self.joint_lower - np.asarray(item["q"], float)) / dt
+                    position_velocity_upper = (
+                        self.joint_upper - np.asarray(item["q"], float)) / dt
+                    cand = np.minimum(
+                        np.maximum(cand, position_velocity_lower),
+                        position_velocity_upper)
                     if np.any(np.abs(cand) > self.dq_max + 1e-9):
                         violations["joint_velocity"] += 1
                         continue
@@ -4266,11 +4287,20 @@ class ArmMPC:
                         np.sum((ee_next - reference) ** 2))
                     task_cost = weights["task"] * float(
                         np.sum((ee_next - target) ** 2)) / float(self.N)
-                    if (k == self.N - 1 and initial_target_error > 1e-6 and
-                            float(np.linalg.norm(ee_next[:3] - target[:3])) >
-                            initial_target_error + max_task_regression):
-                        violations["task_progress"] += 1
-                        continue
+                    if k == self.N - 1 and initial_target_error > 1e-6:
+                        terminal_error = float(np.linalg.norm(
+                            ee_next[:3] - target[:3]))
+                        if required_terminal_progress > 0.0:
+                            if terminal_error > (
+                                    initial_target_error -
+                                    required_terminal_progress + 1e-9):
+                                violations["task_progress"] += 1
+                                continue
+                        elif terminal_error > (
+                                initial_target_error +
+                                max_task_regression):
+                            violations["task_progress"] += 1
+                            continue
                     control = self.damping * float(np.dot(cand, cand))
                     smooth = weights["smooth"] * self.lam_nominal * float(
                         np.sum((cand - previous) ** 2))
@@ -4316,6 +4346,10 @@ class ArmMPC:
             np.linalg.norm(np.asarray(best["ee"], float)[:3] - target[:3]))
         self.last_objective_terms["maximum_task_regression"] = float(
             max_task_regression)
+        self.last_objective_terms["required_terminal_progress"] = float(
+            required_terminal_progress)
+        self.last_objective_terms["task_progress_tolerance"] = float(
+            self.task_progress_tolerance)
         self.last_objective_terms["phase"] = phase_name
         self.last_objective_terms["phase_weights"] = weights
         self.last_constraint_violation = violations
@@ -4898,11 +4932,12 @@ class WheelchairMPC:
             max(0.02, self.final_creep_v), self.a_max * self.dt)
         valid = [
             item for item in records
-            if (item[1] >= self.min_progress_per_solve or dist0 < 0.12 or
-                (item[2] >= self.min_heading_improvement and
-                 item[4] >= min_alignment_translation and
-                 float(item[5]["controls"][0][0]) >=
-                 min_alignment_first_v))]
+            if (dist0 < 0.12 or
+                (float(item[5]["controls"][0][0]) >=
+                 min_alignment_first_v and
+                 (item[1] >= self.min_progress_per_solve or
+                  (item[2] >= self.min_heading_improvement and
+                   item[4] >= min_alignment_translation))))]
         if not valid:
             self.last_solver_status = "safe_stop: insufficient_progress"
             self.last_constraint_violation = violation_counts

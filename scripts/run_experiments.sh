@@ -1168,8 +1168,10 @@ run_one() {
   rosparam set /stsm/run_id "'${run_id}'"
   if [ "${target}" = "arm" ]; then
     interest_required="${arm_interest_enabled}"
+    metrics_goal_tolerance="${wc_goal_tolerance}"
   else
     interest_required="${wc_interest_enabled}"
+    metrics_goal_tolerance="${wc_completion_tolerance}"
   fi
 
   rosrun stsm_madp metrics_node.py \
@@ -1178,7 +1180,7 @@ run_one() {
 		    _out:="${tmp_metrics_csv}" \
 		    _traj_out:="${tmp_traj_csv}" \
 		    _mpc_diagnostics:="${mpc_diagnostics_json}" \
-		    _success_goal_tolerance:="${wc_goal_tolerance}" \
+		    _success_goal_tolerance:="${metrics_goal_tolerance}" \
 		    _interest_required:="${interest_required}" \
     __name:="stsm_metrics_${target}_${mode}" &
   metrics_pid="$!"
@@ -1437,6 +1439,12 @@ def load_last_csv(path):
 
 def truthy(value):
     return str(value).strip().lower() in ("1", "true", "yes")
+
+def first_value(*values):
+    for value in values:
+        if value not in ("", None):
+            return value
+    return ""
 
 robots = [
     robot for robot in ("arm", "wheelchair")

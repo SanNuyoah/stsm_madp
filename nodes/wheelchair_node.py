@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import csv
+import copy
 import heapq
 import json
 import os
@@ -8,7 +9,7 @@ sys.dont_write_bytecode = True
 import time
 import numpy as np
 import rospy
-from std_msgs.msg import Float64, Float64MultiArray, String
+from std_msgs.msg import Bool, Float64, Float64MultiArray, String
 from geometry_msgs.msg import Twist, PointStamped
 from nav_msgs.msg import Odometry
 from gazebo_msgs.msg import ModelState, ModelStates
@@ -338,6 +339,10 @@ class WheelchairNode:
             "~topology/corridor_dedupe_distance", 0.05))
         self.topology_candidate_pool_min = int(rospy.get_param(
             "~topology/candidate_pool_min", 3))
+        self.topology_route_max_paths = max(1, int(rospy.get_param(
+            "~topology/route_max_paths", 128)))
+        self.topology_route_max_routes = max(1, int(rospy.get_param(
+            "~topology/route_max_routes", 64)))
         self.topology_require_risk_improvement = bool(rospy.get_param(
             "~topology/require_risk_improvement", True))
         self.topology_candidate_max_risk = _topology_param(rospy.get_param(
@@ -396,7 +401,8 @@ class WheelchairNode:
         self.topology_refinement_samples = int(rospy.get_param(
             "~topology/refinement_samples_per_segment", 14))
         self.topology_refinement_max_candidates = int(rospy.get_param(
-            "~topology/refinement_max_candidates", 2))
+            "~topology/refinement_max_candidates",
+            self.topology_candidate_pool_min))
         self.last_refined_footprint_max = 0.0
         self.last_refined_footprint_mean = 0.0
         self.interest_enabled = rospy.get_param("~interest_points/enabled", True)
@@ -429,6 +435,8 @@ class WheelchairNode:
         self.wc_pose2d_pub = rospy.Publisher(
             "/stsm/wc_pose2d", Float64MultiArray, queue_size=10)
         self.mode_pub = rospy.Publisher("/stsm/wc_mode", String, queue_size=1, latch=True)
+        self.task_complete_pub = rospy.Publisher(
+            "/stsm/wc_task_complete", Bool, queue_size=1, latch=True)
         self.adp_value_pub = rospy.Publisher(
             "/stsm/wc_adp_value", Float64, queue_size=10)
         self.adp_feature_pub = rospy.Publisher(
@@ -1218,6 +1226,8 @@ class WheelchairNode:
                         "min_segment_length": self.topology_min_segment_length,
                         "corridor_dedupe_distance": self.topology_corridor_dedupe_distance,
                         "candidate_pool_min": self.topology_candidate_pool_min,
+                        "route_max_paths": self.topology_route_max_paths,
+                        "route_max_routes": self.topology_route_max_routes,
                         "require_risk_improvement": self.topology_require_risk_improvement,
                         "candidate_max_risk": self.topology_candidate_max_risk,
                         "corridor_score_weights": self.topology_corridor_score_weights,
@@ -1299,7 +1309,7 @@ class WheelchairNode:
         self.execution_corridor = selected
         self._sync_selected_corridor_geometry(self.selected_corridor)
         self._sync_runtime_topology_debug(corrs, selected)
-        self.last_valid_topology_debug = dict(
+        self.last_valid_topology_debug = copy.deepcopy(
             getattr(self.manifold, "last_topology_debug", {}) or {})
         self._publish_topology_info(used_topology, fallback_used)
         execution_id = self._corridor_id(selected, "wheelchair_selected")
@@ -1507,29 +1517,6 @@ class WheelchairNode:
         max_refine = max(1, int(self.topology_refinement_max_candidates))
         for index, corr in enumerate(list(corrs or [])):
             cid = str(getattr(corr, "corridor_id", getattr(corr, "label", "")))
-            if prepared and not self.baseline:
-                corr.refinement_skipped = True
-                corr.refinement_skip_reason = "executable_candidate_available"
-                refinement_attempts.append({
-                    "robot_type": "wheelchair",
-                    "stage": "refine_topology_path",
-                    "corridor_id": cid,
-                    "candidate_id": cid,
-                    "label": str(getattr(corr, "label", cid)),
-                    "accepted": False,
-                    "reject_reason": "executable_candidate_available",
-                    "failure_reason": "executable_candidate_available",
-                    "reference_source": "unrefined_candidate_for_ranking_only",
-                    "reference_path_count": int(len(np.asarray(
-                        getattr(corr, "waypoints",
-                                getattr(corr, "centerline", [])), float))),
-                    "refinement_candidate_index": int(index),
-                    "refinement_max_candidates": int(max_refine),
-                })
-                rospy.loginfo(
-                    "[wc][refine] skip %s reason=executable_candidate_available",
-                    cid)
-                continue
             if index >= max_refine:
                 corr.refinement_skipped = True
                 corr.refinement_skip_reason = "refinement_max_candidates"
@@ -2829,11 +2816,14 @@ class WheelchairNode:
             # replace the selected corridor/debug state used by execution.
             self.selected_corridor = corridor
             self.execution_corridor = corridor
+            self._sync_selected_corridor_geometry(corridor)
             if self.last_valid_topology_debug:
-                self.manifold.last_topology_debug = dict(
+                self.manifold.last_topology_debug = copy.deepcopy(
                     self.last_valid_topology_debug)
                 self._publish_topology_info(
                     self._corridor_is_topological(corridor), False)
+            self.selected_corridor_pub.publish(String(
+                self._corridor_id(corridor, "wheelchair_selected")))
             if (self.experiment_mode == "paper" and not self.baseline and
                     not self.topology_fallback_enabled):
                 rospy.logerr(
@@ -4336,6 +4326,7 @@ class WheelchairNode:
 
     def run(self):
         self.mode_pub.publish(String("baseline" if self.baseline else "stsm"))
+        self.task_complete_pub.publish(Bool(False))
         self.cmd_pub.publish(Twist())
         self._reset_model_pose()
         self.state = None
@@ -4469,6 +4460,7 @@ class WheelchairNode:
                     near_goal_since = now
                 elif (now - near_goal_since).to_sec() >= self.completion_hold_s:
                     self.task_completed = True
+                    self.task_complete_pub.publish(Bool(True))
                     rospy.loginfo(
                         "[wc] completion tolerance reached, dist=%.3f "
                         "(goal_tolerance=%.3f, completion_tolerance=%.3f)",
@@ -4678,6 +4670,7 @@ class WheelchairNode:
                 "[wc] pos=(%.2f, %.2f, %.2f) dist=%.3f cmd=(v=%.3f, w=%.3f)",
                 self.state[0], self.state[1], self.state[2], dist, v, w)
             rate.sleep()
+        self.task_complete_pub.publish(Bool(bool(self.task_completed)))
         self.cmd_pub.publish(Twist())
         self._write_runtime_evidence()
         rospy.loginfo("[wc] done (stop=%s, reason=%s)",

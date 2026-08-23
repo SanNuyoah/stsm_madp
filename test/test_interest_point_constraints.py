@@ -836,7 +836,8 @@ def test_arm_stsm_mpc_enforces_joint_limits_at_every_predicted_step():
     assert predicted.shape == (4, 3)
     assert np.all(predicted[:, 0] <= 0.02 + 1e-9)
     assert np.all(predicted[:, 0] >= -0.02 - 1e-9)
-    assert mpc.last_constraint_violation["joint_position"] > 0
+    assert np.isclose(np.max(predicted[:, 0]), 0.02)
+    assert mpc.last_constraint_violation["joint_position"] == 0
 
 
 def test_arm_stsm_mpc_rejects_interest_risk_across_prediction_horizon():
@@ -989,8 +990,12 @@ def test_wheelchair_predictive_solver_speed_reward_improves_forward_motion():
         x0, ref, ZeroField(), None, np.zeros(2),
         None, None, 0.0, ref[-1], {}, {})
 
-    assert v_slow == 0.0
-    assert v_fast > v_slow
+    # A receding-horizon command must make progress in its first applied
+    # control even when the optional speed reward is disabled.
+    assert v_slow > 0.0
+    assert v_fast >= v_slow
+    assert sum(row[0] for row in fast.last_predicted_controls) > sum(
+        row[0] for row in slow.last_predicted_controls)
 
     fast.final_heading_threshold = 0.5
     rotate = fast._goal_seek_u(

@@ -6,7 +6,7 @@ import sys
 sys.dont_write_bytecode = True
 import numpy as np
 import rospy
-from std_msgs.msg import Float64, Float64MultiArray, Int32, String
+from std_msgs.msg import Bool, Float64, Float64MultiArray, Int32, String
 from geometry_msgs.msg import PointStamped
 
 class MetricsNode:
@@ -112,6 +112,8 @@ class MetricsNode:
                              self._selected_corridor_cb)
             rospy.Subscriber("/stsm/wc_topology_info", Float64MultiArray,
                              self._topology_info_cb)
+            rospy.Subscriber("/stsm/wc_task_complete", Bool,
+                             self._wc_task_complete_cb)
         rospy.Subscriber("/stsm/adp_status", String, self._adp_status_cb)
         rospy.Subscriber("/stsm/arm_adp_path_info", Float64MultiArray,
                          self._arm_adp_path_info_cb)
@@ -149,6 +151,7 @@ class MetricsNode:
         self.valid_risk_duration_s = 0.0
         self.transfer_time = 0.0
         self.reached = False
+        self.wc_task_completed = False
         self.last_pos = None
         self.path_length_m = 0.0
         self.phase = ""
@@ -1049,6 +1052,9 @@ class MetricsNode:
         if np.linalg.norm(p - self.goal) < self.success_goal_tolerance:
             self.reached = True
 
+    def _wc_task_complete_cb(self, msg):
+        self.wc_task_completed = bool(msg.data)
+
     def _finish(self):
         if self.stop_triggered and not self.stop_row_written:
             self._append_stop_traj_row()
@@ -1076,7 +1082,9 @@ class MetricsNode:
             reached_0p25 = int(final_dist < 0.25)
             reached_0p08 = int(final_dist < 0.08)
             final_distance_ok = bool(final_dist < self.success_goal_tolerance)
-            self.reached = bool(goal_reached_observed and final_distance_ok)
+            self.reached = bool(
+                self.wc_task_completed or
+                (goal_reached_observed and final_distance_ok))
         success_goal = int(arm_task_complete if self.target == "arm" else self.reached)
         success_safe = int(self.reached and not self.stop_triggered)
         if self.target == "arm":
@@ -1174,6 +1182,8 @@ class MetricsNode:
             "high_risk_ratio": round(risk_exceed_pct / 100.0, 4),
             "high_risk_duration": round(self.risk_exceed_s, 3),
             "success_goal": success_goal,
+            "wc_task_completed": (
+                int(self.wc_task_completed) if self.target != "arm" else ""),
             "success_safe": success_safe,
             "success": success_safe,
             "goal_reached": (

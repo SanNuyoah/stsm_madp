@@ -52,6 +52,16 @@ def test_topology_uses_runtime_manifold_mode_instead_of_hard_default():
     assert planner.manifold_constraint_mode == "soft"
 
 
+def test_topology_route_search_budget_is_configurable_and_bounded():
+    planner = TopologicalCorridorPlanner(
+        ZeroField(), rho=1.0, bounds=[(0.0, 1.0), (0.0, 1.0)],
+        topology_profile="wheelchair", route_max_paths=17,
+        route_max_routes=9)
+
+    assert planner.route_max_paths == 17
+    assert planner.route_max_routes == 9
+
+
 def test_wheelchair_manifold_constraint_does_not_inherit_arm_phase_clearance():
     constraint = ManifoldConstraint(
         minimum_clearance=0.10,
@@ -698,8 +708,30 @@ def test_arm_predictive_sequence_must_reduce_terminal_task_error():
         interest_constraints={"enabled": False})
 
     assert dq[0] > 0.0
-    assert mpc.last_objective_terms["terminal_target_error"] < 1.0
+    initial = mpc.last_objective_terms["initial_target_error"]
+    terminal = mpc.last_objective_terms["terminal_target_error"]
+    required = mpc.last_objective_terms["required_terminal_progress"]
+    assert required > 0.0
+    assert terminal <= initial - required + 1e-9
     assert mpc.last_constraint_violation["task_progress"] >= 0
+
+
+def test_arm_predictive_sequence_fails_closed_without_task_progress():
+    mpc = ArmMPC(
+        n_joints=3, dq_max=1.0, v_cap=1.0, horizon=3,
+        beam_width=12, ddq_max=10.0,
+        joint_lower=[-2.0] * 3, joint_upper=[2.0] * 3)
+
+    dq = mpc.solve(
+        np.zeros((3, 3)), [1.0, 0.0, 0.0], dq_nom=np.zeros(3),
+        q=np.zeros(3), ee_pos=np.zeros(3), target_pos=[1.0, 0.0, 0.0],
+        dt=0.1, predictive=True,
+        interest_constraints={"enabled": False})
+
+    assert np.allclose(dq, 0.0)
+    assert mpc.last_solver_status == "safe_stop: no_feasible_joint_sequence"
+    assert mpc.solve_success_count == 0
+    assert mpc.last_constraint_violation["task_progress"] > 0
 
 
 def test_wheelchair_heading_recovery_applies_forward_creep_now():
@@ -712,7 +744,25 @@ def test_wheelchair_heading_recovery_applies_forward_creep_now():
 
     assert abs(w) > 0.0
     assert v >= 0.02
+    assert mpc.last_predicted_controls[0][0] >= 0.02
     assert mpc.last_alignment_translation > 0.0
+
+
+def test_runtime_sources_preserve_p0_execution_contracts():
+    with open(os.path.join(ROOT, "nodes", "wheelchair_node.py"), "r") as handle:
+        wheelchair_source = handle.read()
+    with open(os.path.join(ROOT, "nodes", "metrics_node.py"), "r") as handle:
+        metrics_source = handle.read()
+    with open(os.path.join(ROOT, "scripts", "run_experiments.sh"), "r") as handle:
+        experiment_source = handle.read()
+
+    assert "executable_candidate_available" not in wheelchair_source
+    assert "copy.deepcopy(\n            getattr(self.manifold" in wheelchair_source
+    assert "copy.deepcopy(\n                    self.last_valid_topology_debug)" in wheelchair_source
+    assert '"/stsm/wc_task_complete"' in wheelchair_source
+    assert '"/stsm/wc_task_complete"' in metrics_source
+    assert "metrics_goal_tolerance=\"${wc_completion_tolerance}\"" in experiment_source
+    assert "def first_value(*values):" in experiment_source
 
 
 def test_baseline_failure_stage_is_execution_not_refinement():

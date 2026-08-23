@@ -378,7 +378,8 @@ class TopologicalCorridorPlanner:
                  task_minima_points=None, planning_clearance_margin=None,
                  task_mode=None, task_config=None, task_weight=None,
                  manifold_constraint_mode="soft",
-                 candidate_pool_min=None):
+                 candidate_pool_min=None, route_max_paths=None,
+                 route_max_routes=None):
         profile = topology_profile_defaults(topology_profile)
         self.field = field
         self.rho = float(rho)
@@ -469,6 +470,16 @@ class TopologicalCorridorPlanner:
         self.candidate_pool_min = max(
             1, int(3 if candidate_pool_min in (None, "", "auto") else
                    candidate_pool_min))
+        default_route_max_paths = (
+            32 if self.topology_profile == "arm" else 128)
+        default_route_max_routes = (
+            16 if self.topology_profile == "arm" else 64)
+        self.route_max_paths = max(1, int(
+            default_route_max_paths if route_max_paths in (None, "", "auto")
+            else route_max_paths))
+        self.route_max_routes = max(1, int(
+            default_route_max_routes if route_max_routes in (None, "", "auto")
+            else route_max_routes))
         self.max_corridor_turn = float(
             self.dynamics_profile.get("max_tracking_turn", 1.35)
             if max_corridor_turn is None else max_corridor_turn)
@@ -3134,12 +3145,8 @@ class TopologicalCorridorPlanner:
         task_minima_count = 0
         used_graph_fallback_count = 0
         suppressed_graph_non_morse_count = 0
-        if self.topology_profile == "arm":
-            route_max_paths = 32
-            route_max_routes = 16
-        else:
-            route_max_paths = 512
-            route_max_routes = 256
+        route_max_paths = int(self.route_max_paths)
+        route_max_routes = int(self.route_max_routes)
         arm_route_risk_threshold = None
         arm_search_validator = None
         arm_search_weights = {}
@@ -4234,6 +4241,10 @@ class TopologicalCorridorPlanner:
                         "original_topology_identity", "")),
                     "ranking_decomposition": dict(decision.get(
                         "ranking_decomposition", {})),
+                    "rank": int(decision.get("rank", -1)),
+                    "selected": bool(decision.get("selected", False)),
+                    "ranking_score": float(decision.get(
+                        "ranking_score", decision.get("total_score", 0.0))),
                 })
         candidate_generation_report["candidate_decision_pipeline"] = list(
             decision_records)
@@ -4375,19 +4386,16 @@ class TopologicalCorridorPlanner:
             candidate_generation_report["candidate_manifold_feasible"])
         candidate_generation_report["candidate_tube_valid"] = bool(
             corridors and getattr(corridors[0], "candidate_tube_valid", False))
-        ranked_recoverable_count = int(sum(
-            1 for corridor in total_order
-            if str(getattr(corridor, "candidate_filter_class", "")) == "recoverable" or
-            str(getattr(corridor, "candidate_status", "")) == "recoverable"))
         reported_recoverable_count = int(sum(
             1 for row in candidate_filter_report
             if str(row.get("candidate_filter_class", "")) == "recoverable" or
             str(row.get("candidate_status", "")) == "recoverable"))
+        candidate_generation_report["candidate_recoverable_count"] = int(
+            reported_recoverable_count)
+        candidate_generation_report["candidate_recovery_success_count"] = int(
+            recovered_route_count)
         candidate_generation_report["candidate_after_recovery"] = int(
-            max(int(candidate_generation_report.get(
-                "candidate_after_recovery", 0)),
-                int(recovered_route_count + ranked_recoverable_count),
-                int(reported_recoverable_count)))
+            len(total_order))
         candidate_generation_report["selected_min_clearance"] = float(
             ranking_summary["selected_min_clearance"])
         candidate_generation_report["filtered_infeasible_candidates"] = int(

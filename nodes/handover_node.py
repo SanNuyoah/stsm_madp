@@ -544,7 +544,11 @@ class HandoverNode:
             ddq_max=mp.get("ddq_max", 1.2),
             joint_lower=joint_lower,
             joint_upper=joint_upper,
-            phase_cost_weights=self.mpc_phase_cost_weights)
+            phase_cost_weights=self.mpc_phase_cost_weights,
+            min_terminal_progress_ratio=mp.get(
+                "min_terminal_progress_ratio", 0.01),
+            task_progress_tolerance=mp.get(
+                "task_progress_tolerance", 1e-3))
         self.v_cap_far = mp.get("v_cap_far", 0.18) * speed_scale
         self.v_cap_near = mp.get("v_cap_near", 0.04) * speed_scale
         self.near_radius = mp.get("near_radius", 0.12)
@@ -554,6 +558,10 @@ class HandoverNode:
         self.risk_slow_threshold = mp.get("risk_slow_threshold", 2.6)
         self.risk_stop_threshold = mp.get("risk_stop_threshold", 6.0)
         self.arm_servo_gain = float(mp.get("servo_gain", 1.35))
+        self.arm_mpc_no_progress_cycles = max(
+            1, int(mp.get("no_progress_cycles", 25)))
+        self.arm_mpc_progress_epsilon = max(
+            0.0, float(mp.get("progress_epsilon", 1e-4)))
         self.handover_tracking_weight = float(rospy.get_param(
             "~handover_tracking_weight",
             mp.get("handover_tracking_weight", 8.0)))
@@ -2157,6 +2165,8 @@ class HandoverNode:
         topology_error_sum = 0.0
         topology_error_count = 0
         previous_dq = np.zeros(6, float)
+        best_target_error = float("inf")
+        no_progress_cycles = 0
         handover_servo_requested = bool(
             int(self.phase) == 3 and self._path_contains_handover_target(path))
         if handover_servo_requested:
@@ -2234,7 +2244,28 @@ class HandoverNode:
                     rospy.loginfo("[handover] mandatory topology node reached idx=%d dist=%.3f",
                                   idx, np.linalg.norm(err))
                 idx += 1
+                best_target_error = float("inf")
+                no_progress_cycles = 0
                 continue
+            target_error = float(np.linalg.norm(err))
+            if target_error < (
+                    best_target_error - self.arm_mpc_progress_epsilon):
+                best_target_error = target_error
+                no_progress_cycles = 0
+            else:
+                no_progress_cycles += 1
+            if (not self.baseline and
+                    no_progress_cycles >= self.arm_mpc_no_progress_cycles):
+                q = self._cur_joints()
+                self._hold_current(q)
+                self.stop_triggered = True
+                self.stop_reason = "mpc:no_task_progress"
+                rospy.logerr(
+                    "[handover][mpc] no measured task progress "
+                    "idx=%d error=%.6f best=%.6f cycles=%d",
+                    idx, target_error, best_target_error,
+                    no_progress_cycles)
+                return False
             q = self._cur_joints()
             J = self._jacobian(q)
             v_des = self.arm_servo_gain * err
@@ -2294,6 +2325,15 @@ class HandoverNode:
                                 predictive=bool(not self.baseline),
                                 kinematics_source="real",
                                 phase_cost_weights=self.mpc_phase_cost_weights)
+            if (not self.baseline and str(
+                    self.mpc.last_solver_status).startswith("safe_stop:")):
+                self._hold_current(q)
+                self.stop_triggered = True
+                self.stop_reason = "mpc:%s" % self.mpc.last_solver_status
+                rospy.logerr(
+                    "[handover][mpc] predictive solve failed closed: %s",
+                    self.mpc.last_solver_status)
+                return False
             self._record_mpc_handover_diagnostic(target, ee, J, dq, dt)
             self.adp_control_info_pub.publish(Float64MultiArray(data=[
                 float(self.mpc.last_adp_grad_norm),
@@ -2328,6 +2368,9 @@ class HandoverNode:
             steps += 1
             rate.sleep()
         ok = idx >= len(path)
+        if not ok and not self.stop_reason:
+            self.stop_triggered = True
+            self.stop_reason = "mpc:path_not_completed"
         if handover_servo_requested:
             self._record_phase3_chain_event(
                 "servo_to_path_end",
