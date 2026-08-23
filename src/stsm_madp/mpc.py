@@ -4212,7 +4212,7 @@ class ArmMPC:
             "joint_position": 0, "joint_velocity": 0,
             "joint_acceleration": 0, "ee_speed": 0,
             "trajectory_tube": 0, "interest_point": 0, "forbidden": 0,
-            "task_progress": 0,
+            "task_progress": 0, "first_step_task_progress": 0,
         }
         initial_target_error = float(np.linalg.norm(ee0[:3] - target[:3]))
         max_task_regression = max(0.0, float(cfg.get(
@@ -4224,6 +4224,11 @@ class ArmMPC:
             max(0.0, float(cap)) * float(self.N) * float(dt))
         required_terminal_progress = float(
             self.min_terminal_progress_ratio * progress_scale)
+        first_step_progress_scale = min(
+            max(0.0, initial_target_error - task_progress_tolerance),
+            max(0.0, float(cap)) * float(dt))
+        required_first_step_progress = float(
+            self.min_terminal_progress_ratio * first_step_progress_scale)
         empty = {"tracking": 0.0, "task": 0.0, "risk": 0.0,
                  "tube": 0.0, "control": 0.0, "smooth": 0.0}
         beam = [{"cost": 0.0, "q": q0.copy(), "ee": ee0.copy(),
@@ -4262,6 +4267,18 @@ class ArmMPC:
                         violations["joint_position"] += 1
                         continue
                     ee_next = np.asarray(item["ee"], float) + ee_vel * dt
+                    # Only the first control is applied before replanning.  A
+                    # terminal-only progress constraint can therefore accept
+                    # a sequence that holds now and moves later forever.  Keep
+                    # such non-executable progress out of the beam at k=0.
+                    if k == 0 and required_first_step_progress > 0.0:
+                        first_step_error = float(np.linalg.norm(
+                            ee_next[:3] - target[:3]))
+                        if first_step_error > (
+                                initial_target_error -
+                                required_first_step_progress + 1e-9):
+                            violations["first_step_task_progress"] += 1
+                            continue
                     tube_cost = 0.0
                     if corridor is not None:
                         _projection, distance = corridor.project(ee_next[:3])
@@ -4356,6 +4373,10 @@ class ArmMPC:
             max_task_regression)
         self.last_objective_terms["required_terminal_progress"] = float(
             required_terminal_progress)
+        self.last_objective_terms["required_first_step_progress"] = float(
+            required_first_step_progress)
+        self.last_objective_terms["first_step_target_error"] = float(
+            np.linalg.norm(np.asarray(best["ees"][0], float)[:3] - target[:3]))
         self.last_objective_terms["task_progress_tolerance"] = float(
             task_progress_tolerance)
         self.last_objective_terms["phase"] = phase_name

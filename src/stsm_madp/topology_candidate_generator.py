@@ -1,6 +1,7 @@
 import sys
 sys.dont_write_bytecode = True
 
+import heapq
 import numpy as np
 
 from stsm_madp.safety_evaluator import SafetyEvaluator
@@ -1049,6 +1050,8 @@ class TopologyDrivenCandidateGenerator(object):
         best_by_sequence = {}
         considered = 0
         topology_rejected = 0
+        manifold_rejected = 0
+        manifold_rejections = []
         truncated = False
         saddle_debug = self._init_saddle_route_debug(edges, node_by_id)
         for cost, node_ids, edge_parts in self._enumerate_morse_paths(edges):
@@ -1086,6 +1089,26 @@ class TopologyDrivenCandidateGenerator(object):
                 "node_sequence": list(node_ids),
             }
             route_eval = self._evaluate_route(route_eval_seed, centerline, boundary)
+            if not bool(route_eval.get("route_valid", False)):
+                topology_rejected += 1
+                manifold_rejected += 1
+                rejection = {
+                    "node_sequence": list(node_ids),
+                    "critical_point_sequence": list(
+                        status.get("critical_point_sequence", []) or []),
+                    "failure_reason": list(
+                        route_eval.get("failure_reason", []) or []),
+                    "min_clearance": float(
+                        route_eval.get("min_clearance", 0.0)),
+                    "max_risk": float(route_eval.get("max_risk", 0.0)),
+                }
+                manifold_rejections.append(rejection)
+                self._record_saddle_path_debug(
+                    saddle_debug, node_ids, node_by_id, status,
+                    rejected=True,
+                    reject_reason=",".join(rejection["failure_reason"]) or
+                    "manifold_infeasible")
+                continue
             turning_cost, max_route_turn = _turning_cost(centerline)
             sequence = tuple(status["critical_point_sequence"])
             previous = best_by_sequence.get(sequence)
@@ -1192,6 +1215,8 @@ class TopologyDrivenCandidateGenerator(object):
             "require_saddle": bool(require_saddle),
             "paths_considered": int(considered),
             "topology_rejected": int(topology_rejected),
+            "manifold_rejected": int(manifold_rejected),
+            "morse_route_rejections": manifold_rejections,
             "routes": int(len(routes)),
             "candidate_generated": int(len(routes)),
             "truncated": bool(truncated),
@@ -1326,22 +1351,30 @@ class TopologyDrivenCandidateGenerator(object):
         return out
 
     def _enumerate_morse_paths(self, edges):
-        stack = [(0.0, ["start"], [])]
-        while stack:
-            cost, node_ids, parts = stack.pop()
+        # Uniform-cost enumeration is essential here: the route budget must
+        # contain the globally cheapest Morse paths, not whichever deep paths
+        # a depth-first traversal happens to finish first.
+        queue = [(0.0, 0, ["start"], [])]
+        tie_breaker = 0
+        while queue:
+            cost, _order, node_ids, parts = heapq.heappop(queue)
             cur = node_ids[-1]
             if cur == "goal":
                 yield cost, node_ids, parts
                 continue
             outgoing = sorted(
                 list((edges or {}).get(cur, []) or []),
-                key=lambda edge: float(edge.get("cost", 0.0)))
-            for edge in reversed(outgoing):
+                key=lambda edge: (
+                    float(edge.get("cost", 0.0)),
+                    str(edge.get("to", ""))))
+            for edge in outgoing:
                 nxt = str(edge.get("to", ""))
                 if not nxt or nxt in node_ids:
                     continue
-                stack.append((
+                tie_breaker += 1
+                heapq.heappush(queue, (
                     float(cost) + float(edge.get("cost", 0.0)),
+                    tie_breaker,
                     node_ids + [nxt],
                     parts + [edge],
                 ))

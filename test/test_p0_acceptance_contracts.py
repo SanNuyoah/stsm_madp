@@ -28,7 +28,8 @@ from stsm_madp.mpc import evaluate_executed_trajectory
 from stsm_madp.safety_evaluator import SafetyEvaluator
 from stsm_madp.topology import TopologicalCorridorPlanner
 from stsm_madp.topology_candidate_generator import (
-    candidate_topology_identity, rank_feasible_candidates)
+    TopologyDrivenCandidateGenerator, candidate_topology_identity,
+    rank_feasible_candidates)
 from stsm_madp.topology_constraint import build_topology_constraint
 from stsm_madp.corridor import (
     CorridorContractError, require_corridor_contract,
@@ -67,6 +68,22 @@ def test_topology_route_search_budget_is_configurable_and_bounded():
         topology_profile="wheelchair")
     assert default_planner.route_max_paths == 512
     assert default_planner.route_max_routes == 256
+
+
+def test_morse_route_budget_is_filled_by_global_lowest_cost_paths():
+    generator = TopologyDrivenCandidateGenerator(max_paths=2, max_routes=2)
+    edges = {
+        "start": [
+            {"to": "deep", "cost": 1.0},
+            {"to": "goal", "cost": 2.0},
+        ],
+        "deep": [{"to": "goal", "cost": 100.0}],
+    }
+
+    routes = list(generator._enumerate_morse_paths(edges))
+
+    assert [row[0] for row in routes] == [2.0, 101.0]
+    assert routes[0][1] == ["start", "goal"]
 
 
 def test_plot_metric_conversion_rejects_non_finite_values():
@@ -725,9 +742,14 @@ def test_arm_predictive_sequence_must_reduce_terminal_task_error():
     initial = mpc.last_objective_terms["initial_target_error"]
     terminal = mpc.last_objective_terms["terminal_target_error"]
     required = mpc.last_objective_terms["required_terminal_progress"]
+    first_error = mpc.last_objective_terms["first_step_target_error"]
+    first_required = mpc.last_objective_terms["required_first_step_progress"]
     assert required > 0.0
+    assert first_required > 0.0
+    assert first_error <= initial - first_required + 1e-9
     assert terminal <= initial - required + 1e-9
     assert mpc.last_constraint_violation["task_progress"] >= 0
+    assert mpc.last_constraint_violation["first_step_task_progress"] > 0
 
 
 def test_arm_predictive_sequence_fails_closed_without_task_progress():
@@ -745,7 +767,7 @@ def test_arm_predictive_sequence_fails_closed_without_task_progress():
     assert np.allclose(dq, 0.0)
     assert mpc.last_solver_status == "safe_stop: no_feasible_joint_sequence"
     assert mpc.solve_success_count == 0
-    assert mpc.last_constraint_violation["task_progress"] > 0
+    assert mpc.last_constraint_violation["first_step_task_progress"] > 0
 
 
 def test_arm_progress_gate_uses_active_waypoint_tolerance():
