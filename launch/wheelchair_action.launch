@@ -85,8 +85,8 @@
   <arg name="topology_morse_grad_eps" default="0.6"/>
   <arg name="topology_k_paths" default="3"/>
   <arg name="topology_candidate_pool_min" default="3"/>
-  <arg name="topology_route_max_paths" default="128"/>
-  <arg name="topology_route_max_routes" default="64"/>
+  <arg name="topology_route_max_paths" default="512"/>
+  <arg name="topology_route_max_routes" default="256"/>
   <arg name="topology_max_graph_nodes" default="32"/>
   <arg name="topology_allow_semantic_with_morse" default="false"/>
   <arg name="topology_allow_semantic_topology_recovery" default="false"/>

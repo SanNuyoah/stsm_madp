@@ -5,6 +5,7 @@ import ast
 import argparse
 import csv
 import json
+import math
 import os
 import sys
 
@@ -87,7 +88,8 @@ def as_float(value):
     try:
         if value in (None, ""):
             return None
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     except Exception:
         return None
 

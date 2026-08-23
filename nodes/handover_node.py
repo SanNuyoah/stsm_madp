@@ -2313,6 +2313,7 @@ class HandoverNode:
                                     "offsets": self._arm_interest_offsets(ee),
                                     "labels": ["ee", "wrist", "elbow", "object"],
                                     "rho": self.arm_interest_gate.rho_stop,
+                                    "task_progress_tolerance": float(local_tol),
                                 },
                                 handover_protect=handover_protect,
                                 handover_target=(
@@ -2331,8 +2332,10 @@ class HandoverNode:
                 self.stop_triggered = True
                 self.stop_reason = "mpc:%s" % self.mpc.last_solver_status
                 rospy.logerr(
-                    "[handover][mpc] predictive solve failed closed: %s",
-                    self.mpc.last_solver_status)
+                    "[handover][mpc] predictive solve failed closed: %s "
+                    "violations=%s",
+                    self.mpc.last_solver_status,
+                    self.mpc.last_constraint_violation)
                 return False
             self._record_mpc_handover_diagnostic(target, ee, J, dq, dt)
             self.adp_control_info_pub.publish(Float64MultiArray(data=[

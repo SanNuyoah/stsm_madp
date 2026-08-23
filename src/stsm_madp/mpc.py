@@ -4153,11 +4153,15 @@ class ArmMPC:
             "task": float(row.get("task_multiplier", 1.0)),
         }
 
-    def _arm_step_controls(self, previous, warm, dt):
+    def _arm_step_controls(self, previous, warm, dt, alternatives=None):
         previous = np.asarray(previous, float)
         warm = np.asarray(warm, float)
         delta = max(0.0, self.ddq_max) * float(dt)
         seeds = [previous, warm, 0.75 * warm, 0.5 * warm, np.zeros(self.n)]
+        for alternative in list(alternatives or []):
+            alternative = np.asarray(alternative, float)
+            seeds.extend([alternative, 0.75 * alternative,
+                          0.5 * alternative])
         if delta > 0.0:
             order = np.argsort(-np.abs(warm - previous))[:min(3, self.n)]
             for idx in order:
@@ -4193,6 +4197,7 @@ class ArmMPC:
             v_des, v_avoid, cap, lambda_adp_arm=lambda_adp_arm,
             adp_blend_alpha=adp_blend_alpha, preserve_progress=True)
         warm = self._dls(J, v_cmd, dq_nom, cap)
+        task_warm = self._dls(J, v_des, dq_nom, cap)
         target = (ee0 + v_cmd * dt * self.N if target_pos is None
                   else np.asarray(target_pos, float))
         phase_name, weights = self._phase_weights(phase, phase_cost_weights)
@@ -4212,8 +4217,10 @@ class ArmMPC:
         initial_target_error = float(np.linalg.norm(ee0[:3] - target[:3]))
         max_task_regression = max(0.0, float(cfg.get(
             "max_task_regression", 1e-6)))
+        task_progress_tolerance = max(0.0, float(cfg.get(
+            "task_progress_tolerance", self.task_progress_tolerance)))
         progress_scale = min(
-            max(0.0, initial_target_error - self.task_progress_tolerance),
+            max(0.0, initial_target_error - task_progress_tolerance),
             max(0.0, float(cap)) * float(self.N) * float(dt))
         required_terminal_progress = float(
             self.min_terminal_progress_ratio * progress_scale)
@@ -4226,7 +4233,8 @@ class ArmMPC:
             expanded = []
             for item in beam:
                 previous = np.asarray(item["dq"], float)
-                for cand in self._arm_step_controls(previous, warm, dt):
+                for cand in self._arm_step_controls(
+                        previous, warm, dt, alternatives=[task_warm]):
                     # Project sampled velocity onto the one-step position
                     # interval.  This retains a boundary-reaching control
                     # instead of leaving only an oversized sample or hold.
@@ -4349,7 +4357,7 @@ class ArmMPC:
         self.last_objective_terms["required_terminal_progress"] = float(
             required_terminal_progress)
         self.last_objective_terms["task_progress_tolerance"] = float(
-            self.task_progress_tolerance)
+            task_progress_tolerance)
         self.last_objective_terms["phase"] = phase_name
         self.last_objective_terms["phase_weights"] = weights
         self.last_constraint_violation = violations

@@ -14,6 +14,7 @@ for path in (SRC, SCRIPTS):
 
 
 from ensure_result_diagnostics import runtime_validation_fields
+from visualization.generate_results_figures import as_float
 from stsm_madp.manifold_constraint import (
     ManifoldConstraint,
     assert_manifold_mode_consistency,
@@ -60,6 +61,19 @@ def test_topology_route_search_budget_is_configurable_and_bounded():
 
     assert planner.route_max_paths == 17
     assert planner.route_max_routes == 9
+
+    default_planner = TopologicalCorridorPlanner(
+        ZeroField(), rho=1.0, bounds=[(0.0, 1.0), (0.0, 1.0)],
+        topology_profile="wheelchair")
+    assert default_planner.route_max_paths == 512
+    assert default_planner.route_max_routes == 256
+
+
+def test_plot_metric_conversion_rejects_non_finite_values():
+    assert as_float("inf") is None
+    assert as_float("-inf") is None
+    assert as_float("nan") is None
+    assert as_float("1.25") == 1.25
 
 
 def test_wheelchair_manifold_constraint_does_not_inherit_arm_phase_clearance():
@@ -732,6 +746,26 @@ def test_arm_predictive_sequence_fails_closed_without_task_progress():
     assert mpc.last_solver_status == "safe_stop: no_feasible_joint_sequence"
     assert mpc.solve_success_count == 0
     assert mpc.last_constraint_violation["task_progress"] > 0
+
+
+def test_arm_progress_gate_uses_active_waypoint_tolerance():
+    mpc = ArmMPC(
+        n_joints=3, dq_max=1.0, v_cap=1.0, horizon=3,
+        beam_width=12, ddq_max=10.0,
+        joint_lower=[-2.0] * 3, joint_upper=[2.0] * 3)
+
+    dq = mpc.solve(
+        np.eye(3), [0.041, 0.0, 0.0], dq_nom=np.zeros(3),
+        q=np.zeros(3), ee_pos=np.zeros(3), target_pos=[0.041, 0.0, 0.0],
+        dt=0.1, predictive=True,
+        interest_constraints={
+            "enabled": False,
+            "task_progress_tolerance": 0.04,
+        })
+
+    assert dq[0] > 0.0
+    assert mpc.last_objective_terms["task_progress_tolerance"] == 0.04
+    assert mpc.last_objective_terms["required_terminal_progress"] < 1e-4
 
 
 def test_wheelchair_heading_recovery_applies_forward_creep_now():

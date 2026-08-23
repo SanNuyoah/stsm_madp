@@ -340,9 +340,9 @@ class WheelchairNode:
         self.topology_candidate_pool_min = int(rospy.get_param(
             "~topology/candidate_pool_min", 3))
         self.topology_route_max_paths = max(1, int(rospy.get_param(
-            "~topology/route_max_paths", 128)))
+            "~topology/route_max_paths", 512)))
         self.topology_route_max_routes = max(1, int(rospy.get_param(
-            "~topology/route_max_routes", 64)))
+            "~topology/route_max_routes", 256)))
         self.topology_require_risk_improvement = bool(rospy.get_param(
             "~topology/require_risk_improvement", True))
         self.topology_candidate_max_risk = _topology_param(rospy.get_param(

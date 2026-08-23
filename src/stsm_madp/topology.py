@@ -471,9 +471,9 @@ class TopologicalCorridorPlanner:
             1, int(3 if candidate_pool_min in (None, "", "auto") else
                    candidate_pool_min))
         default_route_max_paths = (
-            32 if self.topology_profile == "arm" else 128)
+            32 if self.topology_profile == "arm" else 512)
         default_route_max_routes = (
-            16 if self.topology_profile == "arm" else 64)
+            16 if self.topology_profile == "arm" else 256)
         self.route_max_paths = max(1, int(
             default_route_max_paths if route_max_paths in (None, "", "auto")
             else route_max_paths))
@@ -4276,9 +4276,6 @@ class TopologicalCorridorPlanner:
             self._candidate_record(corridor)
             for corridor in total_order
         ]
-        if (not candidate_after_filter and not corridors and
-                rejected_candidate_records):
-            candidate_after_filter = list(rejected_candidate_records)
         candidate_before_filter = (
             rejected_candidate_records + list(candidate_after_filter))
         top_k = max(1, int(k))
