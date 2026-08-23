@@ -4771,6 +4771,7 @@ class WheelchairMPC:
             "forbidden": 0,
             "insufficient_progress": 0,
         }
+        min_alignment_first_v = min(0.02, self.a_max * self.dt)
         empty_parts = {
             "tracking": 0.0,
             "heading_tracking": 0.0,
@@ -4806,6 +4807,14 @@ class WheelchairMPC:
                             abs(float(u[1] - previous[1])) >
                             self.alpha_max * self.dt + 1e-9):
                         violation_counts["control_rate"] += 1
+                        continue
+                    # The first command is the only part of the horizon that
+                    # will actually execute.  Preserve live branches before
+                    # beam pruning can prefer a zero-speed hold whose motion
+                    # is perpetually deferred to later controls.
+                    if (k == 0 and dist0 >= 0.12 and
+                            float(u[0]) + 1e-9 < min_alignment_first_v):
+                        violation_counts["insufficient_progress"] += 1
                         continue
                     x_next = self._step(x, u)
                     parts = dict(item["parts"])
@@ -4961,7 +4970,6 @@ class WheelchairMPC:
         # A liveness gate needs a positive command now, but must not require
         # the exact maximum acceleration step.  The latter rejects otherwise
         # safe sequences under tiny state or floating-point differences.
-        min_alignment_first_v = min(0.02, self.a_max * self.dt)
         valid = [
             item for item in records
             if (dist0 < 0.12 or

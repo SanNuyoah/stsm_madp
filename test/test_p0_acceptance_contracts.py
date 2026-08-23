@@ -820,6 +820,22 @@ def test_wheelchair_progress_gate_does_not_require_max_acceleration_step():
     assert mpc.last_objective_terms["required_first_speed"] == 0.02
 
 
+def test_wheelchair_beam_keeps_executable_first_step_before_pruning():
+    mpc = WheelchairMPC(horizon=12, dt=0.2, a_max=0.5, beam_width=12)
+    ref = np.column_stack([
+        np.linspace(1.813, 1.647, 12),
+        np.full(12, 1.555),
+    ])
+
+    v, _w = mpc.solve(
+        [1.824, 1.368, -2.49], ref, ZeroField(),
+        u_prev=[0.0, 0.0], goal=[-0.55, 0.55], predictive=True)
+
+    assert v >= 0.02
+    assert mpc.last_predicted_controls[0][0] >= 0.02
+    assert mpc.last_sequence_progress >= mpc.min_progress_per_solve
+
+
 def test_runtime_sources_preserve_p0_execution_contracts():
     with open(os.path.join(ROOT, "nodes", "wheelchair_node.py"), "r") as handle:
         wheelchair_source = handle.read()
