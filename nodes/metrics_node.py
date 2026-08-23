@@ -1428,7 +1428,9 @@ class MetricsNode:
             not self.stop_triggered) else "failed"
         failure_stage = ""
         if execution_status != "success":
-            if not formal_selected:
+            if variant_name == "baseline":
+                failure_stage = "execution"
+            elif not formal_selected:
                 failure_stage = "planning"
             elif not refinement_trace_valid:
                 failure_stage = "refinement"

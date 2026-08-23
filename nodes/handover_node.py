@@ -2156,6 +2156,7 @@ class HandoverNode:
         corridor_violation_count = 0
         topology_error_sum = 0.0
         topology_error_count = 0
+        previous_dq = np.zeros(6, float)
         handover_servo_requested = bool(
             int(self.phase) == 3 and self._path_contains_handover_target(path))
         if handover_servo_requested:
@@ -2253,7 +2254,7 @@ class HandoverNode:
             phase_name = (
                 "handover" if int(self.phase) == 3 else
                 "return" if int(self.phase) == 4 else "approach")
-            dq = self.mpc.solve(J, v_des, dq_nom=np.zeros(6),
+            dq = self.mpc.solve(J, v_des, dq_nom=previous_dq,
                                 v_cap=v_cap, ee_pos=ee, dt=dt,
                                 critic=(
                                     self.adp_critic
@@ -2323,6 +2324,7 @@ class HandoverNode:
                 self.mpc.last_adp_soft_cost,
                 self.mpc.last_v_adp_alignment)
             self._send_joint(q + dq * dt, dt * 1.5)
+            previous_dq = np.asarray(dq, float).copy()
             steps += 1
             rate.sleep()
         ok = idx >= len(path)
@@ -2756,8 +2758,31 @@ class HandoverNode:
             base, "mpc_cost_breakdown.csv")
         return diag, breakdown
 
+    def _runtime_mpc_diagnostic_fields(self):
+        return {
+            "runtime_solver_status": str(self.mpc.last_solver_status),
+            "runtime_horizon": int(self.mpc.N),
+            "runtime_predicted_joint_states": list(
+                self.mpc.last_predicted_joint_states),
+            "runtime_predicted_controls": list(
+                self.mpc.last_predicted_controls),
+            "runtime_predicted_ee_states": list(
+                self.mpc.last_predicted_ee_states),
+            "runtime_objective_terms": dict(self.mpc.last_objective_terms),
+            "runtime_constraint_violation": dict(
+                self.mpc.last_constraint_violation),
+            "runtime_control_sequence_varies": bool(
+                self.mpc.last_control_sequence_varies),
+            "kinematics_source": str(self.mpc.last_kinematics_source),
+            "interest_point_kinematics_source": str(
+                self.mpc.last_interest_kinematics_source),
+            "joint_limit_source": str(self.arm_joint_limit_source),
+            "prediction_model": str(self.mpc.last_prediction_model),
+            "dls_role": "warm_start_only",
+        }
+
     def _write_mpc_diagnostics(self):
-        if self.baseline or not self.mpc_reference_records:
+        if self.baseline:
             return
         corr = self.execution_corridor
         cid = str(getattr(corr, "corridor_id", getattr(corr, "label", "")))
@@ -2767,6 +2792,29 @@ class HandoverNode:
         if not ref:
             rospy.logerr(
                 "[handover][mpc] no active selected-corridor reference rows")
+            diag, breakdown = self._mpc_output_paths()
+            result = {
+                "robot_type": "arm",
+                "selected_corridor_id": cid or "planning_failed",
+                "selected_corridor_label": str(getattr(
+                    corr, "label", cid or "planning_failed")),
+                "horizon": int(self.mpc.N),
+                "dt": 0.1,
+                "mpc_used": bool(self.mpc.solve_count > 0),
+                "mpc_feasibility_status": "infeasible_reference_empty",
+                "final_status": "infeasible_reference_empty",
+                "final_mpc_status": "infeasible_reference_empty",
+                "task_success": bool(self.task_completed),
+                "planner_success": False,
+                "controller_success": bool(self.mpc.solve_success_count > 0),
+                "safety_success": bool(self.mpc.fallback_count == 0),
+                "overall_success": False,
+                "success": False,
+                "failure_reason": self.stop_reason or "reference_empty",
+                "reference_path_count": 0,
+            }
+            result.update(self._runtime_mpc_diagnostic_fields())
+            write_mpc_outputs(result, diag, breakdown)
             return
         ref_points = [
             [row.get("x", 0.0), row.get("y", 0.0), row.get("z", 0.0)]
@@ -2832,27 +2880,7 @@ class HandoverNode:
                 "executed_evidence_required": True,
             })
         result["selected_corridor_label"] = str(getattr(corr, "label", cid))
-        result.update({
-            "runtime_solver_status": str(self.mpc.last_solver_status),
-            "runtime_horizon": int(self.mpc.N),
-            "runtime_predicted_joint_states": list(
-                self.mpc.last_predicted_joint_states),
-            "runtime_predicted_controls": list(
-                self.mpc.last_predicted_controls),
-            "runtime_predicted_ee_states": list(
-                self.mpc.last_predicted_ee_states),
-            "runtime_objective_terms": dict(self.mpc.last_objective_terms),
-            "runtime_constraint_violation": dict(
-                self.mpc.last_constraint_violation),
-            "runtime_control_sequence_varies": bool(
-                self.mpc.last_control_sequence_varies),
-            "kinematics_source": str(self.mpc.last_kinematics_source),
-            "interest_point_kinematics_source": str(
-                self.mpc.last_interest_kinematics_source),
-            "joint_limit_source": str(self.arm_joint_limit_source),
-            "prediction_model": str(self.mpc.last_prediction_model),
-            "dls_role": "warm_start_only",
-        })
+        result.update(self._runtime_mpc_diagnostic_fields())
         if corr is not None:
             result.update({
                 "raw_candidate_corridor_violation_count": int(getattr(

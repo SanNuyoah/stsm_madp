@@ -10,8 +10,10 @@ import numpy as np
 from stsm_madp.manifold import Corridor
 from stsm_madp.topology_candidate_generator import (
     TopologyDrivenCandidateGenerator,
+    candidate_topology_identity,
     evaluate_candidate,
     evaluate_candidate_manifold_feasibility,
+    rank_feasible_candidates,
 )
 from stsm_madp.candidate_recovery import recover_candidates
 from stsm_madp.arm_topology_validator import ArmTopologyValidator
@@ -4208,21 +4210,39 @@ class TopologicalCorridorPlanner:
             corridor.candidate_cost_breakdown = dict(score.get(
                 "candidate_cost_breakdown", {}))
         self._apply_normalized_scores(corridors)
-        def candidate_source_priority(corridor):
-            source = str(getattr(corridor, "candidate_source", ""))
-            if source == "morse_topology":
-                return 0
-            if source == "morse_recoverable":
-                return 0
-            if source == "morse_recovered":
-                return 1
-            return 2
-
-        total_order = sorted(
-            corridors,
-            key=lambda c: (
-                candidate_source_priority(c),
-                float(getattr(c, "total_score", getattr(c, "cost", 0.0)))))
+        for corridor in corridors:
+            corridor.decision_robot_type = str(self.topology_profile)
+        total_order, decision_records = rank_feasible_candidates(corridors)
+        decision_by_id = {
+            str(row.get("candidate_id", "")): dict(row)
+            for row in decision_records
+        }
+        for row in candidate_filter_report:
+            decision = decision_by_id.get(str(row.get("candidate_id", "")), {})
+            if decision:
+                row.update({
+                    "topology_valid": bool(decision.get("topology_valid", False)),
+                    "safety_feasible": bool(decision.get("safety_feasible", False)),
+                    "execution_feasible": bool(decision.get(
+                        "execution_feasible", False)),
+                    "hard_feasible": bool(decision.get("hard_feasible", False)),
+                    "decision_stage": str(decision.get("decision_stage", "")),
+                    "decision_reason": str(decision.get("decision_reason", "")),
+                    "ranking_eligible": bool(decision.get(
+                        "ranking_eligible", False)),
+                    "original_topology_identity": str(decision.get(
+                        "original_topology_identity", "")),
+                    "ranking_decomposition": dict(decision.get(
+                        "ranking_decomposition", {})),
+                })
+        candidate_generation_report["candidate_decision_pipeline"] = list(
+            decision_records)
+        candidate_generation_report["hard_infeasible_candidate_count"] = int(
+            sum(1 for row in decision_records if not row.get("hard_feasible")))
+        candidate_generation_report["ranked_candidate_count"] = int(
+            len(total_order))
+        candidate_generation_report["topology_diversity_identity_count"] = int(
+            len(set(candidate_topology_identity(c) for c in total_order)))
         pre_dedupe_count = len(total_order)
         total_order = self._dedupe_corridors_by_geometry(
             total_order, start2, goal2, min_keep=self.candidate_pool_min)
@@ -5270,8 +5290,13 @@ class TopologicalCorridorPlanner:
             length_penalty = 3.0 * (
                 float(getattr(corridor, "path_length", 0.0)) / base_len)
         score = float(
-            risk_cost + distance_cost + smooth_cost + task_cost +
-            feasibility_cost +
+            weights["risk"] * risk_cost +
+            weights["length"] * distance_cost +
+            weights["smooth"] * smooth_cost +
+            weights["task"] * task_cost +
+            weights["execution"] * execution_cost -
+            weights["topology"] * topology_value -
+            weights["diversity"] * topology_diversity +
             recovery_weight * recovery_cost)
         cost_breakdown = {
             "risk_cost": float(risk_cost),
@@ -5282,6 +5307,7 @@ class TopologicalCorridorPlanner:
             "task_cost_breakdown": dict(task_breakdown),
             "clearance_cost": float(clearance_cost),
             "feasibility_cost": float(feasibility_cost),
+            "hard_feasibility_in_score": False,
             "raw_recovery_cost": float(getattr(
                 corridor, "raw_recovery_cost", recovery_cost)),
             "normalized_recovery_cost": float(getattr(
@@ -5290,6 +5316,11 @@ class TopologicalCorridorPlanner:
             "recovery_weight": float(recovery_weight),
             "weighted_recovery_cost": float(recovery_weight * recovery_cost),
             "task_specific_cost": float(task_specific_cost),
+            "topology_value": float(topology_value),
+            "topology_value_term": float(-weights["topology"] * topology_value),
+            "geometry_tie_breaker": float(distance_cost),
+            "execution_cost": float(execution_cost),
+            "execution_cost_term": float(weights["execution"] * execution_cost),
             "ranking_score": float(score),
             "candidate_cost": float(score),
         }
@@ -5404,10 +5435,16 @@ class TopologicalCorridorPlanner:
                 cost=c.normalized_recovery_cost)
         for corridor in corridors:
             score = (
-                float(getattr(corridor, "risk_cost", 0.0)) +
-                float(getattr(corridor, "length_cost", 0.0)) +
-                float(getattr(corridor, "smooth_cost", 0.0)) +
-                float(getattr(corridor, "task_cost", 0.0)) +
+                weights["risk"] * float(getattr(corridor, "risk_cost", 0.0)) +
+                weights["length"] * float(getattr(corridor, "length_cost", 0.0)) +
+                weights["smooth"] * float(getattr(corridor, "smooth_cost", 0.0)) +
+                weights["task"] * float(getattr(corridor, "task_cost", 0.0)) +
+                weights["execution"] * float(getattr(
+                    corridor, "execution_cost", 0.0)) -
+                weights["topology"] * float(getattr(
+                    corridor, "topology_value", 0.0)) -
+                weights["diversity"] * float(getattr(
+                    corridor, "topology_diversity", 0.0)) +
                 weights["recovery"] * float(getattr(
                     corridor, "normalized_recovery_cost",
                     getattr(corridor, "recovery_cost", 0.0))))
@@ -5423,6 +5460,7 @@ class TopologicalCorridorPlanner:
                 "task_cost": float(getattr(corridor, "task_cost", 0.0)),
                 "clearance_cost": float(getattr(corridor, "clearance_cost", 0.0)),
                 "feasibility_cost": float(getattr(corridor, "feasibility_cost", 0.0)),
+                "hard_feasibility_in_score": False,
                 "raw_recovery_cost": float(getattr(corridor, "raw_recovery_cost", 0.0)),
                 "normalized_recovery_cost": float(getattr(
                     corridor, "normalized_recovery_cost", 0.0)),
@@ -5432,6 +5470,15 @@ class TopologicalCorridorPlanner:
                         corridor, "normalized_recovery_cost",
                         getattr(corridor, "recovery_cost", 0.0)))),
                 "recovery_weight": float(weights["recovery"]),
+                "topology_value": float(getattr(corridor, "topology_value", 0.0)),
+                "topology_value_term": float(-weights["topology"] * float(
+                    getattr(corridor, "topology_value", 0.0))),
+                "geometry_tie_breaker": float(getattr(
+                    corridor, "path_length",
+                    getattr(corridor, "length_cost", 0.0))),
+                "execution_cost": float(getattr(corridor, "execution_cost", 0.0)),
+                "execution_cost_term": float(weights["execution"] * float(
+                    getattr(corridor, "execution_cost", 0.0))),
                 "ranking_score": float(score),
                 "task_specific_cost": float(getattr(corridor, "task_specific_cost", 0.0)),
                 "candidate_cost": float(score),

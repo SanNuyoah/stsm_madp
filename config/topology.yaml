@@ -37,6 +37,19 @@ candidate_required_fields:
   - total_score
 decision_score:
   formula: "J=w_risk*risk_cost+w_length*length_cost+w_smooth*smooth_cost+w_task*task_cost+w_execution*execution_cost-w_topology*topology_value-w_diversity*topology_diversity"
+  hard_feasibility_in_score: false
+  stages:
+    - topology_valid
+    - safety_feasible
+    - execution_feasible
+    - ranked
+  deterministic_tie_breaker:
+    - topology_value
+    - geometry_tie_breaker
+    - original_topology_identity
+    - candidate_id
+  recovery_identity: preserve_original_topology_identity
+  recovery_cost_role: ranking_cost_only
 task_config:
   handover:
     task_weight:

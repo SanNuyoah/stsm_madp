@@ -19,13 +19,15 @@ from stsm_madp.manifold_constraint import (
     assert_manifold_mode_consistency,
 )
 from stsm_madp.manifold_constraint_evaluator import ManifoldConstraintEvaluator
-from stsm_madp.mpc import run_mpc_tracking
+from stsm_madp.mpc import ArmMPC, WheelchairMPC, run_mpc_tracking
 from stsm_madp.mpc import build_mpc_constraint_inputs
 from stsm_madp.mpc import audit_reference_safety
 from stsm_madp.mpc import _phase_constraint_diagnostics_payload
 from stsm_madp.mpc import evaluate_executed_trajectory
 from stsm_madp.safety_evaluator import SafetyEvaluator
 from stsm_madp.topology import TopologicalCorridorPlanner
+from stsm_madp.topology_candidate_generator import (
+    candidate_topology_identity, rank_feasible_candidates)
 from stsm_madp.topology_constraint import build_topology_constraint
 from stsm_madp.corridor import (
     CorridorContractError, require_corridor_contract,
@@ -628,3 +630,92 @@ def test_strict_mpc_inputs_reject_reference_without_corridor():
         assert "corridor_id_missing" in str(exc)
     else:
         raise AssertionError("STSM must not synthesize a tube from reference only")
+
+
+def _decision_candidate(candidate_id, score, feasible=True, recovered=False):
+    return SimpleNamespace(
+        candidate_id=candidate_id,
+        topology_class="saddle_channel",
+        critical_point_sequence=["start", "saddle_0", "goal"],
+        centerline=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+        topology_valid=True,
+        manifold_feasible=bool(feasible),
+        candidate_tube_valid=bool(feasible),
+        risk_valid=bool(feasible),
+        execution_feasible=True,
+        candidate_recovered=bool(recovered),
+        recovery_cost=0.2 if recovered else 0.0,
+        total_score=float(score),
+        topology_value=1.0,
+        path_length=1.0)
+
+
+def test_hard_infeasible_candidate_is_never_ranked_even_with_low_score():
+    unsafe = _decision_candidate("unsafe", -100.0, feasible=False)
+    safe = _decision_candidate("safe", 10.0, feasible=True)
+
+    ranked, records = rank_feasible_candidates([unsafe, safe])
+
+    assert [item.candidate_id for item in ranked] == ["safe"]
+    unsafe_record = next(row for row in records if row["candidate_id"] == "unsafe")
+    assert unsafe_record["hard_feasible"] is False
+    assert unsafe_record["ranking_eligible"] is False
+    assert "manifold_infeasible" in unsafe_record["decision_reason"]
+
+
+def test_recovery_preserves_topology_identity_and_not_topology_diversity():
+    original = _decision_candidate("original", 2.0)
+    recovered = _decision_candidate("recovered", 2.2, recovered=True)
+    recovered.original_topology_identity = candidate_topology_identity(original)
+
+    ranked, records = rank_feasible_candidates([recovered, original])
+
+    assert candidate_topology_identity(ranked[0]) == candidate_topology_identity(ranked[1])
+    assert len(set(row["original_topology_identity"] for row in records)) == 1
+
+
+def test_candidate_ranking_is_deterministic_under_input_permutation():
+    first = _decision_candidate("b", 1.0)
+    second = _decision_candidate("a", 1.0)
+
+    left, _ = rank_feasible_candidates([first, second])
+    right, _ = rank_feasible_candidates([second, first])
+
+    assert [item.candidate_id for item in left] == ["a", "b"]
+    assert [item.candidate_id for item in right] == ["a", "b"]
+
+
+def test_arm_predictive_sequence_must_reduce_terminal_task_error():
+    mpc = ArmMPC(
+        n_joints=3, dq_max=1.0, v_cap=1.0, horizon=3,
+        beam_width=12, ddq_max=10.0,
+        joint_lower=[-2.0] * 3, joint_upper=[2.0] * 3)
+
+    dq = mpc.solve(
+        np.eye(3), [1.0, 0.0, 0.0], dq_nom=np.zeros(3),
+        q=np.zeros(3), ee_pos=np.zeros(3), target_pos=[1.0, 0.0, 0.0],
+        dt=0.1, predictive=True,
+        interest_constraints={"enabled": False})
+
+    assert dq[0] > 0.0
+    assert mpc.last_objective_terms["terminal_target_error"] < 1.0
+    assert mpc.last_constraint_violation["task_progress"] >= 0
+
+
+def test_wheelchair_heading_recovery_applies_forward_creep_now():
+    mpc = WheelchairMPC(horizon=12, dt=0.1, beam_width=16)
+
+    v, w = mpc.solve(
+        [0.0, 0.0, np.pi],
+        [[0.0, 0.0], [0.5, 0.0], [1.0, 0.0]],
+        ZeroField(), u_prev=[0.0, 0.0], goal=[1.0, 0.0], predictive=True)
+
+    assert abs(w) > 0.0
+    assert v >= 0.02
+    assert mpc.last_alignment_translation > 0.0
+
+
+def test_baseline_failure_stage_is_execution_not_refinement():
+    with open(os.path.join(ROOT, "nodes", "metrics_node.py"), "r") as handle:
+        source = handle.read()
+    assert 'if variant_name == "baseline":\n                failure_stage = "execution"' in source

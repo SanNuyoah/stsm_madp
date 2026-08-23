@@ -4201,7 +4201,11 @@ class ArmMPC:
             "joint_position": 0, "joint_velocity": 0,
             "joint_acceleration": 0, "ee_speed": 0,
             "trajectory_tube": 0, "interest_point": 0, "forbidden": 0,
+            "task_progress": 0,
         }
+        initial_target_error = float(np.linalg.norm(ee0[:3] - target[:3]))
+        max_task_regression = max(0.0, float(cfg.get(
+            "max_task_regression", 1e-6)))
         empty = {"tracking": 0.0, "task": 0.0, "risk": 0.0,
                  "tube": 0.0, "control": 0.0, "smooth": 0.0}
         beam = [{"cost": 0.0, "q": q0.copy(), "ee": ee0.copy(),
@@ -4252,13 +4256,21 @@ class ArmMPC:
                             violations["interest_point"] += 1
                             self.last_reject_interest_phi_count += 1
                             continue
-                        risk_cost = weights["risk"] * phi
+                        normalized_risk = phi / max(interest_rho, 1e-6)
+                        risk_cost = (
+                            weights["risk"] * normalized_risk ** 2 /
+                            float(self.N))
                     fraction = float(k + 1) / float(self.N)
                     reference = ee0 + fraction * (target - ee0)
                     tracking = weights["tracking"] * float(
                         np.sum((ee_next - reference) ** 2))
                     task_cost = weights["task"] * float(
                         np.sum((ee_next - target) ** 2)) / float(self.N)
+                    if (k == self.N - 1 and initial_target_error > 1e-6 and
+                            float(np.linalg.norm(ee_next[:3] - target[:3])) >
+                            initial_target_error + max_task_regression):
+                        violations["task_progress"] += 1
+                        continue
                     control = self.damping * float(np.dot(cand, cand))
                     smooth = weights["smooth"] * self.lam_nominal * float(
                         np.sum((cand - previous) ** 2))
@@ -4298,6 +4310,12 @@ class ArmMPC:
         self.last_predicted_controls = [x.tolist() for x in controls]
         self.last_predicted_ee_states = [x.tolist() for x in best["ees"]]
         self.last_objective_terms = dict(best["parts"])
+        self.last_objective_terms["initial_target_error"] = float(
+            initial_target_error)
+        self.last_objective_terms["terminal_target_error"] = float(
+            np.linalg.norm(np.asarray(best["ee"], float)[:3] - target[:3]))
+        self.last_objective_terms["maximum_task_regression"] = float(
+            max_task_regression)
         self.last_objective_terms["phase"] = phase_name
         self.last_objective_terms["phase_weights"] = weights
         self.last_constraint_violation = violations
@@ -4547,15 +4565,7 @@ class WheelchairMPC:
         self.last_control_sequence_varies = False
         self.last_sequence_progress = 0.0
         self.last_heading_improvement = 0.0
-        self.last_terminal_adp_cost = 0.0
-        self.last_total_cost = 0.0
-        self.last_social_cost = 0.0
-        self.last_tube_cost = 0.0
-        self.last_track_cost = 0.0
-        self.last_control_cost = 0.0
-        self.last_reject_forbidden_count = 0
-        self.last_reject_interest_phi_count = 0
-        self.first_predicted_forbidden_reason = ""
+        self.last_alignment_translation = 0.0
 
     def solve(self, state, ref_points, field, corridor=None, u_prev=None,
               critic=None, feature_builder=None, lambda_adp_terminal=0.0,
@@ -4574,6 +4584,7 @@ class WheelchairMPC:
         self.last_control_sequence_varies = False
         self.last_sequence_progress = 0.0
         self.last_heading_improvement = 0.0
+        self.last_alignment_translation = 0.0
 
         if ref.size == 0:
             self.last_solver_status = "safe_stop: empty_ref"
@@ -4846,6 +4857,8 @@ class WheelchairMPC:
             ref_progress_reward = self.lam_ref_progress * max(0.0, ref_progress)
             speed_reward = self.lam_speed * sum(
                 max(0.0, float(u[0])) for u in controls) * self.dt
+            sequence_translation = sum(
+                max(0.0, float(u[0])) for u in controls) * self.dt
             terminal_goal_cost = self.lam_goal_terminal * float(distN ** 2)
             if dist0 < self.near_goal_radius:
                 terminal_goal_cost += self.near_goal_goal_weight * float(distN ** 2)
@@ -4874,20 +4887,29 @@ class WheelchairMPC:
                 "progress_reward": -progress_reward,
                 "reference_progress_reward": -ref_progress_reward,
                 "speed_reward": -speed_reward,
+                "alignment_translation": float(sequence_translation),
             })
             records.append((total, progress, heading_improvement, distN,
+                            sequence_translation,
                             item, terminal_adp, objective))
 
+        min_alignment_translation = max(0.005, self.min_progress_per_solve)
+        min_alignment_first_v = min(
+            max(0.02, self.final_creep_v), self.a_max * self.dt)
         valid = [
             item for item in records
             if (item[1] >= self.min_progress_per_solve or dist0 < 0.12 or
-                item[2] >= self.min_heading_improvement)]
+                (item[2] >= self.min_heading_improvement and
+                 item[4] >= min_alignment_translation and
+                 float(item[5]["controls"][0][0]) >=
+                 min_alignment_first_v))]
         if not valid:
             self.last_solver_status = "safe_stop: insufficient_progress"
             self.last_constraint_violation = violation_counts
             return 0.0, 0.0
         best = min(valid, key=lambda value: value[0])
-        best_cost, progress, heading_improvement, _distN, best_item, terminal_adp, objective = best
+        (best_cost, progress, heading_improvement, _distN,
+         alignment_translation, best_item, terminal_adp, objective) = best
         controls = list(best_item["controls"])
         states = list(best_item["states"])
         best_u = controls[0]
@@ -4908,6 +4930,7 @@ class WheelchairMPC:
             not np.allclose(controls[0], item) for item in controls[1:]))
         self.last_sequence_progress = float(progress)
         self.last_heading_improvement = float(heading_improvement)
+        self.last_alignment_translation = float(alignment_translation)
         if self.last_final_approach_used and has_adp_terminal:
             self.last_solver_status = "predictive_beam_adp_terminal_final"
         elif self.last_final_approach_used:

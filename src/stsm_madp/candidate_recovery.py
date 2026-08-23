@@ -8,6 +8,7 @@ import numpy as np
 
 from stsm_madp.safety_evaluator import SafetyEvaluator
 from stsm_madp.topology_candidate_generator import (
+    candidate_topology_identity,
     evaluate_candidate_manifold_feasibility,
     generate_manifold_aware_corridor,
 )
@@ -205,6 +206,8 @@ def recover_candidate_feasibility(candidates, manifold_constraint,
     diagnostics = []
     for candidate in list(candidates or []):
         route = dict(candidate or {})
+        topology_identity = candidate_topology_identity(route)
+        route["original_topology_identity"] = topology_identity
         centerline = _as_points(
             route.get("centerline") or route.get("waypoints") or
             route.get("refined_waypoints") or [])
@@ -256,6 +259,7 @@ def recover_candidate_feasibility(candidates, manifold_constraint,
             best_status.get("trajectory_min_clearance",
                             best_status.get("min_clearance", 0.0)), 0.0)
         best_route["candidate_recovered"] = True
+        best_route["original_topology_identity"] = topology_identity
         best_route["route_source"] = str(route.get(
             "route_source", "morse_topology"))
         best_route["candidate_source"] = "morse_recovered"
@@ -431,6 +435,7 @@ class ArmCandidateRecovery(object):
 
     def recover(self, candidate, manifold_constraint, risk_field=None):
         route = copy.deepcopy(candidate if isinstance(candidate, dict) else {})
+        route["original_topology_identity"] = candidate_topology_identity(route)
         centerline = np.zeros((0, 3), float)
         for key in ("centerline", "waypoints", "refined_waypoints", "path"):
             centerline = _as_points(_candidate_value(candidate, key, None))
@@ -466,6 +471,8 @@ class ArmCandidateRecovery(object):
             "candidate_risk", _trajectory_mean_risk(
                 risk_field, recovered.get("centerline", []))))
         recovered["manifold_feasibility"] = dict(after)
+        recovered["original_topology_identity"] = str(
+            route.get("original_topology_identity", ""))
         recovered["manifold_feasible"] = bool(after.get("valid", False))
         recovered["candidate_tube_valid"] = bool(after.get("tube_valid", False))
         recovered["tube_valid"] = bool(after.get("tube_valid", False))

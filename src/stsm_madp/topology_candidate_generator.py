@@ -16,6 +16,173 @@ def _finite_float(value, default=None):
     return value
 
 
+def _candidate_value(candidate, name, default=None):
+    if isinstance(candidate, dict):
+        return candidate.get(name, default)
+    return getattr(candidate, name, default)
+
+
+def _set_candidate_value(candidate, name, value):
+    if isinstance(candidate, dict):
+        candidate[name] = value
+    else:
+        setattr(candidate, name, value)
+
+
+def candidate_topology_identity(candidate):
+    """Stable Morse identity shared by original and recovered geometry."""
+    explicit = str(_candidate_value(
+        candidate, "original_topology_identity", "") or "")
+    if explicit:
+        return explicit
+    topology_class = str(_candidate_value(
+        candidate, "topology_class",
+        _candidate_value(candidate, "topology_route_class", "")) or "")
+    sequence = list(_candidate_value(
+        candidate, "critical_point_sequence",
+        _candidate_value(candidate, "node_sequence",
+                         _candidate_value(candidate, "topology_nodes", []))) or [])
+    node_ids = []
+    for item in sequence:
+        if isinstance(item, dict):
+            node_ids.append(str(item.get("id", item.get("node_id", ""))))
+        else:
+            node_ids.append(str(item))
+    node_ids = [item for item in node_ids if item]
+    source_graph_id = str(_candidate_value(candidate, "source_graph_id", "") or "")
+    identity = "|".join((source_graph_id, topology_class, ">".join(node_ids)))
+    if identity.strip("|"):
+        return identity
+    return str(_candidate_value(
+        candidate, "candidate_id",
+        _candidate_value(candidate, "corridor_id", "")) or "")
+
+
+def candidate_decision_record(candidate):
+    """Return the explicit P0-4 hard-feasibility decision chain."""
+    topology_valid = bool(_candidate_value(candidate, "topology_valid", True))
+    geometry_valid = bool(len(_candidate_points(candidate)) >= 2)
+    manifold_feasible = bool(_candidate_value(
+        candidate, "manifold_feasible",
+        _candidate_value(candidate, "manifold_valid", True)))
+    tube_valid = bool(_candidate_value(
+        candidate, "candidate_tube_valid",
+        _candidate_value(candidate, "tube_valid", True)))
+    risk_valid = bool(_candidate_value(candidate, "risk_valid", True))
+    safety_feasible = bool(manifold_feasible and tube_valid and risk_valid)
+    execution_feasible = bool(_candidate_value(
+        candidate, "execution_feasible", geometry_valid))
+    decision_robot_type = str(_candidate_value(
+        candidate, "decision_robot_type", "") or "").lower()
+    if (decision_robot_type == "arm" and
+            _candidate_value(candidate, "ik_valid", None) is not None):
+        execution_feasible = bool(
+            execution_feasible and _candidate_value(candidate, "ik_valid", False))
+    if (decision_robot_type == "arm" and
+            _candidate_value(candidate, "link_collision_valid", None) is not None):
+        execution_feasible = bool(
+            execution_feasible and
+            _candidate_value(candidate, "link_collision_valid", False))
+    hard_feasible = bool(
+        topology_valid and safety_feasible and execution_feasible)
+    reasons = []
+    if not topology_valid:
+        reasons.append("topology_invalid")
+    if not geometry_valid:
+        reasons.append("geometry_invalid")
+    if not manifold_feasible:
+        reasons.append("manifold_infeasible")
+    if not tube_valid:
+        reasons.append("tube_infeasible")
+    if not risk_valid:
+        reasons.append("risk_infeasible")
+    if not execution_feasible:
+        reasons.append("execution_infeasible")
+    stage = (
+        "topology_valid" if not topology_valid else
+        "safety_feasible" if not safety_feasible else
+        "execution_feasible" if not execution_feasible else
+        "ranked")
+    return {
+        "candidate_id": str(_candidate_value(
+            candidate, "candidate_id",
+            _candidate_value(candidate, "corridor_id", "")) or ""),
+        "original_topology_identity": candidate_topology_identity(candidate),
+        "topology_class": str(_candidate_value(
+            candidate, "topology_class",
+            _candidate_value(candidate, "topology_route_class", "")) or ""),
+        "topology_valid": topology_valid,
+        "geometry_valid": geometry_valid,
+        "safety_feasible": safety_feasible,
+        "execution_feasible": execution_feasible,
+        "hard_feasible": hard_feasible,
+        "decision_stage": stage,
+        "decision_reason": "eligible" if hard_feasible else ",".join(reasons),
+        "recovery_used": bool(_candidate_value(
+            candidate, "candidate_recovered",
+            _candidate_value(candidate, "recovery_used", False))),
+        "recovery_cost": float(_finite_float(_candidate_value(
+            candidate, "normalized_recovery_cost",
+            _candidate_value(candidate, "recovery_cost", 0.0)), 0.0)),
+    }
+
+
+def rank_feasible_candidates(candidates):
+    """Hard-filter then deterministically rank candidates by explained cost."""
+    candidates = list(candidates or [])
+    eligible = []
+    records = []
+    for candidate in candidates:
+        record = candidate_decision_record(candidate)
+        score = float(_finite_float(_candidate_value(
+            candidate, "total_score",
+            _candidate_value(candidate, "cost", float("inf"))), float("inf")))
+        topology_value = float(_finite_float(
+            _candidate_value(candidate, "topology_value", 0.0), 0.0))
+        geometry_tie_breaker = float(_finite_float(
+            _candidate_value(candidate, "path_length",
+                             _candidate_value(candidate, "length_cost", 0.0)), 0.0))
+        record.update({
+            "ranking_score": score,
+            "topology_value": topology_value,
+            "geometry_tie_breaker": geometry_tie_breaker,
+            "ranking_eligible": bool(record["hard_feasible"]),
+            "ranking_decomposition": {
+                "comparison_cost": score,
+                "topology_value": topology_value,
+                "geometry_tie_breaker": geometry_tie_breaker,
+                "recovery_cost": record["recovery_cost"],
+            },
+        })
+        records.append(record)
+        if record["hard_feasible"]:
+            eligible.append((candidate, record))
+        else:
+            _set_candidate_value(candidate, "hard_feasible", False)
+            _set_candidate_value(candidate, "decision_stage", record["decision_stage"])
+            _set_candidate_value(candidate, "decision_reason", record["decision_reason"])
+    eligible.sort(key=lambda item: (
+        float(item[1]["ranking_score"]),
+        -float(item[1]["topology_value"]),
+        float(item[1]["geometry_tie_breaker"]),
+        str(item[1]["original_topology_identity"]),
+        str(item[1]["candidate_id"])))
+    for rank, (candidate, record) in enumerate(eligible):
+        record["rank"] = int(rank)
+        record["selected"] = bool(rank == 0)
+        record["decision_reason"] = (
+            "minimum_explained_cost" if rank == 0 else
+            "higher_explained_cost_or_tie_breaker")
+        _set_candidate_value(candidate, "hard_feasible", True)
+        _set_candidate_value(candidate, "decision_stage", "ranked")
+        _set_candidate_value(candidate, "decision_reason", record["decision_reason"])
+        _set_candidate_value(candidate, "original_topology_identity",
+                             record["original_topology_identity"])
+        _set_candidate_value(candidate, "ranking_decomposition",
+                             dict(record["ranking_decomposition"]))
+    return [item[0] for item in eligible], records
+
+
 def _nearest_grid_sample(safe_manifold, point):
     grid = safe_manifold or {}
     xs = grid.get("xs")

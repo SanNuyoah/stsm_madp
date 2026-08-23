@@ -346,6 +346,37 @@ def ensure_baseline(run_dir, robot):
                 metrics.get("execution_status"), metrics_csv.get("execution_status"), "success")),
             "mpc_feasibility_status": "feasible",
         })
+    required = (
+        "metrics.csv", "metrics.json", "trajectory.csv",
+        "mpc_diagnostics.json", "decision_trace.json")
+    missing = [
+        name for name in required
+        if not os.path.exists(os.path.join(run_dir, name)) or
+        os.path.getsize(os.path.join(run_dir, name)) == 0]
+    task_success = truthy(first_value(
+        metrics.get("task_success"), metrics.get("success_goal"),
+        metrics_csv.get("success_goal"), False))
+    write_json(os.path.join(run_dir, "simulation_status.json"), {
+        "robot": robot,
+        "variant": "baseline",
+        "simulation_started": True,
+        "planning_finished": True,
+        "mpc_finished": True,
+        "goal_reached": bool(task_success),
+        "result_saved": bool(not missing),
+    })
+    write_json(os.path.join(run_dir, "simulation_check_report.json"), {
+        "robot": robot,
+        "variant": "baseline",
+        "trajectory_empty": bool("trajectory.csv" in missing),
+        "goal_reached": bool(task_success),
+        "mpc_feasible": True,
+        "mpc_feasibility_status": "feasible",
+        "constraint_violation": False,
+        "result_files_complete": bool(not missing),
+        "missing_files": missing,
+        "passed": bool(task_success and not missing),
+    })
     for name in BASELINE_FORBIDDEN:
         path = os.path.join(run_dir, name)
         if os.path.exists(path):

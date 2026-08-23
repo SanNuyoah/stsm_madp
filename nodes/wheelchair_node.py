@@ -130,6 +130,10 @@ class WheelchairNode:
         self.progress_eps = float(rospy.get_param("~progress_eps", 0.01))
         self.replan_tube_margin = float(rospy.get_param(
             "~replan_tube_margin", 0.08))
+        self.replan_min_budget_s = float(rospy.get_param(
+            "~replan_min_budget_s", 15.0))
+        self.replan_budget_factor = float(rospy.get_param(
+            "~replan_budget_factor", 1.25))
         self.near_goal_radius = float(rospy.get_param("~near_goal_radius", 0.50))
         self.near_goal_adp_scale = float(rospy.get_param(
             "~near_goal_adp_scale", 0.20))
@@ -232,6 +236,8 @@ class WheelchairNode:
         self.execution_corridor = None
         self.last_valid_topology_debug = {}
         self.runtime_replan_fallback_count = 0
+        self.last_corridor_plan_duration_s = 0.0
+        self.replan_deadline_skip_count = 0
         self.decision_trace_out = rospy.get_param("~decision_trace_out", "")
         self.mpc_reference_out = rospy.get_param("~mpc_reference_out", "")
         self.mpc_diagnostics_out = rospy.get_param("~mpc_diagnostics_out", "")
@@ -1304,6 +1310,7 @@ class WheelchairNode:
                       "topology" if used_topology else "fallback")
         rospy.loginfo("[wc] corridor planning time: %.3fs",
                       time.time() - plan_t0)
+        self.last_corridor_plan_duration_s = float(time.time() - plan_t0)
         return selected
 
     def _publish_topology_info(self, used_topology, fallback_used,
@@ -2778,7 +2785,8 @@ class WheelchairNode:
             corr.corridor_id, corr.morse_node_ids[0], float(max_phi))
         return corr
 
-    def _maybe_replan_corridor(self, corridor, now, reason, force=False):
+    def _maybe_replan_corridor(self, corridor, now, reason, force=False,
+                               deadline=None):
         is_topology = self._corridor_is_topological(corridor)
         if is_topology and not force:
             elapsed = (now - self.last_topology_replan_time).to_sec()
@@ -2788,6 +2796,19 @@ class WheelchairNode:
                     "[wc][topology] skip replan reason=%s elapsed=%.1fs min=%.1fs; keep %s",
                     reason, elapsed, self.topology_replan_min_interval,
                     getattr(corridor, "label", ""))
+                return corridor, False
+        if deadline is not None:
+            remaining = float((deadline - now).to_sec())
+            required = max(
+                float(self.replan_min_budget_s),
+                float(self.last_corridor_plan_duration_s) *
+                max(1.0, float(self.replan_budget_factor)))
+            if remaining <= required:
+                self.replan_deadline_skip_count += 1
+                rospy.logwarn(
+                    "[wc] skip blocking replan reason=%s remaining=%.1fs required=%.1fs; keep %s",
+                    reason, remaining, required,
+                    self._corridor_label(corridor, ""))
                 return corridor, False
         try:
             rospy.loginfo("[wc] replanning corridor reason=%s current=%s",
@@ -2811,6 +2832,8 @@ class WheelchairNode:
             if self.last_valid_topology_debug:
                 self.manifold.last_topology_debug = dict(
                     self.last_valid_topology_debug)
+                self._publish_topology_info(
+                    self._corridor_is_topological(corridor), False)
             if (self.experiment_mode == "paper" and not self.baseline and
                     not self.topology_fallback_enabled):
                 rospy.logerr(
@@ -4337,6 +4360,9 @@ class WheelchairNode:
         rate = rospy.Rate(10)
         near_goal_since = None
         run_start = rospy.Time.now()
+        run_deadline = (
+            run_start + rospy.Duration(self.max_runtime_s)
+            if self.max_runtime_s > 0.0 else None)
         best_dist = float("inf")
         last_progress_time = run_start
         last_replan_time = run_start
@@ -4406,7 +4432,8 @@ class WheelchairNode:
                 speed = float(np.linalg.norm(self.world_vel[:2]))
                 if not self.baseline:
                     fallback, did_replan = self._maybe_replan_corridor(
-                        corridor, now, "no_progress_timeout", force=True)
+                        corridor, now, "no_progress_timeout", force=True,
+                        deadline=run_deadline)
                     if fallback is not None and did_replan:
                         corridor = fallback
                         last_progress_time = now
@@ -4485,7 +4512,8 @@ class WheelchairNode:
                             bool(interest_eval.get("forbidden_hit", False)) or
                             ip_risk >= float(self.footprint_gate.rho_warn))
                     corridor, did_replan = self._maybe_replan_corridor(
-                        corridor, now, replan_reason, force=emergency_replan)
+                        corridor, now, replan_reason, force=emergency_replan,
+                        deadline=run_deadline)
                     last_replan_time = now
                     last_replan_dist = dist
                     replan_progress_time = now
@@ -4567,6 +4595,12 @@ class WheelchairNode:
                 "sequence_progress": float(self.mpc.last_sequence_progress),
                 "heading_improvement": float(
                     self.mpc.last_heading_improvement),
+                "alignment_translation": float(
+                    self.mpc.last_alignment_translation),
+                "replan_deadline_skip_count": int(
+                    self.replan_deadline_skip_count),
+                "last_corridor_plan_duration_s": float(
+                    self.last_corridor_plan_duration_s),
                 "first_control": [float(v), float(w)],
             }
             self.mpc_runtime_records.append(runtime_record)
