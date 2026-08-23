@@ -4769,6 +4769,7 @@ class WheelchairMPC:
             "manifold": 0,
             "interest_point": 0,
             "forbidden": 0,
+            "insufficient_progress": 0,
         }
         empty_parts = {
             "tracking": 0.0,
@@ -4957,19 +4958,37 @@ class WheelchairMPC:
                             item, terminal_adp, objective))
 
         min_alignment_translation = max(0.005, self.min_progress_per_solve)
-        min_alignment_first_v = min(
-            max(0.02, self.final_creep_v), self.a_max * self.dt)
+        # A liveness gate needs a positive command now, but must not require
+        # the exact maximum acceleration step.  The latter rejects otherwise
+        # safe sequences under tiny state or floating-point differences.
+        min_alignment_first_v = min(0.02, self.a_max * self.dt)
         valid = [
             item for item in records
             if (dist0 < 0.12 or
-                (float(item[5]["controls"][0][0]) >=
+                (float(item[5]["controls"][0][0]) + 1e-9 >=
                  min_alignment_first_v and
-                 (item[1] >= self.min_progress_per_solve or
-                  (item[2] >= self.min_heading_improvement and
-                   item[4] >= min_alignment_translation))))]
+                 (item[1] + 1e-9 >= self.min_progress_per_solve or
+                  (item[2] + 1e-9 >= self.min_heading_improvement and
+                   item[4] + 1e-9 >= min_alignment_translation))))]
         if not valid:
             self.last_solver_status = "safe_stop: insufficient_progress"
+            violation_counts["insufficient_progress"] = int(len(records))
             self.last_constraint_violation = violation_counts
+            self.last_objective_terms = {
+                "required_first_speed": float(min_alignment_first_v),
+                "required_sequence_progress": float(
+                    self.min_progress_per_solve),
+                "required_heading_improvement": float(
+                    self.min_heading_improvement),
+                "required_alignment_translation": float(
+                    min_alignment_translation),
+                "best_sequence_progress": float(max(
+                    [item[1] for item in records] or [0.0])),
+                "best_heading_improvement": float(max(
+                    [item[2] for item in records] or [0.0])),
+                "best_first_speed": float(max(
+                    [item[5]["controls"][0][0] for item in records] or [0.0])),
+            }
             return 0.0, 0.0
         best = min(valid, key=lambda value: value[0])
         (best_cost, progress, heading_improvement, _distN,
@@ -4989,6 +5008,15 @@ class WheelchairMPC:
         self.last_predicted_states = [
             np.asarray(x, float).tolist() for x in states]
         self.last_objective_terms = dict(objective)
+        self.last_objective_terms["required_first_speed"] = float(
+            min_alignment_first_v)
+        self.last_objective_terms["required_sequence_progress"] = float(
+            self.min_progress_per_solve)
+        self.last_objective_terms["sequence_progress"] = float(progress)
+        self.last_objective_terms["heading_improvement"] = float(
+            heading_improvement)
+        self.last_objective_terms["alignment_translation"] = float(
+            alignment_translation)
         self.last_constraint_violation = violation_counts
         self.last_control_sequence_varies = bool(any(
             not np.allclose(controls[0], item) for item in controls[1:]))

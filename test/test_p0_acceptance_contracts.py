@@ -804,6 +804,22 @@ def test_wheelchair_heading_recovery_applies_forward_creep_now():
     assert mpc.last_alignment_translation > 0.0
 
 
+def test_wheelchair_progress_gate_does_not_require_max_acceleration_step():
+    mpc = WheelchairMPC(horizon=3, dt=0.2, a_max=0.5, beam_width=4)
+    mpc._sequence_step_controls = lambda previous, warm_u=None, goal_u=None: [
+        np.array([0.05, 0.0], float)]
+
+    v, w = mpc.solve(
+        [0.0, 0.0, 0.0],
+        [[0.1, 0.0], [0.2, 0.0], [0.3, 0.0]],
+        ZeroField(), goal=[0.3, 0.0], predictive=True)
+
+    assert v == 0.05
+    assert w == 0.0
+    assert mpc.last_solver_status.startswith("predictive_beam")
+    assert mpc.last_objective_terms["required_first_speed"] == 0.02
+
+
 def test_runtime_sources_preserve_p0_execution_contracts():
     with open(os.path.join(ROOT, "nodes", "wheelchair_node.py"), "r") as handle:
         wheelchair_source = handle.read()
