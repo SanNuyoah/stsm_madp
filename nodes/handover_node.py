@@ -2457,7 +2457,10 @@ class HandoverNode:
                                 q=q,
                                 corridor=(
                                     corridor if not handover_protect else None),
-                                predictive=bool(not self.baseline),
+                                predictive=bool(
+                                    not self.baseline and
+                                    corridor is not None and
+                                    not handover_protect),
                                 kinematics_source="real",
                                 phase_cost_weights=self.mpc_phase_cost_weights)
             if (not self.baseline and str(
