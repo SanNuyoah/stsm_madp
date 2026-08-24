@@ -189,6 +189,12 @@ class WheelchairNode:
         self.final_forward_gain = float(rospy.get_param(
             "~final_forward_gain", 0.75))
         self.stsm_w_max = float(rospy.get_param("~stsm_w_max", 0.95))
+        self.stsm_progress_floor_v = float(rospy.get_param(
+            "~stsm_progress_floor_v", 0.12))
+        self.stsm_progress_floor_min_gate_scale = float(rospy.get_param(
+            "~stsm_progress_floor_min_gate_scale", 0.85))
+        self.stsm_progress_floor_min_adp_scale = float(rospy.get_param(
+            "~stsm_progress_floor_min_adp_scale", 0.85))
         self.final_w_max = float(rospy.get_param("~final_w_max", 0.85))
         self.w_slew_limit = float(rospy.get_param("~w_slew_limit", 1.00))
         self.lam_heading = float(rospy.get_param("~lam_heading", 2.5))
@@ -4134,6 +4140,47 @@ class WheelchairNode:
         self.mpc.lam_tube = self.mpc_base_lam_tube * (
             1.0 + self.corridor_tube_gain * difficulty)
 
+    def _stsm_reference_heading_error(self, ref):
+        if self.state is None or ref is None or len(ref) == 0:
+            return 0.0
+        look_idx = min(3, int(len(ref) - 1))
+        target = np.asarray(ref[look_idx], float)[:2]
+        desired = np.arctan2(target[1] - self.state[1],
+                             target[0] - self.state[0])
+        return float(np.arctan2(np.sin(desired - self.state[2]),
+                                np.cos(desired - self.state[2])))
+
+    def _apply_stsm_progress_floor(self, corridor, ref, v, w, dist, gate,
+                                   adp_scale, interest_eval=None):
+        """Preserve live execution of an already-selected topology corridor."""
+        floor = max(0.0, float(self.stsm_progress_floor_v))
+        if (self.baseline or floor <= 0.0 or gate.stop or
+                not self._corridor_is_topological(corridor)):
+            return float(v), float(w), False, 0.0
+        if dist <= max(self.final_approach_entry_radius,
+                       self.execution_stop_tolerance):
+            return float(v), float(w), False, 0.0
+        if (float(gate.scale) < self.stsm_progress_floor_min_gate_scale or
+                float(adp_scale) < self.stsm_progress_floor_min_adp_scale):
+            return float(v), float(w), False, 0.0
+        risk = float(getattr(gate, "risk", 0.0))
+        if interest_eval is not None:
+            risk = max(risk, float(interest_eval.get(
+                "risk_gate", interest_eval.get("phi_max", 0.0))))
+        if risk >= min(float(self.gate.rho_warn),
+                       float(self.footprint_gate.rho_warn)):
+            return float(v), float(w), False, 0.0
+        if float(v) >= 0.95 * floor:
+            return float(v), float(w), False, 0.0
+        heading_error = abs(self._stsm_reference_heading_error(ref))
+        alignment = max(0.0, float(np.cos(heading_error)))
+        # During large turns still keep a small crawl, but scale the floor by
+        # reference alignment so the command remains tied to the selected tube.
+        aligned_floor = floor * max(0.55, alignment)
+        capped_floor = min(aligned_floor, 0.6 * float(self.mpc.v_max))
+        v_out = max(float(v), float(capped_floor))
+        return v_out, float(w), bool(v_out > float(v) + 1e-9), float(capped_floor)
+
     def _publish_metrics(self):
         z = np.array([self.state[0], self.state[1], 0.0])
         comp = self.field.risk_components(z)
@@ -4744,6 +4791,15 @@ class WheelchairNode:
             if (final_override_active and not gate.stop and
                     dist > self.goal_tolerance and v > 0.0):
                 v = max(v, 0.8 * self.final_creep_v)
+            v, w, progress_floor_used, progress_floor_value = (
+                self._apply_stsm_progress_floor(
+                    corridor, ref, v, w, dist, gate, adp_scale,
+                    interest_eval=interest_eval))
+            runtime_record["published_control"] = [float(v), float(w)]
+            runtime_record["stsm_progress_floor_used"] = bool(
+                progress_floor_used)
+            runtime_record["stsm_progress_floor_value"] = float(
+                progress_floor_value)
             self._record_baseline_mpc_output(
                 corridor, ref, v_mpc_raw, w_mpc_raw, v, w, gate, adp_scale,
                 topology_constraint_for_mpc)

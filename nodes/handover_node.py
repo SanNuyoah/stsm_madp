@@ -2313,7 +2313,17 @@ class HandoverNode:
                                     "offsets": self._arm_interest_offsets(ee),
                                     "labels": ["ee", "wrist", "elbow", "object"],
                                     "rho": self.arm_interest_gate.rho_stop,
-                                    "task_progress_tolerance": float(local_tol),
+                                    # Waypoint reach tolerance is deliberately
+                                    # looser than the predictive MPC progress
+                                    # tolerance.  Passing local_tol here lets
+                                    # the beam objective treat a still-unreached
+                                    # waypoint as "close enough" and repeatedly
+                                    # choose hold_current, which appeared
+                                    # remotely as dq_adp_norm == 0 with a
+                                    # nonzero v_des_raw_norm.
+                                    "task_progress_tolerance": float(
+                                        min(local_tol,
+                                            self.mpc.task_progress_tolerance)),
                                 },
                                 handover_protect=handover_protect,
                                 handover_target=(
