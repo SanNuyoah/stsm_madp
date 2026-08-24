@@ -684,15 +684,59 @@ class WheelchairNode:
 
     def _direct_baseline_corridor(self, start):
         label = "baseline_%s" % self.baseline_type
-        wps = np.array([[start[0], start[1], 0.0],
-                        [self.goal[0], self.goal[1], 0.0]])
-        corr = Corridor(wps, radius=0.18, label=label)
+        start3 = np.array([start[0], start[1], 0.0], float)
+        goal3 = np.array([self.goal[0], self.goal[1], 0.0], float)
+        direct = np.array([start3, goal3], float)
+        corr = Corridor(direct, radius=0.18, label=label)
+        direct_stats = self._corridor_footprint_stats(corr)
+        stats = direct_stats
+        direct_safe = (
+            not bool(direct_stats.get("forbidden", False)) and
+            float(direct_stats.get("max_footprint_phi", 0.0)) <=
+            float(self.footprint_gate.rho_warn))
+        if not direct_safe:
+            wps, info = self._baseline_grid_astar(
+                start3, goal3, radius=0.45, avoid_direct=False)
+            if wps is not None:
+                corr = Corridor(wps, radius=0.45, label=label)
+                stats = self._corridor_footprint_stats(corr)
+                corr.baseline_planner = "risk_grid_astar_safe_direct"
+                corr.planner_source = "risk_grid_astar_safe_direct"
+                corr.baseline_grid_resolution = float(info.get(
+                    "grid_resolution", self.baseline_grid_resolution))
+                corr.baseline_astar_expanded = int(info.get("expanded", 0))
+                rospy.logwarn(
+                    "[wc][baseline] direct line unsafe (%s max_fp=%.3f); "
+                    "using risk_grid_astar_safe_direct points=%d max_fp=%.3f",
+                    str(direct_stats.get("forbidden_reason", "risk")),
+                    float(direct_stats.get("max_footprint_phi", 0.0)),
+                    len(wps), float(stats.get("max_footprint_phi", 0.0)))
+            else:
+                rospy.logwarn(
+                    "[wc][baseline] direct line unsafe and A* repair failed: %s",
+                    str(info.get("reason", "unknown")))
+                corr.baseline_planner = "direct_connection"
+                corr.planner_source = "direct_connection"
+        else:
+            corr.baseline_planner = "direct_connection"
+            corr.planner_source = "direct_connection"
         corr.base_cost = 0.0
         corr.cost = 0.0
         corr.corridor_id = corr.label
         corr.source = "baseline_direct"
-        corr.baseline_planner = "direct_connection"
-        corr.planner_source = "direct_connection"
+        corr.refined_waypoints = np.asarray(corr.waypoints, float)
+        corr.path_length = self._path_length(corr.waypoints)
+        corr.mean_phi_on_path = float(stats.get("mean_center_phi", 0.0))
+        corr.max_phi_on_path = float(stats.get("max_center_phi", 0.0))
+        corr.mean_footprint_phi_on_path = float(
+            stats.get("mean_footprint_phi", 0.0))
+        corr.max_footprint_phi_on_path = float(
+            stats.get("max_footprint_phi", 0.0))
+        corr.forbidden_hits = int(bool(stats.get("forbidden", False)))
+        corr.footprint_checked = True
+        corr.baseline_inputs_complete = True
+        corr.baseline_uses_stsm = 0
+        corr.morse_induced = False
         return corr
 
     def _corridor_lateral_deviation(self, corridor):

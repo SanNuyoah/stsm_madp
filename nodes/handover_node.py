@@ -1613,7 +1613,19 @@ class HandoverNode:
     def _morse_recovery_corridor(self, start, goal):
         dbg = getattr(self.manifold, "last_topology_debug", {}) or {}
         nodes = list(dbg.get("nodes", []))
-        saddles = [n for n in nodes if getattr(n, "kind", "") == "saddle"]
+        saddles = [
+            n for n in nodes
+            if (str(n.get("kind", "")) if isinstance(n, dict)
+                else str(getattr(n, "kind", ""))) == "saddle"]
+        if not saddles:
+            critical = dbg.get("critical", {}) or {}
+            saddles = list(critical.get("saddles", []) or [])
+        if not saddles:
+            chain = dbg.get("critical_chain", {}) or {}
+            saddles = [
+                item for item in list(chain.get("saddles", []) or [])
+                if str(item.get("status", "")) in (
+                    "kept", "selected", "candidate", "filtered")]
         if not saddles:
             return None
         start = np.asarray(start, float)[:3]
@@ -1621,8 +1633,18 @@ class HandoverNode:
         axis = goal - start
         axis_len2 = float(np.dot(axis, axis))
 
+        def saddle_point(node):
+            if isinstance(node, dict):
+                return np.asarray(node.get("point", node.get("world", start)), float)[:3]
+            return np.asarray(getattr(node, "point", start), float)[:3]
+
+        def saddle_id(node):
+            if isinstance(node, dict):
+                return str(node.get("id", node.get("critical_id", "saddle")))
+            return str(getattr(node, "id", getattr(node, "critical_id", "saddle")))
+
         def saddle_score(node):
-            point = np.asarray(getattr(node, "point", start), float)[:3]
+            point = saddle_point(node)
             offset = self._line_offset(point, start, goal)
             if axis_len2 <= 1e-12:
                 progress = 0.0
@@ -1635,7 +1657,7 @@ class HandoverNode:
         safe_saddles = []
         rejected = []
         for saddle in saddles:
-            point = np.asarray(getattr(saddle, "point", start), float)[:3]
+            point = saddle_point(saddle)
             ok, reason, max_phi, label = self._recovery_path_safety(
                 start, point, goal)
             if ok:
@@ -1656,26 +1678,27 @@ class HandoverNode:
 
         saddle, recovery_max_phi = max(
             safe_saddles, key=lambda item: saddle_score(item[0]))
-        saddle_point = np.asarray(getattr(saddle, "point", start), float)[:3]
-        corr = Corridor(np.asarray([start, saddle_point, goal], float),
+        selected_saddle_point = saddle_point(saddle)
+        selected_saddle_id = saddle_id(saddle)
+        corr = Corridor(np.asarray([start, selected_saddle_point, goal], float),
                         radius=self.topology_corridor_radius,
                         label="morse_recovery_saddle",
                         cost=0.0)
         corr.corridor_id = "arm_morse_recovery_c0001"
         corr.source = "morse_recovery"
-        corr.topology_nodes = ["start", str(getattr(saddle, "id", "saddle")), "goal"]
+        corr.topology_nodes = ["start", selected_saddle_id, "goal"]
         corr.node_sequence = list(corr.topology_nodes)
         corr.topology_kinds = ["saddle"]
         corr.node_type_sequence = ["start", "saddle", "goal"]
         corr.morse_nodes = [{
-            "id": str(getattr(saddle, "id", "saddle")),
+            "id": selected_saddle_id,
             "type": "saddle",
         }]
         corr.morse_node_ids = [corr.morse_nodes[0]["id"]]
         corr.morse_node_types = ["saddle"]
         corr.morse_induced = True
         corr.morse_forced = 1
-        corr.protected_waypoints = np.asarray([saddle_point], float)
+        corr.protected_waypoints = np.asarray([selected_saddle_point], float)
         corr.auxiliary_node_ids = []
         corr.auxiliary_node_count = 0
         corr.topology_role = "morse_saddle"
@@ -1686,12 +1709,12 @@ class HandoverNode:
         corr.min_clearance = 0.0
         corr.mean_phi_on_path = float(np.mean([
             self.field.phi_s(start),
-            self.field.phi_s(saddle_point),
+            self.field.phi_s(selected_saddle_point),
             self.field.phi_s(goal),
         ]))
         corr.max_phi_on_path = float(max(
             self.field.phi_s(start),
-            self.field.phi_s(saddle_point),
+            self.field.phi_s(selected_saddle_point),
             self.field.phi_s(goal)))
         corr.recovery_max_phi = float(recovery_max_phi)
         corr.risk_cost = float(corr.path_length * corr.mean_phi_on_path +
@@ -1743,8 +1766,102 @@ class HandoverNode:
         rospy.logwarn(
             "[handover][topology] recovered Morse saddle corridor id=%s saddle=%s offset=%.3f",
             corr.corridor_id, corr.morse_node_ids[0],
-            self._line_offset(saddle_point, start, goal))
+            self._line_offset(selected_saddle_point, start, goal))
         return corr
+
+    def _morse_sampled_recovery_corridor(self, start, goal, bounds, to_world):
+        """Recover an arm STSM corridor from sampled Morse saddle evidence.
+
+        This is used only when graph assembly returns no candidate.  It still
+        starts from the configured Morse potential over the local handover
+        plane and exports the selected sampled saddle as the protected
+        topology point; it is not a semantic/direct fallback.
+        """
+        start = np.asarray(start, float)[:3]
+        goal = np.asarray(goal, float)[:3]
+        (xmin, xmax), (ymin, ymax) = bounds
+        nx = 21
+        ny = 21
+        xs = np.linspace(float(xmin), float(xmax), nx)
+        ys = np.linspace(float(ymin), float(ymax), ny)
+        P = np.full((nx, ny), float("inf"))
+        safe = np.zeros((nx, ny), bool)
+        goal2 = np.array([float(xmax), 0.0])
+        for i, x in enumerate(xs):
+            for j, y in enumerate(ys):
+                p = np.asarray(to_world(np.array([x, y], float)), float)[:3]
+                if self._point_forbidden(p):
+                    continue
+                phi = float(self.field.phi_s(p))
+                if phi >= min(float(self.gate.rho_stop),
+                              float(self.arm_interest_gate.rho_stop)):
+                    continue
+                safe[i, j] = True
+                g = float(np.sum((np.array([x, y], float) - goal2) ** 2))
+                m = self.manifold.eps_m * float(
+                    np.sin(3.0 * x) * np.cos(3.0 * y))
+                P[i, j] = g + self.manifold.lam_s * phi + m
+        candidates = []
+        for i in range(1, nx - 1):
+            for j in range(1, ny - 1):
+                if not (safe[i, j] and safe[i - 1, j] and safe[i + 1, j] and
+                        safe[i, j - 1] and safe[i, j + 1]):
+                    continue
+                c = P[i, j]
+                if not np.isfinite(c):
+                    continue
+                fxx = P[i + 1, j] - 2.0 * c + P[i - 1, j]
+                fyy = P[i, j + 1] - 2.0 * c + P[i, j - 1]
+                if fxx * fyy >= 0.0:
+                    continue
+                point = np.asarray(to_world(np.array([xs[i], ys[j]], float)), float)[:3]
+                ok, reason, max_phi, _label = self._recovery_path_safety(
+                    start, point, goal)
+                if not ok:
+                    continue
+                progress = (float(xs[i] - xmin) /
+                            max(float(xmax - xmin), 1e-9))
+                offset = abs(float(ys[j]))
+                candidates.append({
+                    "id": "sampled_saddle_%02d_%02d" % (i, j),
+                    "point": point,
+                    "phi": float(self.field.phi_s(point)),
+                    "max_phi": float(max_phi),
+                    "score": (
+                        -abs(progress - 0.5),
+                        offset,
+                        -float(self.field.phi_s(point))),
+                })
+        if not candidates:
+            dbg = dict(getattr(self.manifold, "last_topology_debug", {}) or {})
+            dbg["topology_recovery_used"] = 0
+            dbg["topology_recovery_reject_reason"] = "no_sampled_morse_saddle"
+            dbg["sampled_morse_safe_cells"] = int(np.sum(safe))
+            self.manifold.last_topology_debug = dbg
+            return None
+        selected = max(candidates, key=lambda item: item["score"])
+        dbg = dict(getattr(self.manifold, "last_topology_debug", {}) or {})
+        dbg.setdefault("critical", {})["saddles"] = [{
+            "id": selected["id"],
+            "point": selected["point"].tolist(),
+            "kind": "saddle",
+            "source": "sampled_morse_potential",
+        }]
+        dbg.setdefault("critical_chain", {}).setdefault("saddles", []).append({
+            "id": selected["id"],
+            "point": selected["point"].tolist(),
+            "kind": "saddle",
+            "status": "selected",
+            "stage": "sampled_morse_recovery",
+            "source": "sampled_morse_potential",
+        })
+        dbg["num_critical_saddles"] = max(
+            1, int(dbg.get("num_critical_saddles", 0) or 0))
+        dbg["num_safe_saddles"] = max(
+            1, int(dbg.get("num_safe_saddles", 0) or 0))
+        dbg["sampled_morse_saddle_count"] = int(len(candidates))
+        self.manifold.last_topology_debug = dbg
+        return self._morse_recovery_corridor(start, goal)
 
     def _handover_corridor(self, start, goal):
         if self.topology_enabled:
@@ -1921,7 +2038,14 @@ class HandoverNode:
                 getattr(c, "min_clearance", 0.0),
                 ",".join(getattr(c, "topology_nodes", [])))
         if not corrs:
-            return None
+            recovery = self._morse_recovery_corridor(start, goal)
+            if recovery is None:
+                recovery = self._morse_sampled_recovery_corridor(
+                    start, goal, bounds, to_world)
+            if recovery is not None:
+                corrs = [recovery]
+            else:
+                return None
         if self.topology_refinement_enabled and not self.baseline:
             executable = []
             for c in corrs:
