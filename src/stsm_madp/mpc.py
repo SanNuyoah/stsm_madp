@@ -4404,7 +4404,19 @@ class ArmMPC:
                 return np.zeros(self.n, float)
             expanded.sort(key=lambda item: item["cost"])
             beam = expanded[:self.beam_width]
-        best = min(beam, key=lambda item: item["cost"])
+        first_step_live = []
+        if required_first_step_progress > 0.0:
+            for item in beam:
+                ees = list(item.get("ees", []))
+                if not ees:
+                    continue
+                first_error = float(np.linalg.norm(
+                    np.asarray(ees[0], float)[:3] - target[:3]))
+                first_progress = initial_target_error - first_error
+                if first_progress + 1e-9 >= required_first_step_progress:
+                    first_step_live.append(item)
+        selection_pool = first_step_live if first_step_live else beam
+        best = min(selection_pool, key=lambda item: item["cost"])
         controls = list(best["controls"])
         out = np.asarray(controls[0], float)
         self.solve_success_count += 1
@@ -4426,6 +4438,10 @@ class ArmMPC:
             required_terminal_progress)
         self.last_objective_terms["required_first_step_progress"] = float(
             required_first_step_progress)
+        self.last_objective_terms["first_step_live_candidate_count"] = int(
+            len(first_step_live))
+        self.last_objective_terms["first_step_live_selection_used"] = int(
+            bool(first_step_live))
         self.last_objective_terms["first_step_target_error"] = float(
             np.linalg.norm(np.asarray(best["ees"][0], float)[:3] - target[:3]))
         self.last_objective_terms["task_progress_tolerance"] = float(

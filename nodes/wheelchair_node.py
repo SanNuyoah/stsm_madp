@@ -219,7 +219,7 @@ class WheelchairNode:
         self.last_cmd_twist = Twist()
         self.last_cmd_time = rospy.Time(0)
         self.command_hold_s = float(rospy.get_param(
-            "~command_hold_s", 1.8))
+            "~command_hold_s", 4.0))
         self.command_keepalive_hz = float(rospy.get_param(
             "~command_keepalive_hz", 8.0))
         self.command_keepalive_enabled = bool(rospy.get_param(
