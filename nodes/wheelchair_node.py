@@ -698,6 +698,8 @@ class WheelchairNode:
             wps, info = self._baseline_grid_astar(
                 start3, goal3, radius=0.45, avoid_direct=False)
             if wps is not None:
+                raw_count = len(wps)
+                wps = self._compress_baseline_safe_path(wps, radius=0.45)
                 corr = Corridor(wps, radius=0.45, label=label)
                 stats = self._corridor_footprint_stats(corr)
                 corr.baseline_planner = "risk_grid_astar_safe_direct"
@@ -707,10 +709,11 @@ class WheelchairNode:
                 corr.baseline_astar_expanded = int(info.get("expanded", 0))
                 rospy.logwarn(
                     "[wc][baseline] direct line unsafe (%s max_fp=%.3f); "
-                    "using risk_grid_astar_safe_direct points=%d max_fp=%.3f",
+                    "using risk_grid_astar_safe_direct points=%d->%d max_fp=%.3f",
                     str(direct_stats.get("forbidden_reason", "risk")),
                     float(direct_stats.get("max_footprint_phi", 0.0)),
-                    len(wps), float(stats.get("max_footprint_phi", 0.0)))
+                    int(raw_count), len(wps),
+                    float(stats.get("max_footprint_phi", 0.0)))
             else:
                 rospy.logwarn(
                     "[wc][baseline] direct line unsafe and A* repair failed: %s",
@@ -738,6 +741,35 @@ class WheelchairNode:
         corr.baseline_uses_stsm = 0
         corr.morse_induced = False
         return corr
+
+    def _compress_baseline_safe_path(self, points, radius=0.45):
+        pts = np.asarray(points, float)
+        if pts.ndim != 2 or len(pts) <= 2:
+            return pts
+        risk_limit = min(
+            float(self.footprint_gate.rho_stop) - 0.05,
+            float(self.safe_fallback_max_footprint_phi))
+
+        def segment_safe(a, b):
+            probe = Corridor(np.asarray([a, b], float), radius=radius,
+                             label="baseline_segment_probe")
+            stats = self._corridor_footprint_stats(
+                probe, samples_per_segment=16)
+            return (
+                not bool(stats.get("forbidden", False)) and
+                float(stats.get("max_footprint_phi", 0.0)) <= risk_limit)
+
+        out = [pts[0]]
+        idx = 0
+        while idx < len(pts) - 1:
+            nxt = idx + 1
+            for cand in range(len(pts) - 1, idx, -1):
+                if segment_safe(pts[idx], pts[cand]):
+                    nxt = cand
+                    break
+            out.append(pts[nxt])
+            idx = nxt
+        return np.asarray(out, float)
 
     def _corridor_lateral_deviation(self, corridor):
         pts = np.asarray(getattr(corridor, "waypoints", []), float)
