@@ -195,6 +195,8 @@ class WheelchairNode:
             "~stsm_progress_floor_min_gate_scale", 0.85))
         self.stsm_progress_floor_min_adp_scale = float(rospy.get_param(
             "~stsm_progress_floor_min_adp_scale", 0.85))
+        self.stsm_progress_floor_w_max = float(rospy.get_param(
+            "~stsm_progress_floor_w_max", 0.65))
         self.final_w_max = float(rospy.get_param("~final_w_max", 0.85))
         self.w_slew_limit = float(rospy.get_param("~w_slew_limit", 1.00))
         self.lam_heading = float(rospy.get_param("~lam_heading", 2.5))
@@ -4179,6 +4181,10 @@ class WheelchairNode:
         aligned_floor = floor * max(0.55, alignment)
         capped_floor = min(aligned_floor, 0.6 * float(self.mpc.v_max))
         v_out = max(float(v), float(capped_floor))
+        if v_out > float(v) + 1e-9:
+            w = float(np.clip(
+                w, -self.stsm_progress_floor_w_max,
+                self.stsm_progress_floor_w_max))
         return v_out, float(w), bool(v_out > float(v) + 1e-9), float(capped_floor)
 
     def _publish_metrics(self):

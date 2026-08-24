@@ -4403,7 +4403,34 @@ class ArmMPC:
                 self.last_prediction_model = "linearized_jacobian"
                 return np.zeros(self.n, float)
             expanded.sort(key=lambda item: item["cost"])
-            beam = expanded[:self.beam_width]
+            if k == 0 and required_first_step_progress > 0.0:
+                live_first_step = []
+                for item in expanded:
+                    ees = list(item.get("ees", []))
+                    if not ees:
+                        continue
+                    first_error = float(np.linalg.norm(
+                        np.asarray(ees[0], float)[:3] - target[:3]))
+                    first_progress = initial_target_error - first_error
+                    if first_progress + 1e-9 >= required_first_step_progress:
+                        live_first_step.append(item)
+                if live_first_step:
+                    keep = []
+                    seen = set()
+                    for item in live_first_step + expanded:
+                        first = np.asarray(item["controls"][0], float)
+                        key = tuple(np.round(first, 8).tolist())
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        keep.append(item)
+                        if len(keep) >= self.beam_width:
+                            break
+                    beam = keep
+                else:
+                    beam = expanded[:self.beam_width]
+            else:
+                beam = expanded[:self.beam_width]
         first_step_live = []
         if required_first_step_progress > 0.0:
             for item in beam:
