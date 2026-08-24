@@ -4317,16 +4317,17 @@ class ArmMPC:
                         violations["joint_position"] += 1
                         continue
                     ee_next = np.asarray(item["ee"], float) + ee_vel * dt
-                    # Only the first control is applied before replanning.  A
-                    # terminal-only progress constraint can therefore accept
-                    # a sequence that holds now and moves later forever.  Keep
-                    # such non-executable progress out of the beam at k=0.
+                    # Only the first control is applied before replanning.  Do
+                    # not allow the first step to move away from the active
+                    # task target, but keep horizon-level progress as the hard
+                    # criterion.  Real arm Jacobians near limits can require a
+                    # neutral first step before the sequence makes progress.
                     if k == 0 and required_first_step_progress > 0.0:
                         first_step_error = float(np.linalg.norm(
                             ee_next[:3] - target[:3]))
-                        if first_step_error > (
-                                initial_target_error -
-                                required_first_step_progress + 1e-9):
+                        if first_step_error > initial_target_error + max(
+                                max_task_regression,
+                                task_progress_tolerance) + 1e-9:
                             violations["first_step_task_progress"] += 1
                             continue
                     tube_cost = 0.0

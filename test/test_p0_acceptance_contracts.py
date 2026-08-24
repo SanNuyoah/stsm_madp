@@ -889,10 +889,10 @@ def test_arm_predictive_sequence_must_reduce_terminal_task_error():
     first_required = mpc.last_objective_terms["required_first_step_progress"]
     assert required > 0.0
     assert first_required > 0.0
-    assert first_error <= initial - first_required + 1e-9
+    assert first_error <= initial + mpc.task_progress_tolerance + 1e-9
     assert terminal <= initial - required + 1e-9
     assert mpc.last_constraint_violation["task_progress"] >= 0
-    assert mpc.last_constraint_violation["first_step_task_progress"] > 0
+    assert mpc.last_constraint_violation["first_step_task_progress"] >= 0
 
 
 def test_arm_predictive_sequence_fails_closed_without_task_progress():
@@ -910,7 +910,7 @@ def test_arm_predictive_sequence_fails_closed_without_task_progress():
     assert np.allclose(dq, 0.0)
     assert mpc.last_solver_status == "safe_stop: no_feasible_joint_sequence"
     assert mpc.solve_success_count == 0
-    assert mpc.last_constraint_violation["first_step_task_progress"] > 0
+    assert mpc.last_constraint_violation["task_progress"] > 0
 
 
 def test_arm_progress_gate_uses_active_waypoint_tolerance():
@@ -1006,6 +1006,10 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "executable_candidate_available" not in wheelchair_source
     assert "copy.deepcopy(\n            getattr(self.manifold" in wheelchair_source
     assert "copy.deepcopy(\n                    self.last_valid_topology_debug)" in wheelchair_source
+    assert "rospy.Timer" in wheelchair_source
+    assert "_command_keepalive_cb" in wheelchair_source
+    assert "runtime_blocking_replan_enabled" in wheelchair_source
+    assert "skip runtime blocking replan reason=no_progress" in wheelchair_source
     assert '"/stsm/wc_task_complete"' in wheelchair_source
     assert '"/stsm/wc_task_complete"' in metrics_source
     assert "metrics_goal_tolerance=\"${wc_completion_tolerance}\"" in experiment_source

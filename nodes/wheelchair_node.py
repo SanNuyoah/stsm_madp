@@ -210,6 +210,15 @@ class WheelchairNode:
         self.world_vel = np.zeros(3)
         self.velocity_valid = False
         self.u_prev = np.zeros(2)
+        self.last_cmd_twist = Twist()
+        self.last_cmd_time = rospy.Time(0)
+        self.command_hold_s = float(rospy.get_param(
+            "~command_hold_s", 1.8))
+        self.command_keepalive_hz = float(rospy.get_param(
+            "~command_keepalive_hz", 8.0))
+        self.command_keepalive_enabled = bool(rospy.get_param(
+            "~command_keepalive_enabled", True))
+        self.command_keepalive_publish_count = 0
         self.stop_triggered = False
         self.stop_reason = ""
         self.task_completed = False
@@ -396,6 +405,8 @@ class WheelchairNode:
             "~topology/replan_on_tube_exit", True))
         self.topology_replan_on_no_progress = bool(rospy.get_param(
             "~topology/replan_on_no_progress", True))
+        self.runtime_blocking_replan_enabled = bool(rospy.get_param(
+            "~topology/runtime_blocking_replan_enabled", False))
         self.topology_refinement_enabled = bool(rospy.get_param(
             "~topology/refinement_enabled", True))
         self.topology_refinement_samples = int(rospy.get_param(
@@ -4351,6 +4362,7 @@ class WheelchairNode:
     def _publish_runtime_stop(self, reason):
         self.stop_triggered = True
         self.stop_reason = reason
+        self._set_command_keepalive(0.0, 0.0, active=False)
         self.gate_pub.publish(String("STOP"))
         self.gate_reason_pub.publish(String(reason))
         self.gate_source_pub.publish(String("runtime"))
@@ -4360,10 +4372,41 @@ class WheelchairNode:
         ]))
         rospy.sleep(0.2)
 
+    def _set_command_keepalive(self, v, w, active=True):
+        tw = Twist()
+        if active:
+            tw.linear.x = float(v)
+            tw.angular.z = float(w)
+            self.last_cmd_time = rospy.Time.now()
+        else:
+            self.last_cmd_time = rospy.Time(0)
+        self.last_cmd_twist = tw
+
+    def _publish_zero_command(self):
+        self._set_command_keepalive(0.0, 0.0, active=False)
+        self.cmd_pub.publish(Twist())
+
+    def _command_keepalive_cb(self, _event):
+        if (not self.command_keepalive_enabled or self.stop_triggered or
+                self.task_completed):
+            return
+        if self.last_cmd_time == rospy.Time(0):
+            return
+        age = (rospy.Time.now() - self.last_cmd_time).to_sec()
+        if age < 0.0 or age > self.command_hold_s:
+            return
+        self.cmd_pub.publish(self.last_cmd_twist)
+        self.command_keepalive_publish_count += 1
+
     def run(self):
         self.mode_pub.publish(String("baseline" if self.baseline else "stsm"))
         self.task_complete_pub.publish(Bool(False))
-        self.cmd_pub.publish(Twist())
+        self._publish_zero_command()
+        keepalive_timer = None
+        if self.command_keepalive_enabled and self.command_keepalive_hz > 0.0:
+            keepalive_timer = rospy.Timer(
+                rospy.Duration(1.0 / self.command_keepalive_hz),
+                self._command_keepalive_cb)
         self._reset_model_pose()
         self.state = None
         rospy.sleep(0.2)
@@ -4432,7 +4475,7 @@ class WheelchairNode:
                 center_gate=center_gate, interest_eval=interest_eval,
                 corridor=corridor)
             if gate.stop:
-                self.cmd_pub.publish(Twist())
+                self._publish_zero_command()
                 self.stop_triggered = True
                 self.stop_reason = gate.reason
                 rospy.logwarn("[wc][gate] STOP risk=%.3f reason=%s",
@@ -4490,7 +4533,7 @@ class WheelchairNode:
                 self.goal_tolerance if self.strict_goal_completion else
                 self.completion_tolerance)
             if dist < completion_radius:
-                self.cmd_pub.publish(Twist())
+                self._publish_zero_command()
                 self.u_prev = np.zeros(2)
                 if near_goal_since is None:
                     near_goal_since = now
@@ -4521,8 +4564,16 @@ class WheelchairNode:
                       self.no_progress_replan_time):
                     if (not is_topology_corridor or
                             self.topology_replan_on_no_progress):
-                        need_replan = True
-                        replan_reason = "no_progress"
+                        if self.runtime_blocking_replan_enabled:
+                            need_replan = True
+                            replan_reason = "no_progress"
+                        else:
+                            self.replan_deadline_skip_count += 1
+                            replan_progress_time = now
+                            rospy.logwarn_throttle(
+                                5.0,
+                                "[wc] skip runtime blocking replan reason=no_progress current=%s",
+                                self._corridor_label(corridor, ""))
                 if corridor is not None:
                     _, d_tube = corridor.project(
                         np.array([self.state[0], self.state[1], 0.0]))
@@ -4700,6 +4751,7 @@ class WheelchairNode:
             tw = Twist()
             tw.linear.x = v
             tw.angular.z = w
+            self._set_command_keepalive(v, w, active=(not gate.stop))
             self.cmd_pub.publish(tw)
             rospy.loginfo_throttle(
                 1.0,
@@ -4707,7 +4759,9 @@ class WheelchairNode:
                 self.state[0], self.state[1], self.state[2], dist, v, w)
             rate.sleep()
         self.task_complete_pub.publish(Bool(bool(self.task_completed)))
-        self.cmd_pub.publish(Twist())
+        self._publish_zero_command()
+        if keepalive_timer is not None:
+            keepalive_timer.shutdown()
         self._write_runtime_evidence()
         rospy.loginfo("[wc] done (stop=%s, reason=%s)",
                       self.stop_triggered, self.stop_reason)
