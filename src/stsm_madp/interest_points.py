@@ -62,9 +62,15 @@ def points_from_offsets(anchor, offsets, labels=None):
 
 
 def aggregate_point_risks(field, labels, points, vels=None):
-    if vels is None:
-        vels = [None] * len(points)
-    phi_each = [float(field.phi_s(p, v)) for p, v in zip(points, vels)]
+    use_batch = bool(
+        hasattr(field, "phi_s_batch") and
+        (vels is None or all(value is None for value in vels)))
+    if use_batch:
+        phi_each = np.asarray(field.phi_s_batch(points), float).tolist()
+    else:
+        if vels is None:
+            vels = [None] * len(points)
+        phi_each = [float(field.phi_s(p, v)) for p, v in zip(points, vels)]
     worst_idx = int(np.argmax(phi_each)) if phi_each else -1
     return {
         "phi_each": phi_each,

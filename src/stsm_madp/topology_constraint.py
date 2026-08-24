@@ -521,7 +521,13 @@ def build_topology_constraint(selected_topology_graph=None,
         constraint["critical_point_projection_index"] = dict(projection)
     if corridor is not None:
         for key in (
-                "candidate_id", "ik_valid", "link_collision_valid",
+                "candidate_id", "candidate_cost",
+                "candidate_cost_breakdown", "total_score", "execution_cost",
+                "execution_feasible", "hard_feasible",
+                "mpc_candidate_feasibility_used",
+                "mpc_affects_candidate_ranking",
+                "mpc_execution_cost_in_score",
+                "ik_valid", "link_collision_valid",
                 "link_collision", "tube_valid", "arm_pose_optimization_used",
                 "arm_ik_candidate_count", "arm_ik_candidate_attempts"):
             if hasattr(corridor, key):
@@ -673,7 +679,13 @@ def mpc_inputs_from_constraint(constraint, corridor_id="", waypoints=None):
         "critical_point_association_used": topology_info["critical_point_association_used"],
     }
     for key in (
-            "candidate_id", "ik_valid", "link_collision_valid",
+            "candidate_id", "candidate_cost",
+            "candidate_cost_breakdown", "total_score", "execution_cost",
+            "execution_feasible", "hard_feasible",
+            "mpc_candidate_feasibility_used",
+            "mpc_affects_candidate_ranking",
+            "mpc_execution_cost_in_score",
+            "ik_valid", "link_collision_valid",
             "link_collision", "tube_valid", "arm_pose_optimization_used",
             "arm_ik_candidate_count", "arm_ik_candidate_attempts",
             "ik_validation"):

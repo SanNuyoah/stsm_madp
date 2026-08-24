@@ -2353,14 +2353,50 @@ class WheelchairNode:
         normalize("execution_cost", "execution_norm")
         for corr in rescored:
             score = (
-                float(getattr(corr, "risk_cost", 0.0)) +
-                float(getattr(corr, "length_cost", 0.0)) +
-                float(getattr(corr, "smooth_cost", 0.0)) +
-                float(getattr(corr, "task_cost", 0.0)))
+                weights["risk"] * float(getattr(corr, "risk_cost", 0.0)) +
+                weights["length"] * float(getattr(corr, "length_cost", 0.0)) +
+                weights["smooth"] * float(getattr(corr, "smooth_cost", 0.0)) +
+                weights["task"] * float(getattr(corr, "task_cost", 0.0)) +
+                weights["execution"] * float(getattr(
+                    corr, "execution_cost", 0.0)) -
+                weights["topology"] * float(getattr(
+                    corr, "topology_value", 0.0)) -
+                weights["diversity"] * float(getattr(
+                    corr, "topology_diversity", 0.0)))
             corr.total_cost = float(score)
             corr.total_score = float(score)
             corr.base_cost = float(score)
             corr.cost = float(score)
+            breakdown = dict(getattr(corr, "candidate_cost_breakdown", {}) or {})
+            breakdown.update({
+                "risk_cost": float(getattr(corr, "risk_cost", 0.0)),
+                "risk_cost_term": float(weights["risk"] * float(getattr(
+                    corr, "risk_cost", 0.0))),
+                "length_cost": float(getattr(corr, "length_cost", 0.0)),
+                "length_cost_term": float(weights["length"] * float(getattr(
+                    corr, "length_cost", 0.0))),
+                "smoothness_cost": float(getattr(corr, "smooth_cost", 0.0)),
+                "smoothness_cost_term": float(weights["smooth"] * float(getattr(
+                    corr, "smooth_cost", 0.0))),
+                "task_cost": float(getattr(corr, "task_cost", 0.0)),
+                "task_cost_term": float(weights["task"] * float(getattr(
+                    corr, "task_cost", 0.0))),
+                "execution_cost": float(getattr(corr, "execution_cost", 0.0)),
+                "execution_cost_term": float(weights["execution"] * float(
+                    getattr(corr, "execution_cost", 0.0))),
+                "mpc_execution_cost_in_score": True,
+                "topology_value": float(getattr(corr, "topology_value", 0.0)),
+                "topology_value_term": float(-weights["topology"] * float(
+                    getattr(corr, "topology_value", 0.0))),
+                "topology_diversity": float(getattr(
+                    corr, "topology_diversity", 0.0)),
+                "topology_diversity_term": float(-weights["diversity"] * float(
+                    getattr(corr, "topology_diversity", 0.0))),
+                "ranking_score": float(score),
+                "candidate_cost": float(score),
+            })
+            corr.candidate_cost = float(score)
+            corr.candidate_cost_breakdown = breakdown
         rescored.sort(key=lambda c: float(getattr(c, "cost", 0.0)))
         for rank, corr in enumerate(rescored):
             corr.rank_total = int(rank)

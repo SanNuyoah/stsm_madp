@@ -121,6 +121,65 @@ class SocialField:
         val += p.lam_env * self.phi_env(z)
         return val
 
+    def phi_s_batch(self, points, velocities=None):
+        """Vectorized equivalent of ``phi_s`` for a collection of points."""
+        z = np.asarray(points, float)
+        if z.ndim == 1:
+            z = z.reshape((1, z.shape[0]))
+        if z.size == 0:
+            return np.zeros(0, float)
+        if velocities is None:
+            zdot = np.zeros_like(z)
+        else:
+            zdot = np.asarray(velocities, float)
+            if zdot.ndim == 1:
+                zdot = np.tile(zdot, (len(z), 1))
+        p = self.params
+        values = np.zeros(len(z), float)
+        for human in self.humans:
+            relative = z[:, :2] - human.pos[:2]
+            a, b = human.social_radii()
+            c, s = np.cos(human.heading), np.sin(human.heading)
+            rotation = np.array([[c, -s], [s, c]])
+            local = np.dot(relative, rotation)
+            prox = np.exp(-0.5 * (
+                (local[:, 0] / a) ** 2 + (local[:, 1] / b) ** 2))
+            relative_velocity = zdot[:, :2] - human.vel[:2]
+            relative_norm = np.linalg.norm(relative, axis=1) + EPS
+            closing = np.maximum(
+                0.0,
+                -np.einsum(
+                    "ij,ij->i", relative, relative_velocity) / relative_norm)
+            alpha = np.abs(np.arctan2(local[:, 1], local[:, 0]))
+            directional = np.where(
+                alpha < np.pi / 3.0, 0.8,
+                np.where(alpha > 2.0 * np.pi / 3.0, 1.5, 0.4))
+            body = np.zeros(len(z), float)
+            for _name, (part, weight, sigma) in human.body_parts.items():
+                dim = part.shape[0]
+                squared_distance = np.sum(
+                    (z[:, :dim] - part) ** 2, axis=1)
+                body += weight * np.exp(
+                    -squared_distance / (2.0 * sigma * sigma))
+            values += p.lam_prox * prox
+            values += p.lam_close * closing ** 2 / relative_norm
+            values += p.lam_dir * directional * prox
+            values += p.lam_body * body
+        for anchor in self.anchors:
+            dim = anchor.center.shape[0]
+            delta = np.abs(z[:, :dim] - anchor.center) - anchor.half_extent
+            outside = np.linalg.norm(np.maximum(delta, 0.0), axis=1)
+            inside = np.minimum(np.max(delta, axis=1), 0.0)
+            distance = outside + inside
+            contribution = anchor.weight * np.exp(
+                -(np.maximum(distance, 0.0) ** 2) /
+                (2.0 * p.sigma_env ** 2))
+            if anchor.forbidden:
+                contribution = np.where(
+                    distance <= 0.0, anchor.weight, contribution)
+            values += p.lam_env * contribution
+        return values
+
     def risk_components(self, z, zdot=None):
         z = np.asarray(z, float)
         zdot = np.zeros_like(z) if zdot is None else np.asarray(zdot, float)

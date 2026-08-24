@@ -1932,6 +1932,38 @@ def _empty_mpc_result(robot_type, corridor_id, source, horizon, dt,
     }
 
 
+def _mpc_candidate_decision_flags(context):
+    corridor_info = dict((context or {}).get("corridor_info", {}) or {})
+    topology_info = dict((context or {}).get("topology_info", {}) or {})
+    breakdown = dict(corridor_info.get(
+        "candidate_cost_breakdown",
+        topology_info.get("candidate_cost_breakdown", {})) or {})
+
+    execution_term = float(breakdown.get(
+        "execution_cost_term",
+        corridor_info.get("execution_cost", 0.0)) or 0.0)
+    execution_cost_in_score = bool(
+        breakdown.get("mpc_execution_cost_in_score", False) or
+        abs(execution_term) > 1e-12)
+    feasibility_used = bool(
+        corridor_info.get("hard_feasible", False) or
+        corridor_info.get("execution_feasible", False) or
+        topology_info.get("hard_feasible", False) or
+        topology_info.get("execution_feasible", False))
+    affects_ranking = bool(
+        corridor_info.get("mpc_affects_candidate_ranking", False) or
+        topology_info.get("mpc_affects_candidate_ranking", False) or
+        execution_cost_in_score or feasibility_used)
+
+    return {
+        "mpc_affects_candidate_ranking": int(affects_ranking),
+        "mpc_candidate_feasibility_used": int(feasibility_used),
+        "mpc_candidate_selection": int(affects_ranking or feasibility_used),
+        "mpc_execution_cost_in_score": int(execution_cost_in_score),
+        "mpc_candidate_cost_breakdown": breakdown,
+    }
+
+
 def run_mpc_tracking(robot_type, current_state, reference_path,
                      topology_info=None, corridor_info=None,
                      manifold_info=None, social_field=None, constraints=None,
@@ -1992,6 +2024,7 @@ def run_mpc_tracking(robot_type, current_state, reference_path,
         ref, context, robot_type=robot, phase_sequence=phase_sequence,
         planning_margin=planning_margin)
     if not bool(reference_audit.get("feasible", False)):
+        candidate_decision_flags = _mpc_candidate_decision_flags(context)
         result = _empty_mpc_result(
             robot, selected_corridor_id, "selected_candidate_waypoints",
             h, step_dt, robot_constraints, weights,
@@ -2005,6 +2038,16 @@ def run_mpc_tracking(robot_type, current_state, reference_path,
             "safety_success": False,
             "overall_success": False,
             "module_chain_valid": False,
+            "mpc_affects_candidate_ranking": int(
+                candidate_decision_flags["mpc_affects_candidate_ranking"]),
+            "mpc_candidate_feasibility_used": int(
+                candidate_decision_flags["mpc_candidate_feasibility_used"]),
+            "mpc_candidate_selection": int(
+                candidate_decision_flags["mpc_candidate_selection"]),
+            "mpc_execution_cost_in_score": int(
+                candidate_decision_flags["mpc_execution_cost_in_score"]),
+            "mpc_candidate_cost_breakdown": dict(
+                candidate_decision_flags["mpc_candidate_cost_breakdown"]),
             "replan_required": True,
             "mpc_feedback": {
                 "replan_required": True,
@@ -2073,6 +2116,7 @@ def run_mpc_tracking(robot_type, current_state, reference_path,
                     "reference_source", ""))) or "")
     if not reference_source:
         reference_source = "selected_candidate_waypoints"
+    candidate_decision_flags = _mpc_candidate_decision_flags(context)
     result.update({
         "robot_type": robot,
         "selected_corridor_id": str(selected_corridor_id or ""),
@@ -2104,10 +2148,16 @@ def run_mpc_tracking(robot_type, current_state, reference_path,
         "executed_trajectory_count": len(result.get("executable_trajectory", [])),
         "executed_trajectory_file": "mpc_executed_trajectory.csv",
         "cost_breakdown_file": "mpc_cost_breakdown.csv",
-        "mpc_affects_candidate_ranking": 0,
-        "mpc_candidate_feasibility_used": 0,
-        "mpc_candidate_selection": 0,
-        "mpc_execution_cost_in_score": 0,
+        "mpc_affects_candidate_ranking": int(
+            candidate_decision_flags["mpc_affects_candidate_ranking"]),
+        "mpc_candidate_feasibility_used": int(
+            candidate_decision_flags["mpc_candidate_feasibility_used"]),
+        "mpc_candidate_selection": int(
+            candidate_decision_flags["mpc_candidate_selection"]),
+        "mpc_execution_cost_in_score": int(
+            candidate_decision_flags["mpc_execution_cost_in_score"]),
+        "mpc_candidate_cost_breakdown": dict(
+            candidate_decision_flags["mpc_candidate_cost_breakdown"]),
         "topology_info": context["topology_info"],
         "corridor_info": context["corridor_info"],
         "manifold_info": context["manifold_info"],
@@ -4780,6 +4830,13 @@ class WheelchairMPC:
             "control": 0.0,
             "smooth": 0.0,
         }
+        # Beam branches frequently converge to the exact same predicted pose.
+        # Safety and interest evaluations are deterministic within one solve,
+        # so reuse them instead of repeating the social-field calculation for
+        # every equivalent branch.
+        manifold_state_cache = {}
+        interest_state_cache = {}
+        corridor_projection_cache = {}
         beam = [{
             "cost": 0.0,
             "state": np.array(x0, float),
@@ -4817,11 +4874,16 @@ class WheelchairMPC:
                         violation_counts["insufficient_progress"] += 1
                         continue
                     x_next = self._step(x, u)
+                    state_key = tuple(float(value) for value in x_next[:3])
+                    position_key = state_key[:2]
                     parts = dict(item["parts"])
                     hard_violation = False
                     step_soft_cost = 0.0
-                    manifold_state = manifold_evaluator.evaluate_state(
-                        [x_next[0], x_next[1], 0.0])
+                    manifold_state = manifold_state_cache.get(position_key)
+                    if manifold_state is None:
+                        manifold_state = manifold_evaluator.evaluate_state(
+                            [x_next[0], x_next[1], 0.0])
+                        manifold_state_cache[position_key] = manifold_state
                     manifold_risk_violation = max(
                         0.0, float(manifold_state.get("risk", 0.0)) -
                         float(manifold_evaluator.risk_threshold))
@@ -4843,13 +4905,19 @@ class WheelchairMPC:
                     if hard_violation:
                         continue
                     if interest_enabled:
-                        summary = pose_interest_risk(
-                            field, x_next,
-                            local_points=interest_constraints.get("local_points"),
-                            labels=interest_constraints.get("labels"))
-                        hit, _label, _anchor, reason = forbidden_anchor_hit(
-                            field, summary.get("labels", []),
-                            summary.get("points", []))
+                        cached_interest = interest_state_cache.get(state_key)
+                        if cached_interest is None:
+                            summary = pose_interest_risk(
+                                field, x_next,
+                                local_points=interest_constraints.get(
+                                    "local_points"),
+                                labels=interest_constraints.get("labels"))
+                            hit, _label, _anchor, reason = forbidden_anchor_hit(
+                                field, summary.get("labels", []),
+                                summary.get("points", []))
+                            cached_interest = (summary, hit, reason)
+                            interest_state_cache[state_key] = cached_interest
+                        summary, hit, reason = cached_interest
                         if hit:
                             violation_counts["forbidden"] += 1
                             self.last_reject_forbidden_count += 1
@@ -4870,11 +4938,14 @@ class WheelchairMPC:
                     if dist0 < self.near_goal_radius:
                         social_weight *= self.near_goal_social_scale
                     social = social_weight * float(
-                        field.phi_s(np.array([x_next[0], x_next[1], 0.0])))
+                        manifold_state.get("risk", 0.0))
                     tube = 0.0
                     if corridor is not None:
-                        _, d = corridor.project(np.array([
-                            x_next[0], x_next[1], 0.0]))
+                        d = corridor_projection_cache.get(position_key)
+                        if d is None:
+                            _, d = corridor.project(np.array([
+                                x_next[0], x_next[1], 0.0]))
+                            corridor_projection_cache[position_key] = float(d)
                         tube_violation = max(
                             0.0, float(d) - float(corridor.radius))
                         if tube_violation > 1e-9 and tube_mode == "hard":

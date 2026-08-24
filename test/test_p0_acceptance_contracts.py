@@ -28,6 +28,8 @@ from stsm_madp.mpc import audit_reference_safety
 from stsm_madp.mpc import _phase_constraint_diagnostics_payload
 from stsm_madp.mpc import evaluate_executed_trajectory
 from stsm_madp.safety_evaluator import SafetyEvaluator
+from stsm_madp.social_field import (
+    HumanState, SemanticAnchor, SocialField, SocialFieldParams)
 from stsm_madp.topology import TopologicalCorridorPlanner
 from stsm_madp.topology_candidate_generator import (
     TopologyDrivenCandidateGenerator, candidate_topology_identity,
@@ -46,6 +48,15 @@ class ZeroField(object):
 
     def grad_phi_s(self, point):
         return np.zeros_like(np.asarray(point, float))
+
+
+class CountingZeroField(ZeroField):
+    def __init__(self):
+        self.phi_calls = 0
+
+    def phi_s(self, point, velocity=None):
+        self.phi_calls += 1
+        return 0.0
 
 
 def test_manifold_boundary_distance_handles_segments_and_degenerate_points():
@@ -82,6 +93,42 @@ def test_headless_experiments_do_not_run_social_field_visualizer():
         ]
         assert len(visualizers) == 1
         assert visualizers[0].get("if") == "$(arg rviz)"
+
+
+def test_social_field_batch_matches_scalar_risk_exactly():
+    human = HumanState(
+        pos=[-1.6, 0.2, 0.0], vel=[0.03, -0.02, 0.0],
+        heading=np.pi / 2.0, posture="transferring", vulnerability=1.4)
+    anchors = [
+        SemanticAnchor(
+            "bed", [-1.6, -1.0, 0.0], [0.5, 1.0, 0.5],
+            weight=2.0, forbidden=True),
+        SemanticAnchor(
+            "table", [0.55, 0.0, 0.0], [0.3, 0.5, 0.4],
+            weight=1.0, forbidden=False),
+    ]
+    field = SocialField(SocialFieldParams(
+        lam_prox=1.2, lam_close=1.0, lam_dir=0.5,
+        lam_body=0.0, lam_env=1.5, sigma_env=0.4))
+    field.set_scene([human], anchors)
+    points = np.array([
+        [1.8, 1.3, 0.0],
+        [-1.6, -1.0, 0.0],
+        [0.3, -0.2, 0.0],
+    ])
+    velocities = np.array([
+        [0.0, 0.0, 0.0],
+        [0.1, -0.1, 0.0],
+        [-0.2, 0.05, 0.0],
+    ])
+
+    scalar = np.array([
+        field.phi_s(point, velocity)
+        for point, velocity in zip(points, velocities)
+    ])
+    batched = field.phi_s_batch(points, velocities)
+
+    assert np.allclose(batched, scalar, rtol=1e-12, atol=1e-12)
 
 
 def test_topology_uses_runtime_manifold_mode_instead_of_hard_default():
@@ -699,6 +746,64 @@ def test_strict_mpc_inputs_preserve_corridor_identity():
     assert topology["topology_tube_constraint"]["corridor_id"] == corridor.corridor_id
 
 
+def test_mpc_inputs_preserve_candidate_execution_ranking_evidence():
+    corridor = _valid_morse_corridor()
+    corridor.hard_feasible = True
+    corridor.execution_feasible = True
+    corridor.execution_cost = 0.42
+    corridor.candidate_cost_breakdown = {
+        "execution_cost": 0.42,
+        "execution_cost_term": 0.42,
+        "mpc_execution_cost_in_score": True,
+    }
+
+    topology, corridor_info, _manifold, _constraint = build_mpc_constraint_inputs(
+        corridor=corridor,
+        reference_path=corridor.waypoints,
+        safe_threshold=1.0,
+        minimum_clearance=0.0,
+        manifold_constraint_mode="soft",
+        strict_stsm=True,
+        expected_corridor_id=corridor.corridor_id)
+
+    assert corridor_info["execution_feasible"] is True
+    assert corridor_info["candidate_cost_breakdown"]["execution_cost_term"] == 0.42
+    assert topology["candidate_cost_breakdown"]["mpc_execution_cost_in_score"] is True
+
+
+def test_mpc_diagnostics_report_candidate_execution_in_ranking():
+    result = run_mpc_tracking(
+        "wheelchair",
+        [0.0, 0.0, 0.0],
+        [[0.0, 0.0, 0.0], [0.15, 0.0, 0.0], [0.30, 0.0, 0.0]],
+        {"topology_class": "direct_safe_channel"},
+        {
+            "corridor_id": "wheelchair_c0001",
+            "centerline": [[0.0, 0.0, 0.0], [0.30, 0.0, 0.0]],
+            "radius": 0.4,
+            "hard_feasible": True,
+            "execution_feasible": True,
+            "execution_cost": 0.2,
+            "candidate_cost_breakdown": {
+                "execution_cost": 0.2,
+                "execution_cost_term": 0.2,
+                "mpc_execution_cost_in_score": True,
+            },
+        },
+        {"safe_threshold": 1.0, "minimum_clearance": 0.0},
+        ZeroField(),
+        {"risk_threshold": 1.0, "manifold_constraint_mode": "soft"},
+        horizon=2,
+        dt=0.1,
+        selected_corridor_id="wheelchair_c0001",
+        risk_threshold=1.0,
+        rollout_mode="single")
+
+    assert result["mpc_candidate_feasibility_used"] == 1
+    assert result["mpc_execution_cost_in_score"] == 1
+    assert result["mpc_affects_candidate_ranking"] == 1
+
+
 def test_strict_mpc_inputs_reject_reference_without_corridor():
     try:
         build_mpc_constraint_inputs(
@@ -872,6 +977,22 @@ def test_wheelchair_beam_keeps_executable_first_step_before_pruning():
     assert v >= 0.02
     assert mpc.last_predicted_controls[0][0] >= 0.02
     assert mpc.last_sequence_progress >= mpc.min_progress_per_solve
+
+
+def test_wheelchair_beam_reuses_identical_state_safety_evaluations():
+    field = CountingZeroField()
+    mpc = WheelchairMPC(horizon=12, dt=0.2, a_max=0.5, beam_width=12)
+    ref = np.column_stack([
+        np.linspace(1.813, 1.647, 12),
+        np.full(12, 1.555),
+    ])
+
+    v, _w = mpc.solve(
+        [1.824, 1.368, -2.49], ref, field,
+        u_prev=[0.0, 0.0], goal=[-0.55, 0.55], predictive=True)
+
+    assert v >= 0.02
+    assert field.phi_calls < 500
 
 
 def test_runtime_sources_preserve_p0_execution_contracts():
