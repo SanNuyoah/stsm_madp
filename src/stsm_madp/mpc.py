@@ -4446,14 +4446,73 @@ class ArmMPC:
         best = min(selection_pool, key=lambda item: item["cost"])
         controls = list(best["controls"])
         out = np.asarray(controls[0], float)
+        predicted_joints = [np.asarray(x, float).copy()
+                            for x in best["joints"]]
+        predicted_ees = [np.asarray(x, float).copy()
+                         for x in best["ees"]]
+        task_warm_first_step_used = False
+        selected_first_progress = 0.0
+        if len(predicted_ees):
+            selected_first_error = float(np.linalg.norm(
+                predicted_ees[0][:3] - target[:3]))
+            selected_first_progress = float(
+                initial_target_error - selected_first_error)
+        if (selected_first_progress <= 1e-9 and
+                initial_target_error > task_progress_tolerance + 1e-9):
+            cand = np.asarray(task_warm, float).copy()
+            previous = np.asarray(dq_nom, float)
+            delta = max(0.0, self.ddq_max) * float(dt)
+            cand = np.clip(cand, previous - delta, previous + delta)
+            cand = np.clip(cand, -self.dq_max, self.dq_max)
+            position_velocity_lower = (self.joint_lower - q0) / dt
+            position_velocity_upper = (self.joint_upper - q0) / dt
+            cand = np.minimum(
+                np.maximum(cand, position_velocity_lower),
+                position_velocity_upper)
+            ee_vel = np.dot(J, cand)
+            q_next = q0 + cand * dt
+            ee_next = ee0 + ee_vel * dt
+            cand_error = float(np.linalg.norm(ee_next[:3] - target[:3]))
+            cand_progress = float(initial_target_error - cand_error)
+            cand_ok = (
+                cand_progress > 1e-9 and
+                np.all(np.abs(cand) <= self.dq_max + 1e-9) and
+                np.all(np.abs(cand - previous) <=
+                       self.ddq_max * dt + 1e-9) and
+                np.linalg.norm(ee_vel) <= cap + 1e-9 and
+                np.all(q_next >= self.joint_lower - 1e-9) and
+                np.all(q_next <= self.joint_upper + 1e-9))
+            if cand_ok and corridor is not None:
+                _projection, distance = corridor.project(ee_next[:3])
+                cand_ok = (
+                    float(distance) <= float(corridor.radius) + 1e-9)
+            if cand_ok and interest_enabled and offsets is not None:
+                risk = pose_interest_risk(
+                    field, ee_next[:3], offsets=offsets, labels=labels)
+                hit, _label, _anchor, _reason = forbidden_anchor_hit(
+                    field, risk.get("labels", []), risk.get("points", []))
+                phi = float(risk.get("phi_max", 0.0))
+                cand_ok = (not hit and phi <= interest_rho + 1e-9)
+            if cand_ok:
+                out = cand
+                controls[0] = cand.copy()
+                if predicted_joints:
+                    predicted_joints[0] = q_next.copy()
+                if predicted_ees:
+                    predicted_ees[0] = ee_next.copy()
+                task_warm_first_step_used = True
+                selected_first_progress = cand_progress
         self.solve_success_count += 1
-        self.last_solver_status = "predictive_joint_beam"
+        self.last_solver_status = (
+            "predictive_joint_beam_task_warm_first_step"
+            if task_warm_first_step_used else "predictive_joint_beam")
         self.last_prediction_model = "linearized_jacobian"
         self.last_dls_adp_used = 0
         self.last_qp_used = 0
-        self.last_predicted_joint_states = [x.tolist() for x in best["joints"]]
+        self.last_predicted_joint_states = [
+            x.tolist() for x in predicted_joints]
         self.last_predicted_controls = [x.tolist() for x in controls]
-        self.last_predicted_ee_states = [x.tolist() for x in best["ees"]]
+        self.last_predicted_ee_states = [x.tolist() for x in predicted_ees]
         self.last_objective_terms = dict(best["parts"])
         self.last_objective_terms["initial_target_error"] = float(
             initial_target_error)
@@ -4469,8 +4528,12 @@ class ArmMPC:
             len(first_step_live))
         self.last_objective_terms["first_step_live_selection_used"] = int(
             bool(first_step_live))
+        self.last_objective_terms["task_warm_first_step_used"] = int(
+            task_warm_first_step_used)
+        self.last_objective_terms["selected_first_step_progress"] = float(
+            selected_first_progress)
         self.last_objective_terms["first_step_target_error"] = float(
-            np.linalg.norm(np.asarray(best["ees"][0], float)[:3] - target[:3]))
+            np.linalg.norm(np.asarray(predicted_ees[0], float)[:3] - target[:3]))
         self.last_objective_terms["task_progress_tolerance"] = float(
             task_progress_tolerance)
         self.last_objective_terms["phase"] = phase_name
