@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 
 sys.dont_write_bytecode = True
@@ -72,6 +73,46 @@ def first_value(*values):
         if value not in (None, "", [], {}):
             return value
     return ""
+
+
+def valid_selected_id(value):
+    return str(value or "").strip() not in ("", "planning_failed", "none", "None")
+
+
+def selected_from_ros_log(run_dir):
+    path = os.path.join(run_dir, "ros.log")
+    selected = {}
+    corridor_nodes = {}
+    try:
+        with open(path, errors="ignore") as handle:
+            for line in handle:
+                match = re.search(
+                    r"\[wc\]\[corridor\]\s+(?P<label>\S+).*nodes=(?P<nodes>.*)$",
+                    line)
+                if match:
+                    corridor_nodes[match.group("label")] = [
+                        item for item in match.group("nodes").strip().split(",")
+                        if item]
+                match = re.search(
+                    r"selected corridor:\s*(?P<cid>\S+)\s+label=(?P<label>\S+).*source=(?P<source>[^)\s]+)",
+                    line)
+                if match:
+                    label = match.group("label")
+                    selected = {
+                        "corridor_id": match.group("cid"),
+                        "selected_corridor_id": match.group("cid"),
+                        "execution_corridor_id": match.group("cid"),
+                        "label": label,
+                        "selected_corridor_label": label,
+                        "selected": True,
+                        "candidate_source": match.group("source"),
+                        "recovery_level": "ros_log_selected_corridor",
+                    }
+                    if label in corridor_nodes:
+                        selected["topology_nodes"] = corridor_nodes[label]
+    except Exception:
+        return {}
+    return selected
 
 def runtime_validation_fields(diag, metrics=None, selected=None, ref_count=0):
     diag = dict(diag or {})
@@ -240,16 +281,25 @@ def reference_points(run_dir, limit=None):
 
 def selected_candidate(run_dir, robot):
     metrics = load_json(os.path.join(run_dir, "metrics.json"))
+    metrics_csv = load_last_csv(os.path.join(run_dir, "metrics.csv"))
     trace = load_json(os.path.join(run_dir, "decision_trace.json"))
     ref_id, _source, _count, _points = reference_points(run_dir, limit=1)
+    log_selected = selected_from_ros_log(run_dir)
     selected_id = str(first_value(
         metrics.get("selected_corridor_id"),
         metrics.get("execution_corridor_id"),
         metrics.get("corridor_id"),
+        metrics_csv.get("selected_corridor_id"),
+        metrics_csv.get("execution_corridor_id"),
+        metrics_csv.get("corridor_id"),
         trace.get("selected_corridor_id"),
         trace.get("execution_corridor_id"),
         trace.get("corridor_id"),
+        log_selected.get("corridor_id"),
         ref_id))
+    if not valid_selected_id(selected_id) and valid_selected_id(
+            log_selected.get("corridor_id")):
+        selected_id = str(log_selected.get("corridor_id"))
     candidates = load_json(os.path.join(run_dir, "candidate_corridors.json"), [])
     if isinstance(candidates, dict):
         candidates = list(candidates.get("candidates", []) or [])
@@ -275,6 +325,21 @@ def selected_candidate(run_dir, robot):
             if isinstance(cand, dict) and str(cand.get("candidate_status", "")) == "feasible":
                 chosen = dict(cand)
                 break
+    if not chosen and valid_selected_id(log_selected.get("corridor_id")):
+        chosen = dict(log_selected)
+    if not chosen and valid_selected_id(selected_id):
+        chosen = {
+            "corridor_id": selected_id,
+            "selected_corridor_id": selected_id,
+            "execution_corridor_id": selected_id,
+            "label": str(first_value(
+                metrics.get("selected_corridor_label"),
+                metrics_csv.get("selected_corridor_label"),
+                trace.get("selected_corridor_label"),
+                selected_id)),
+            "selected": True,
+            "recovery_level": "metrics_selected_corridor",
+        }
     if chosen:
         cid = str(first_value(
             chosen.get("corridor_id"),

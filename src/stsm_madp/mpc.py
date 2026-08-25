@@ -4927,6 +4927,7 @@ class WheelchairMPC:
             "interest_point": 0,
             "forbidden": 0,
             "insufficient_progress": 0,
+            "nonprogressive_rollout": 0,
         }
         min_alignment_first_v = min(0.02, self.a_max * self.dt)
         empty_parts = {
@@ -4961,9 +4962,7 @@ class WheelchairMPC:
                 local_ref = ref[min(k, ref.shape[0] - 1):]
                 warm = self._pure_pursuit_u(
                     x, local_ref if len(local_ref) else ref, field, previous)
-                local_goal_u = (
-                    self._goal_seek_u(x, goal)
-                    if dist0 < self.final_approach_radius else None)
+                local_goal_u = self._goal_seek_u(x, goal)
                 for u in self._sequence_step_controls(
                         previous, warm_u=warm, goal_u=local_goal_u):
                     if (abs(float(u[0] - previous[0])) >
@@ -5104,6 +5103,14 @@ class WheelchairMPC:
             ref_progress = float(
                 np.linalg.norm(x0[:2] - ref_goal[:2]) -
                 np.linalg.norm(x[:2] - ref_goal[:2]))
+            first_state = (
+                np.asarray(item["states"][0], float)
+                if item["states"] else np.asarray(x0, float))
+            first_goal_progress = float(
+                dist0 - np.linalg.norm(first_state[:2] - goal[:2]))
+            first_ref_progress = float(
+                np.linalg.norm(x0[:2] - ref_goal[:2]) -
+                np.linalg.norm(first_state[:2] - ref_goal[:2]))
             progress_reward = self.lam_progress * max(0.0, progress)
             ref_progress_reward = self.lam_ref_progress * max(0.0, ref_progress)
             speed_reward = self.lam_speed * sum(
@@ -5139,26 +5146,39 @@ class WheelchairMPC:
                 "reference_progress_reward": -ref_progress_reward,
                 "speed_reward": -speed_reward,
                 "alignment_translation": float(sequence_translation),
+                "reference_progress": float(ref_progress),
+                "first_step_goal_progress": float(first_goal_progress),
+                "first_step_reference_progress": float(first_ref_progress),
             })
             records.append((total, progress, heading_improvement, distN,
-                            sequence_translation,
+                            sequence_translation, ref_progress,
+                            first_goal_progress, first_ref_progress,
                             item, terminal_adp, objective))
 
         min_alignment_translation = max(0.005, self.min_progress_per_solve)
+        min_rollout_progress = 0.5 * float(self.min_progress_per_solve)
+        max_heading_recovery_backtrack = max(
+            0.02, 4.0 * float(self.min_progress_per_solve))
         # A liveness gate needs a positive command now, but must not require
         # the exact maximum acceleration step.  The latter rejects otherwise
         # safe sequences under tiny state or floating-point differences.
         valid = [
             item for item in records
             if (dist0 < 0.12 or
-                (float(item[5]["controls"][0][0]) + 1e-9 >=
+                (float(item[8]["controls"][0][0]) + 1e-9 >=
                  min_alignment_first_v and
                  (item[1] + 1e-9 >= self.min_progress_per_solve or
+                  item[5] + 1e-9 >= self.min_progress_per_solve or
+                  item[6] + 1e-9 >= min_rollout_progress or
+                  item[7] + 1e-9 >= min_rollout_progress or
                   (item[2] + 1e-9 >= self.min_heading_improvement and
-                   item[4] + 1e-9 >= min_alignment_translation))))]
+                   item[4] + 1e-9 >= min_alignment_translation and
+                   item[1] + max_heading_recovery_backtrack >= 0.0 and
+                   item[5] + max_heading_recovery_backtrack >= 0.0))))]
         if not valid:
             self.last_solver_status = "safe_stop: insufficient_progress"
             violation_counts["insufficient_progress"] = int(len(records))
+            violation_counts["nonprogressive_rollout"] = int(len(records))
             self.last_constraint_violation = violation_counts
             self.last_objective_terms = {
                 "required_first_speed": float(min_alignment_first_v),
@@ -5168,17 +5188,27 @@ class WheelchairMPC:
                     self.min_heading_improvement),
                 "required_alignment_translation": float(
                     min_alignment_translation),
+                "required_rollout_progress": float(min_rollout_progress),
+                "max_heading_recovery_backtrack": float(
+                    max_heading_recovery_backtrack),
                 "best_sequence_progress": float(max(
                     [item[1] for item in records] or [0.0])),
+                "best_reference_progress": float(max(
+                    [item[5] for item in records] or [0.0])),
+                "best_first_step_goal_progress": float(max(
+                    [item[6] for item in records] or [0.0])),
+                "best_first_step_reference_progress": float(max(
+                    [item[7] for item in records] or [0.0])),
                 "best_heading_improvement": float(max(
                     [item[2] for item in records] or [0.0])),
                 "best_first_speed": float(max(
-                    [item[5]["controls"][0][0] for item in records] or [0.0])),
+                    [item[8]["controls"][0][0] for item in records] or [0.0])),
             }
             return 0.0, 0.0
         best = min(valid, key=lambda value: value[0])
         (best_cost, progress, heading_improvement, _distN,
-         alignment_translation, best_item, terminal_adp, objective) = best
+         alignment_translation, ref_progress, first_goal_progress,
+         first_ref_progress, best_item, terminal_adp, objective) = best
         controls = list(best_item["controls"])
         states = list(best_item["states"])
         best_u = controls[0]
@@ -5203,6 +5233,13 @@ class WheelchairMPC:
             heading_improvement)
         self.last_objective_terms["alignment_translation"] = float(
             alignment_translation)
+        self.last_objective_terms["reference_progress"] = float(ref_progress)
+        self.last_objective_terms["first_step_goal_progress"] = float(
+            first_goal_progress)
+        self.last_objective_terms["first_step_reference_progress"] = float(
+            first_ref_progress)
+        self.last_objective_terms["required_rollout_progress"] = float(
+            min_rollout_progress)
         self.last_constraint_violation = violation_counts
         self.last_control_sequence_varies = bool(any(
             not np.allclose(controls[0], item) for item in controls[1:]))

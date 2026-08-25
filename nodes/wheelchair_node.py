@@ -256,7 +256,6 @@ class WheelchairNode:
         self.runtime_replan_fallback_count = 0
         self.last_corridor_plan_duration_s = 0.0
         self.replan_deadline_skip_count = 0
-        self.stsm_progress_assist_count = 0
         self.decision_trace_out = rospy.get_param("~decision_trace_out", "")
         self.mpc_reference_out = rospy.get_param("~mpc_reference_out", "")
         self.mpc_diagnostics_out = rospy.get_param("~mpc_diagnostics_out", "")
@@ -4229,81 +4228,6 @@ class WheelchairNode:
         return float(np.arctan2(np.sin(desired - self.state[2]),
                                 np.cos(desired - self.state[2])))
 
-    def _stsm_topology_progress_assist(self, corridor, ref, dist, gate,
-                                       interest_eval=None):
-        """One-cycle liveness control for an already-selected topology tube."""
-        if (self.baseline or gate.stop or
-                not self._corridor_is_topological(corridor) or
-                ref is None or len(ref) == 0):
-            return None
-        if dist <= max(self.final_approach_entry_radius,
-                       self.execution_stop_tolerance):
-            return None
-        risk = float(getattr(gate, "risk", 0.0))
-        if interest_eval is not None:
-            risk = max(risk, float(interest_eval.get(
-                "risk_gate", interest_eval.get("phi_max", 0.0))))
-        if risk >= min(float(self.gate.rho_warn),
-                       float(self.footprint_gate.rho_warn)):
-            return None
-
-        state = np.asarray(self.state, float)
-        ref_arr = np.asarray(ref, float)
-        target_points = []
-        for idx in (3, 6, len(ref_arr) - 1):
-            if len(ref_arr) > 0:
-                target_points.append(ref_arr[min(idx, len(ref_arr) - 1), :2])
-        target_points.append(np.asarray(self.goal, float)[:2])
-
-        floor = max(float(self.stsm_progress_floor_v), 0.12)
-        v_nominal = min(max(floor, 0.14), 0.45 * float(self.mpc.v_max))
-        w_cap = min(float(self.stsm_progress_floor_w_max), 0.75)
-        best = None
-        for target in target_points:
-            desired = np.arctan2(target[1] - state[1], target[0] - state[0])
-            herr = float(np.arctan2(np.sin(desired - state[2]),
-                                    np.cos(desired - state[2])))
-            align = max(0.35, float(np.cos(abs(herr))))
-            v = float(v_nominal * align)
-            w = float(np.clip(1.35 * herr, -w_cap, w_cap))
-            x_next = np.array(state, float)
-            x_next[0] += v * np.cos(x_next[2]) * float(self.mpc.dt)
-            x_next[1] += v * np.sin(x_next[2]) * float(self.mpc.dt)
-            progress = float(
-                dist - np.linalg.norm(x_next[:2] - np.asarray(self.goal, float)[:2]))
-            try:
-                _proj, tube_dist = corridor.project(
-                    np.array([x_next[0], x_next[1], 0.0]))
-                tube_violation = max(
-                    0.0,
-                    float(tube_dist) - (
-                        float(getattr(corridor, "radius", 0.0)) +
-                        float(self.replan_tube_margin)))
-            except Exception:
-                tube_violation = 1.0
-            score = -4.0 * progress + 2.0 * tube_violation + 0.05 * abs(w)
-            if best is None or score < best[0]:
-                best = (score, v, w, progress, tube_violation, herr)
-
-        if best is None:
-            return None
-        _score, v, w, progress, tube_violation, herr = best
-        if progress < -0.01 or tube_violation > 0.20:
-            return None
-        self.stsm_progress_assist_count += 1
-        self.mpc.last_solver_status = "topology_progress_assist"
-        self.mpc.last_predicted_controls = [[float(v), float(w)]]
-        self.mpc.last_predicted_states = []
-        self.mpc.last_objective_terms = {
-            "assist_goal_progress": float(progress),
-            "assist_tube_violation": float(tube_violation),
-            "assist_heading_error": float(herr),
-        }
-        self.mpc.last_sequence_progress = float(max(0.0, progress))
-        self.mpc.last_heading_improvement = 0.0
-        self.mpc.last_alignment_translation = float(max(0.0, v) * self.mpc.dt)
-        return float(v), float(w)
-
     def _apply_stsm_progress_floor(self, corridor, ref, v, w, dist, gate,
                                    adp_scale, interest_eval=None):
         """Preserve live execution of an already-selected topology corridor."""
@@ -4643,7 +4567,6 @@ class WheelchairNode:
         last_replan_time = run_start
         replan_progress_time = run_start
         last_replan_dist = float("inf")
-        stsm_progress_assist_active = False
         while not rospy.is_shutdown():
             if self.state is not None:
                 self.mpc_executed_records.append({
@@ -4766,7 +4689,6 @@ class WheelchairNode:
                 if dist < last_replan_dist - self.progress_eps:
                     last_replan_dist = dist
                     replan_progress_time = now
-                    stsm_progress_assist_active = False
                 elif ((now - replan_progress_time).to_sec() >=
                       self.no_progress_replan_time):
                     if (not is_topology_corridor or
@@ -4776,8 +4698,6 @@ class WheelchairNode:
                             replan_reason = "no_progress"
                         else:
                             self.replan_deadline_skip_count += 1
-                            stsm_progress_assist_active = bool(
-                                is_topology_corridor)
                             replan_progress_time = now
                             rospy.logwarn_throttle(
                                 5.0,
@@ -4843,37 +4763,30 @@ class WheelchairNode:
                     rospy.logerr("[wc] invalid STSM corridor before MPC: %s", exc)
                     break
                 topology_constraint_for_mpc = {}
-            assist_u = None
-            if stsm_progress_assist_active:
-                assist_u = self._stsm_topology_progress_assist(
-                    corridor, ref, dist, gate, interest_eval=interest_eval)
-            if assist_u is not None:
-                v, w = assist_u
-            else:
-                v, w = self.mpc.solve(
-                    self.state, ref, self.field,
-                    corridor=corridor, u_prev=self.u_prev,
-                    critic=self.adp_critic if self.adp_enabled else None,
-                    feature_builder=self.adp_features,
-                    lambda_adp_terminal=(
-                        self.lambda_adp_terminal if self.adp_enabled else 0.0),
-                    goal=self.goal,
-                    gate_info={
-                        "state": gate.state,
-                        "stop": gate.stop,
-                        "rho_warn": self.gate.rho_warn,
-                    },
-                    interest_risk=interest_eval or {},
-                    use_adp_terminal=(
-                        self.adp_enabled and self.mpc_use_adp_terminal),
-                    interest_constraints={
-                        "enabled": bool(safety_predictive_enabled),
-                        "local_points": self.wc_local_points,
-                        "labels": self.wc_ip_labels,
-                        "rho": self.footprint_gate.rho_stop,
-                    },
-                    topology_constraint=topology_constraint_for_mpc,
-                    predictive=bool(not self.baseline))
+            v, w = self.mpc.solve(
+                self.state, ref, self.field,
+                corridor=corridor, u_prev=self.u_prev,
+                critic=self.adp_critic if self.adp_enabled else None,
+                feature_builder=self.adp_features,
+                lambda_adp_terminal=(
+                    self.lambda_adp_terminal if self.adp_enabled else 0.0),
+                goal=self.goal,
+                gate_info={
+                    "state": gate.state,
+                    "stop": gate.stop,
+                    "rho_warn": self.gate.rho_warn,
+                },
+                interest_risk=interest_eval or {},
+                use_adp_terminal=(
+                    self.adp_enabled and self.mpc_use_adp_terminal),
+                interest_constraints={
+                    "enabled": bool(safety_predictive_enabled),
+                    "local_points": self.wc_local_points,
+                    "labels": self.wc_ip_labels,
+                    "rho": self.footprint_gate.rho_stop,
+                },
+                topology_constraint=topology_constraint_for_mpc,
+                predictive=bool(not self.baseline))
             runtime_record = {
                 "solve_index": int(len(self.mpc_runtime_records)),
                 "corridor_id": self._corridor_id(corridor),
@@ -4896,10 +4809,6 @@ class WheelchairNode:
                 "last_corridor_plan_duration_s": float(
                     self.last_corridor_plan_duration_s),
                 "first_control": [float(v), float(w)],
-                "topology_progress_assist_active": bool(
-                    stsm_progress_assist_active),
-                "topology_progress_assist_count": int(
-                    self.stsm_progress_assist_count),
             }
             self.mpc_runtime_records.append(runtime_record)
             if len(self.mpc_runtime_records) > 200:

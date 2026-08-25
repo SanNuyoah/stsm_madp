@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 from types import SimpleNamespace
 from xml.etree import ElementTree
 
@@ -14,7 +15,7 @@ for path in (SRC, SCRIPTS):
         sys.path.insert(0, path)
 
 
-from ensure_result_diagnostics import runtime_validation_fields
+from ensure_result_diagnostics import runtime_validation_fields, selected_candidate
 from visualization.generate_results_figures import as_float
 from stsm_madp.manifold_constraint import (
     ManifoldConstraint,
@@ -963,6 +964,24 @@ def test_wheelchair_progress_gate_does_not_require_max_acceleration_step():
     assert mpc.last_objective_terms["required_first_speed"] == 0.02
 
 
+def test_wheelchair_predictive_mpc_rejects_nonprogressive_rollout():
+    mpc = WheelchairMPC(horizon=4, dt=0.2, a_max=0.5, beam_width=4)
+    mpc._sequence_step_controls = lambda previous, warm_u=None, goal_u=None: [
+        np.array([0.05, 0.0], float)]
+
+    v, w = mpc.solve(
+        [0.0, 0.0, np.pi],
+        [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0]],
+        ZeroField(), goal=[1.0, 0.0], predictive=True)
+
+    assert v == 0.0
+    assert w == 0.0
+    assert mpc.last_solver_status == "safe_stop: insufficient_progress"
+    assert mpc.last_constraint_violation["nonprogressive_rollout"] > 0
+    assert mpc.last_objective_terms["best_first_step_goal_progress"] < 0.0
+    assert mpc.last_objective_terms["best_reference_progress"] < 0.0
+
+
 def test_wheelchair_beam_keeps_executable_first_step_before_pruning():
     mpc = WheelchairMPC(horizon=12, dt=0.2, a_max=0.5, beam_width=12)
     ref = np.column_stack([
@@ -993,6 +1012,29 @@ def test_wheelchair_beam_reuses_identical_state_safety_evaluations():
 
     assert v >= 0.02
     assert field.phi_calls < 500
+
+
+def test_recovered_diagnostics_preserve_roslog_selected_corridor():
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(os.path.join(tmp, "metrics.csv"), "w") as handle:
+            handle.write(
+                "selected_corridor_id,selected_corridor_label,morse_used\n"
+                "planning_failed,planning_failed,1\n")
+        with open(os.path.join(tmp, "ros.log"), "w") as handle:
+            handle.write(
+                "[INFO] [0.0]: [wc][corridor] morse_saddle_2 "
+                "base=22.086 adp=0.000 total=22.086 nodes=start,saddle_0,minimum_4,goal\n"
+                "[INFO] [0.0]: [wc] selected corridor: wheelchair_c0001 "
+                "label=morse_saddle_2 (cost 22.086, source=topology)\n")
+
+        selected_id, selected = selected_candidate(tmp, "wheelchair")
+
+    assert selected_id == "wheelchair_c0001"
+    assert selected["corridor_id"] == "wheelchair_c0001"
+    assert selected["label"] == "morse_saddle_2"
+    assert selected["candidate_source"] == "topology"
+    assert selected["topology_nodes"] == [
+        "start", "saddle_0", "minimum_4", "goal"]
 
 
 def test_runtime_sources_preserve_p0_execution_contracts():
