@@ -1078,6 +1078,10 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "stsm_liveness_floor_v" in wheelchair_source
     assert "stsm_liveness_w_max" in wheelchair_source
     assert "stsm_liveness_active" in wheelchair_source
+    assert "_runtime_candidate_first_step_status" in wheelchair_source
+    assert "runtime_switch_precheck_trials" in wheelchair_source
+    assert "first_step_not_executable" in wheelchair_source
+    assert "ready.runtime_switch_first_step_status" in wheelchair_source
     assert "first_step_progress_ratio" in wheelchair_source
     assert "heading_recovery_w_max" in wheelchair_source
     assert "alignment_floor_scale = 1.0 if liveness_active" in wheelchair_source

@@ -261,6 +261,7 @@ class WheelchairNode:
         self.last_valid_topology_debug = {}
         self.runtime_topology_candidate_pool = []
         self.runtime_rejected_topology_corridor_ids = set()
+        self.runtime_topology_candidate_switch_trials = []
         self.runtime_topology_candidate_switch_count = 0
         self.runtime_replan_fallback_count = 0
         self.last_corridor_plan_duration_s = 0.0
@@ -2993,6 +2994,90 @@ class WheelchairNode:
                           reason, self._corridor_label(kept, ""), exc)
             return kept if kept is not None else corridor, False
 
+    def _runtime_candidate_first_step_status(self, candidate):
+        """Check whether a ranked topology candidate is executable now.
+
+        This preflight uses the same predictive MPC contract as execution but
+        does not publish a command.  Runtime switching is allowed only when the
+        candidate can produce a live first step from the current measured
+        wheelchair pose; otherwise the previous corridor remains active.
+        """
+        cid = self._corridor_id(candidate, "")
+        status = {
+            "corridor_id": cid,
+            "runtime_switch_precheck": True,
+            "accepted": False,
+            "failure_reason": "",
+            "solver_status": "not_run",
+            "first_control": [0.0, 0.0],
+            "objective_terms": {},
+            "constraint_violation": {},
+        }
+        if self.state is None:
+            status["failure_reason"] = "state_unavailable"
+            return status
+        try:
+            ref = self._horizon_ref(candidate)
+            _ti, _ci, _mi, topology_constraint_for_mpc = (
+                build_mpc_constraint_inputs(
+                    candidate, self.manifold, ref,
+                    safe_threshold=float(self.manifold.rho),
+                    minimum_clearance=0.10,
+                    phase="navigation", robot_type="wheelchair",
+                    manifold_constraint_mode=self.manifold_constraint_mode,
+                    strict_stsm=bool(not self.baseline),
+                    expected_corridor_id=cid))
+            v, w = self.mpc.solve(
+                self.state, ref, self.field,
+                corridor=candidate, u_prev=self.u_prev,
+                critic=self.adp_critic if self.adp_enabled else None,
+                feature_builder=self.adp_features,
+                lambda_adp_terminal=(
+                    self.lambda_adp_terminal if self.adp_enabled else 0.0),
+                goal=self.goal,
+                gate_info={
+                    "state": "runtime_switch_precheck",
+                    "stop": False,
+                    "rho_warn": self.gate.rho_warn,
+                },
+                interest_risk={},
+                use_adp_terminal=(
+                    self.adp_enabled and self.mpc_use_adp_terminal),
+                interest_constraints={
+                    "enabled": bool(self.interest_enabled),
+                    "local_points": self.wc_local_points,
+                    "labels": self.wc_ip_labels,
+                    "rho": self.footprint_gate.rho_stop,
+                },
+                topology_constraint=topology_constraint_for_mpc,
+                predictive=True)
+            objective = dict(self.mpc.last_objective_terms or {})
+            solver_status = str(self.mpc.last_solver_status)
+            first_step_live = bool(objective.get("first_step_live", False))
+            heading_recovery_live = bool(objective.get(
+                "heading_recovery_live", False))
+            accepted = bool(
+                not solver_status.startswith("safe_stop:") and
+                (first_step_live or heading_recovery_live))
+            status.update({
+                "accepted": accepted,
+                "solver_status": solver_status,
+                "first_control": [float(v), float(w)],
+                "objective_terms": objective,
+                "constraint_violation": dict(
+                    self.mpc.last_constraint_violation or {}),
+                "first_step_live": first_step_live,
+                "heading_recovery_live": heading_recovery_live,
+                "sequence_progress": float(self.mpc.last_sequence_progress),
+            })
+            if not accepted:
+                status["failure_reason"] = (
+                    "first_step_not_executable:%s" % solver_status)
+        except Exception as exc:
+            status["failure_reason"] = "%s:%s" % (
+                type(exc).__name__, str(exc)[:160])
+        return status
+
     def _switch_to_ranked_topology_candidate(self, current_corridor, reason):
         """Switch within the already ranked Morse/topology candidate pool.
 
@@ -3006,6 +3091,7 @@ class WheelchairNode:
         current_id = self._corridor_id(current_corridor, "")
         if current_id:
             self.runtime_rejected_topology_corridor_ids.add(current_id)
+        switch_trials = []
         pool = [
             corr for corr in list(self.runtime_topology_candidate_pool or [])
             if corr is not None and self._corridor_is_topological(corr)
@@ -3039,7 +3125,24 @@ class WheelchairNode:
             if ready is None:
                 self.runtime_rejected_topology_corridor_ids.add(cid)
                 continue
+            precheck = self._runtime_candidate_first_step_status(ready)
+            switch_trials.append(precheck)
+            ready.runtime_switch_first_step_status = dict(precheck)
+            if not bool(precheck.get("accepted", False)):
+                breakdown = dict(getattr(
+                    ready, "candidate_cost_breakdown", {}) or {})
+                breakdown["runtime_switch_precheck"] = dict(precheck)
+                breakdown["runtime_switch_reject_reason"] = str(
+                    precheck.get("failure_reason", ""))
+                ready.candidate_cost_breakdown = breakdown
+                rospy.logwarn(
+                    "[wc][topology] runtime switch reject %s reason=%s status=%s first_step=%s",
+                    cid, precheck.get("failure_reason", ""),
+                    precheck.get("solver_status", ""),
+                    precheck.get("first_control", []))
+                continue
             self.runtime_topology_candidate_switch_count += 1
+            self.runtime_topology_candidate_switch_trials.extend(switch_trials)
             ready.runtime_topology_candidate_switch = True
             ready.runtime_topology_switch_reason = str(reason or "")
             ready.runtime_topology_previous_corridor_id = current_id
@@ -3057,6 +3160,9 @@ class WheelchairNode:
             dbg["runtime_switch_previous_corridor_id"] = current_id
             dbg["runtime_switch_selected_corridor_id"] = self._corridor_id(
                 ready, "")
+            dbg["runtime_switch_precheck_used"] = 1
+            dbg["runtime_switch_precheck_trials"] = list(switch_trials)
+            dbg["runtime_switch_selected_precheck"] = dict(precheck)
             dbg["fallback_used"] = 0
             dbg["topology_fallback_used"] = 0
             self.manifold.last_topology_debug = dbg
@@ -3067,6 +3173,15 @@ class WheelchairNode:
                 reason, current_id, self._corridor_id(ready),
                 self._corridor_label(ready, ""))
             return ready, True
+        if switch_trials:
+            self.runtime_topology_candidate_switch_trials.extend(switch_trials)
+            dbg = dict(getattr(self.manifold, "last_topology_debug", {}) or {})
+            dbg["runtime_switch_precheck_used"] = 1
+            dbg["runtime_switch_precheck_trials"] = list(
+                self.runtime_topology_candidate_switch_trials[-20:])
+            dbg["runtime_switch_reject_all"] = 1
+            dbg["runtime_switch_reason"] = str(reason or "")
+            self.manifold.last_topology_debug = dbg
         return current_corridor, False
 
     def _runtime_replan_fallback_corridor(self, current_corridor,
