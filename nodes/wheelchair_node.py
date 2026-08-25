@@ -509,6 +509,7 @@ class WheelchairNode:
             "refined", "refined_waypoints", "turn_recovered_refined",
             "candidate_fallback", "refinement", "candidate", "fallback",
             "selected_candidate_waypoints", "raw_waypoints",
+            "diff_drive_launch_prefix", "raw_diff_drive_launch_prefix",
             "runtime_replan_fallback")
 
     def _ensure_corridor_runtime_contract(self, corridor,
@@ -1620,6 +1621,167 @@ class WheelchairNode:
             float(np.mean(phi_values)) if phi_values else 0.0)
         return True, ""
 
+    def _project_points_to_corridor(self, path, corridor, margin=0.85):
+        pts = np.asarray(path, float)
+        if pts.size == 0:
+            return pts.reshape((0, 3))
+        pts = pts.copy()
+        radius = float(getattr(corridor, "radius", 0.0)) * float(margin)
+        if radius <= 0.0 or not hasattr(corridor, "project"):
+            return pts
+        for idx, point in enumerate(pts):
+            try:
+                projected, dist = corridor.project(point)
+            except Exception:
+                continue
+            if float(dist) <= radius + 1e-9:
+                continue
+            dim = min(len(projected), pts.shape[1])
+            pull = np.asarray(projected, float)[:dim] - pts[idx, :dim]
+            pts[idx, :dim] += pull * (
+                1.0 - radius / max(float(dist), 1e-9))
+        return pts
+
+    def _make_heading_progress_prefix(self, reference, corridor):
+        """Build a short launch segment aligned with the current diff-drive pose."""
+        if self.state is None or self.goal is None:
+            return None
+        ref = np.asarray(reference, float)
+        if ref.size == 0 or ref.ndim != 2 or ref.shape[1] < 2:
+            return None
+        start = np.asarray(self.state[:2], float)
+        goal = np.asarray(self.goal[:2], float)
+        to_goal = goal - start
+        goal_dist = float(np.linalg.norm(to_goal))
+        if goal_dist <= 1e-6:
+            return None
+        heading = np.array([
+            np.cos(float(self.state[2])),
+            np.sin(float(self.state[2]))], float)
+        goal_dir = to_goal / goal_dist
+        # Use the current heading when it already points generally goalward;
+        # otherwise bias the prefix toward the goal rather than asking the
+        # diff-drive base to track a reverse-facing first waypoint.
+        blend = heading + goal_dir
+        if float(np.linalg.norm(blend)) <= 1e-6 or np.dot(heading, goal_dir) < 0.0:
+            blend = goal_dir
+        launch_dir = blend / max(float(np.linalg.norm(blend)), 1e-9)
+        step = max(0.06, min(0.12, 4.0 * float(self.topology_min_segment_length)))
+        launch_len = min(0.55, max(0.24, 0.22 * goal_dist))
+        prefix_count = max(3, int(np.ceil(launch_len / step)))
+        prefix = []
+        for i in range(prefix_count + 1):
+            p2 = start + launch_dir * min(launch_len, step * i)
+            if ref.shape[1] >= 3:
+                prefix.append([p2[0], p2[1], 0.0])
+            else:
+                prefix.append([p2[0], p2[1]])
+        prefix = np.asarray(prefix, float)
+        join = prefix[-1, :2]
+        tail = ref
+        if len(ref) > 1:
+            dists = np.linalg.norm(ref[:, :2] - join.reshape(1, 2), axis=1)
+            join_idx = int(np.argmin(dists))
+            # Keep at least one topology point after the launch prefix.  The
+            # prefix repairs execution at the start; it must not erase the
+            # Morse channel itself.
+            join_idx = min(max(join_idx, 1), len(ref) - 1)
+            tail = ref[join_idx:]
+        repaired = np.vstack([prefix, tail])
+        repaired = self._project_points_to_corridor(repaired, corridor)
+        ok, _reason = self._footprint_path_checker(repaired)
+        if not ok:
+            return None
+        return repaired
+
+    def _select_wheelchair_execution_reference(self, corr, refined, metrics):
+        """Prefer a reference with executable heading and monotonic launch."""
+        if self.baseline or self.state is None:
+            return np.asarray(refined, float), dict(metrics or {}), False
+        base = np.asarray(refined, float)
+        if base.size == 0:
+            return base, dict(metrics or {}), False
+        current = wheelchair_nonholonomic_execution_profile(
+            base, self.state, self.goal,
+            min_step=max(0.03, self.topology_min_segment_length),
+            initial_lookahead=0.12,
+            horizon_points=min(10, max(4, len(base))))
+        needs_repair = (
+            float(current.get("initial_heading_error", 0.0)) > 1.85 or
+            float(current.get("monotonic_regression_ratio", 0.0)) > 0.18 or
+            float(current.get("nonmonotonic_fraction", 0.0)) > 0.30 or
+            float(current.get("heading_oscillation", 0.0)) > 0.50)
+        if not needs_repair:
+            out = dict(metrics or {})
+            out["nonholonomic_execution_profile"] = dict(current)
+            out["diff_drive_reference_repaired"] = False
+            return base, out, False
+        candidates = [("refined", base, current)]
+        repaired = self._make_heading_progress_prefix(base, corr)
+        if repaired is not None and len(repaired) >= 2:
+            candidates.append((
+                "diff_drive_launch_prefix",
+                repaired,
+                wheelchair_nonholonomic_execution_profile(
+                    repaired, self.state, self.goal,
+                    min_step=max(0.03, self.topology_min_segment_length),
+                    initial_lookahead=0.12,
+                    horizon_points=min(10, max(4, len(repaired))))))
+        raw = np.asarray(getattr(corr, "raw_topology_waypoints", []), float)
+        if raw.size == 0:
+            raw = np.asarray(getattr(corr, "topology_ordered_waypoints", []), float)
+        if raw.size > 0 and raw.ndim == 2 and len(raw) >= 2:
+            raw_repaired = self._make_heading_progress_prefix(raw, corr)
+            if raw_repaired is not None and len(raw_repaired) >= 2:
+                candidates.append((
+                    "raw_diff_drive_launch_prefix",
+                    raw_repaired,
+                    wheelchair_nonholonomic_execution_profile(
+                        raw_repaired, self.state, self.goal,
+                        min_step=max(0.03, self.topology_min_segment_length),
+                        initial_lookahead=0.12,
+                        horizon_points=min(10, max(4, len(raw_repaired))))))
+        best_source, best_path, best_profile = min(
+            candidates,
+            key=lambda item: float(item[2].get("execution_profile_cost", 0.0)))
+        repaired_used = best_source != "refined" and (
+            float(best_profile.get("execution_profile_cost", 0.0)) + 1e-6 <
+            float(current.get("execution_profile_cost", 0.0)))
+        out = dict(metrics or {})
+        out["nonholonomic_execution_profile"] = dict(best_profile)
+        out["pre_repair_nonholonomic_execution_profile"] = dict(current)
+        out["diff_drive_reference_repaired"] = bool(repaired_used)
+        out["diff_drive_reference_source"] = str(best_source)
+        if repaired_used:
+            from stsm_madp.deform import path_curvature_metrics, path_length
+            repaired_metrics = path_curvature_metrics(best_path)
+            out.update(repaired_metrics)
+            out["refined_path_length"] = float(path_length(best_path))
+            out["reference_path_count"] = int(len(best_path))
+            out["reference_source"] = str(best_source)
+            trace = list(getattr(corr, "refinement_trace", []) or [])
+            trace.append({
+                "iteration": "diff_drive_launch_prefix",
+                "accepted": True,
+                "failure_reason": "",
+                "trajectory_valid": True,
+                "execution_profile_cost_before": float(
+                    current.get("execution_profile_cost", 0.0)),
+                "execution_profile_cost_after": float(
+                    best_profile.get("execution_profile_cost", 0.0)),
+                "initial_heading_error_before": float(
+                    current.get("initial_heading_error", 0.0)),
+                "initial_heading_error_after": float(
+                    best_profile.get("initial_heading_error", 0.0)),
+                "monotonic_regression_before": float(
+                    current.get("monotonic_regression", 0.0)),
+                "monotonic_regression_after": float(
+                    best_profile.get("monotonic_regression", 0.0)),
+            })
+            corr.refinement_trace = trace
+            out["refinement_trace"] = trace
+        return np.asarray(best_path, float), out, bool(repaired_used)
+
     def _prepare_executable_corridors(self, corrs):
         if not self.topology_refinement_enabled:
             if not self.baseline:
@@ -1702,6 +1864,28 @@ class WheelchairNode:
                         "max_turn", refined_max_turn))
                     attempt["turn_recovery_used"] = True
                     attempt["turn_recovery_metrics"] = dict(recovery_metrics)
+            refined, execution_metrics, execution_repaired = (
+                self._select_wheelchair_execution_reference(
+                    corr, refined, metrics))
+            if execution_repaired:
+                metrics.update(execution_metrics)
+                reference_source = str(metrics.get(
+                    "reference_source", reference_source))
+                refined_max_curvature = float(metrics.get(
+                    "max_curvature", refined_max_curvature))
+                refined_max_turn = float(metrics.get(
+                    "max_turn", refined_max_turn))
+                attempt["diff_drive_reference_repaired"] = True
+                attempt["diff_drive_reference_source"] = str(
+                    metrics.get("diff_drive_reference_source",
+                                reference_source))
+                attempt["nonholonomic_execution_profile"] = dict(
+                    metrics.get("nonholonomic_execution_profile", {}))
+                attempt["pre_repair_nonholonomic_execution_profile"] = dict(
+                    metrics.get(
+                        "pre_repair_nonholonomic_execution_profile", {}))
+            else:
+                metrics.update(execution_metrics)
             if (not fallback_used and
                     refined_max_curvature > executable_curvature_limit + 1e-9):
                 corr.reject_reason = "refined_execution_curvature_limit"
@@ -1747,24 +1931,65 @@ class WheelchairNode:
             attempt["execution_turn_limit"] = float(executable_turn_limit)
             attempt["execution_turn_tolerance"] = float(
                 executable_turn_tolerance)
+            attempt["diff_drive_reference_repaired"] = bool(
+                metrics.get("diff_drive_reference_repaired", False))
+            attempt["diff_drive_reference_source"] = str(metrics.get(
+                "diff_drive_reference_source", reference_source))
+            attempt["nonholonomic_execution_profile"] = dict(metrics.get(
+                "nonholonomic_execution_profile", {}))
             refinement_attempts.append(attempt)
             corr.waypoints = np.asarray(refined, float)
             corr.refined_waypoints = np.asarray(refined, float)
             corr.centerline = np.asarray(refined, float)
+            corr.refined_path_length = float(metrics.get(
+                "refined_path_length",
+                self._path_length(np.asarray(refined, float))))
+            corr.refined_max_turn_angle = float(metrics.get("max_turn", 0.0))
+            corr.refined_mean_turn_angle = float(metrics.get("mean_turn", 0.0))
+            corr.refined_max_curvature = float(metrics.get("max_curvature", 0.0))
+            refinement_output = dict(getattr(corr, "refinement_output", {}) or {})
+            refinement_output["trajectory"] = np.asarray(refined, float).tolist()
+            refinement_output["final_trajectory"] = np.asarray(refined, float).tolist()
+            refinement_output["reference_source"] = str(reference_source)
+            refinement_output["reference_path_count"] = int(len(np.asarray(refined, float)))
+            refinement_output["diff_drive_reference_repaired"] = bool(
+                metrics.get("diff_drive_reference_repaired", False))
+            refinement_output["diff_drive_reference_source"] = str(metrics.get(
+                "diff_drive_reference_source", reference_source))
+            refinement_output["nonholonomic_execution_profile"] = dict(
+                metrics.get("nonholonomic_execution_profile", {}))
+            refinement_output["pre_repair_nonholonomic_execution_profile"] = dict(
+                metrics.get("pre_repair_nonholonomic_execution_profile", {}))
+            corr.refinement_output = refinement_output
             association = associate_corridor_critical_points(corr, refined)
             corr.critical_point_association = association
             corr.critical_point_projection_index = {
                 str(item.get("id", "")): int(item.get("trajectory_index", -1))
                 for item in association.get("critical_points", [])
             }
+            refinement_output = dict(getattr(corr, "refinement_output", {}) or {})
+            refinement_output["critical_point_association"] = association
+            refinement_output["topology_stage_sequence"] = [
+                {
+                    "id": str(item.get("id", "")),
+                    "type": str(item.get("type", "")),
+                    "trajectory_index": int(item.get("trajectory_index", -1)),
+                    "stage_order": int(item.get(
+                        "stage_order", item.get("order", idx + 1))),
+                    "critical_point_status": str(item.get(
+                        "critical_point_status", "")),
+                }
+                for idx, item in enumerate(
+                    association.get("critical_points", []))
+            ]
+            corr.refinement_output = refinement_output
             corr.refinement_used = int(not fallback_used)
             corr.refinement_success = bool(not fallback_used)
             corr.refinement_fallback = bool(fallback_used)
             corr.final_reference_source = reference_source
             corr.refinement_reject_reason = str(
                 metrics.get("fallback_reason", "")) if fallback_used else ""
-            corr.path_length = float(getattr(
-                corr, "refined_path_length", corr.path_length))
+            corr.path_length = float(corr.refined_path_length)
             corr.max_turn_angle = float(metrics.get("max_turn", 0.0))
             corr.mean_turn_angle = float(metrics.get("mean_turn", 0.0))
             corr.max_curvature = float(metrics.get("max_curvature", 0.0))
@@ -1774,6 +1999,10 @@ class WheelchairNode:
                 initial_lookahead=0.12,
                 horizon_points=min(10, max(4, len(np.asarray(refined, float)))))
             corr.nonholonomic_execution_profile = dict(nonholonomic_profile)
+            corr.diff_drive_reference_repaired = bool(metrics.get(
+                "diff_drive_reference_repaired", False))
+            corr.diff_drive_reference_source = str(metrics.get(
+                "diff_drive_reference_source", reference_source))
             corr.diff_drive_execution_cost = float(
                 nonholonomic_profile.get("execution_profile_cost", 0.0))
             corr.initial_heading_error = float(
@@ -1816,6 +2045,10 @@ class WheelchairNode:
                 corr.nonmonotonic_fraction)
             breakdown["heading_oscillation"] = float(
                 corr.heading_oscillation)
+            breakdown["diff_drive_reference_repaired"] = bool(
+                corr.diff_drive_reference_repaired)
+            breakdown["diff_drive_reference_source"] = str(
+                corr.diff_drive_reference_source)
             corr.candidate_cost_breakdown = breakdown
             prepared.append(corr)
             rospy.loginfo(
@@ -2094,6 +2327,22 @@ class WheelchairNode:
                 corridor, "refinement_success", False)) if corridor is not None else False,
             "refinement_fallback": bool(getattr(
                 corridor, "refinement_fallback", False)) if corridor is not None else False,
+            "nonholonomic_execution_profile": dict(getattr(
+                corridor, "nonholonomic_execution_profile", {}) or {}) if corridor is not None else {},
+            "diff_drive_execution_cost": float(getattr(
+                corridor, "diff_drive_execution_cost", 0.0)) if corridor is not None else 0.0,
+            "initial_heading_error": float(getattr(
+                corridor, "initial_heading_error", 0.0)) if corridor is not None else 0.0,
+            "monotonic_regression": float(getattr(
+                corridor, "monotonic_regression", 0.0)) if corridor is not None else 0.0,
+            "nonmonotonic_fraction": float(getattr(
+                corridor, "nonmonotonic_fraction", 0.0)) if corridor is not None else 0.0,
+            "heading_oscillation": float(getattr(
+                corridor, "heading_oscillation", 0.0)) if corridor is not None else 0.0,
+            "diff_drive_reference_repaired": bool(getattr(
+                corridor, "diff_drive_reference_repaired", False)) if corridor is not None else False,
+            "diff_drive_reference_source": str(getattr(
+                corridor, "diff_drive_reference_source", "")) if corridor is not None else "",
         }
 
     def _write_selected_corridor_debug(self, out_dir):
@@ -2186,6 +2435,22 @@ class WheelchairNode:
                 "task_state": task_state,
                 "task_cost_breakdown": task_breakdown,
                 "execution_cost": float(getattr(corr, "execution_cost", 0.0)),
+                "nonholonomic_execution_profile": dict(getattr(
+                    corr, "nonholonomic_execution_profile", {}) or {}),
+                "diff_drive_execution_cost": float(getattr(
+                    corr, "diff_drive_execution_cost", 0.0)),
+                "initial_heading_error": float(getattr(
+                    corr, "initial_heading_error", 0.0)),
+                "monotonic_regression": float(getattr(
+                    corr, "monotonic_regression", 0.0)),
+                "nonmonotonic_fraction": float(getattr(
+                    corr, "nonmonotonic_fraction", 0.0)),
+                "heading_oscillation": float(getattr(
+                    corr, "heading_oscillation", 0.0)),
+                "diff_drive_reference_repaired": bool(getattr(
+                    corr, "diff_drive_reference_repaired", False)),
+                "diff_drive_reference_source": str(getattr(
+                    corr, "diff_drive_reference_source", "")),
                 "risk_norm": float(getattr(corr, "risk_norm", 0.0)),
                 "length_norm": float(getattr(corr, "length_norm", 0.0)),
                 "smooth_norm": float(getattr(corr, "smooth_norm", 0.0)),
@@ -2363,6 +2628,10 @@ class WheelchairNode:
                 selected, "nonmonotonic_fraction", 0.0))
             dbg["selected_heading_oscillation"] = float(getattr(
                 selected, "heading_oscillation", 0.0))
+            dbg["selected_diff_drive_reference_repaired"] = int(bool(getattr(
+                selected, "diff_drive_reference_repaired", False)))
+            dbg["selected_diff_drive_reference_source"] = str(getattr(
+                selected, "diff_drive_reference_source", ""))
             dbg["candidate_selection_status"] = str(getattr(
                 selected, "candidate_status", dbg.get(
                     "candidate_selection_status", "feasible")))

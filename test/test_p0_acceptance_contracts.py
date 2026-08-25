@@ -1143,6 +1143,10 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "wheelchair_nonholonomic_execution_profile" in wheelchair_source
     assert "diff_drive_execution_cost" in wheelchair_source
     assert "selected_monotonic_regression" in wheelchair_source
+    assert "_select_wheelchair_execution_reference" in wheelchair_source
+    assert "diff_drive_launch_prefix" in wheelchair_source
+    assert "selected_diff_drive_reference_repaired" in wheelchair_source
+    assert "pre_repair_nonholonomic_execution_profile" in wheelchair_source
     assert '"mpc_runtime_records": list(self.mpc_runtime_records)' in wheelchair_source
     assert "skip runtime blocking replan reason=no_progress" in wheelchair_source
     assert '"/stsm/wc_task_complete"' in wheelchair_source
