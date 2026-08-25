@@ -1051,6 +1051,10 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "rospy.Timer" in wheelchair_source
     assert "_command_keepalive_cb" in wheelchair_source
     assert "runtime_blocking_replan_enabled" in wheelchair_source
+    assert "runtime_topology_candidate_pool" in wheelchair_source
+    assert "_switch_to_ranked_topology_candidate" in wheelchair_source
+    assert "topology_runtime_candidate_switch_used" in wheelchair_source
+    assert "dynamic_replan_fallback = False" in wheelchair_source
     assert "skip runtime blocking replan reason=no_progress" in wheelchair_source
     assert '"/stsm/wc_task_complete"' in wheelchair_source
     assert '"/stsm/wc_task_complete"' in metrics_source

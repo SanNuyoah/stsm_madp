@@ -253,6 +253,9 @@ class WheelchairNode:
         self.selected_corridor = None
         self.execution_corridor = None
         self.last_valid_topology_debug = {}
+        self.runtime_topology_candidate_pool = []
+        self.runtime_rejected_topology_corridor_ids = set()
+        self.runtime_topology_candidate_switch_count = 0
         self.runtime_replan_fallback_count = 0
         self.last_corridor_plan_duration_s = 0.0
         self.replan_deadline_skip_count = 0
@@ -1383,6 +1386,9 @@ class WheelchairNode:
                 "topology refinement returned no executable STSM corridors")
             raise RuntimeError("topology refinement returned no executable STSM corridors")
         corrs = self._rescore_executable_corridors(corrs)
+        self.runtime_topology_candidate_pool = list(corrs)
+        self.runtime_rejected_topology_corridor_ids = set()
+        self.runtime_topology_candidate_switch_count = 0
         self._publish_topology_info(used_topology, fallback_used)
         for c in corrs:
             rospy.loginfo(
@@ -2976,6 +2982,82 @@ class WheelchairNode:
             rospy.logwarn("[wc] replan failed reason=%s; keep %s: %s",
                           reason, self._corridor_label(kept, ""), exc)
             return kept if kept is not None else corridor, False
+
+    def _switch_to_ranked_topology_candidate(self, current_corridor, reason):
+        """Switch within the already ranked Morse/topology candidate pool.
+
+        This is intentionally not a direct/runtime fallback.  It is used when
+        execution diagnostics prove that the currently selected topological
+        corridor is non-progressive, while other hard-filtered and refined
+        topology candidates from the same planning decision remain available.
+        """
+        if self.baseline or not self.topology_replan_on_no_progress:
+            return current_corridor, False
+        current_id = self._corridor_id(current_corridor, "")
+        if current_id:
+            self.runtime_rejected_topology_corridor_ids.add(current_id)
+        pool = [
+            corr for corr in list(self.runtime_topology_candidate_pool or [])
+            if corr is not None and self._corridor_is_topological(corr)
+        ]
+        if not pool:
+            return current_corridor, False
+        pool = sorted(pool, key=lambda corr: (
+            int(getattr(corr, "rank_total",
+                        getattr(corr, "rank_base", 999999))),
+            float(getattr(corr, "total_score",
+                          getattr(corr, "cost", 0.0))),
+            self._corridor_id(corr, "")))
+        for candidate in pool:
+            cid = self._corridor_id(candidate, "")
+            if not cid or cid == current_id:
+                continue
+            if cid in self.runtime_rejected_topology_corridor_ids:
+                continue
+            if not bool(getattr(candidate, "candidate_manifold_valid",
+                                getattr(candidate, "manifold_feasible", True))):
+                continue
+            if not bool(getattr(candidate, "candidate_tube_valid",
+                                getattr(candidate, "tube_valid", True))):
+                continue
+            ready = self._ensure_corridor_runtime_contract(
+                candidate,
+                fallback_id=cid,
+                fallback_source=str(getattr(
+                    candidate, "final_reference_source", "refinement") or
+                    "refinement"))
+            if ready is None:
+                self.runtime_rejected_topology_corridor_ids.add(cid)
+                continue
+            self.runtime_topology_candidate_switch_count += 1
+            ready.runtime_topology_candidate_switch = True
+            ready.runtime_topology_switch_reason = str(reason or "")
+            ready.runtime_topology_previous_corridor_id = current_id
+            ready.dynamic_replan_fallback = False
+            self.selected_corridor = ready
+            self.execution_corridor = ready
+            self._sync_selected_corridor_geometry(ready)
+            self._sync_runtime_topology_debug(
+                self.runtime_topology_candidate_pool, ready)
+            dbg = dict(getattr(self.manifold, "last_topology_debug", {}) or {})
+            dbg["topology_runtime_candidate_switch_used"] = 1
+            dbg["topology_runtime_candidate_switch_count"] = int(
+                self.runtime_topology_candidate_switch_count)
+            dbg["runtime_switch_reason"] = str(reason or "")
+            dbg["runtime_switch_previous_corridor_id"] = current_id
+            dbg["runtime_switch_selected_corridor_id"] = self._corridor_id(
+                ready, "")
+            dbg["fallback_used"] = 0
+            dbg["topology_fallback_used"] = 0
+            self.manifold.last_topology_debug = dbg
+            self._publish_topology_info(True, False)
+            self.selected_corridor_pub.publish(String(self._corridor_id(ready)))
+            rospy.logwarn(
+                "[wc][topology] runtime candidate switch reason=%s %s -> %s label=%s",
+                reason, current_id, self._corridor_id(ready),
+                self._corridor_label(ready, ""))
+            return ready, True
+        return current_corridor, False
 
     def _runtime_replan_fallback_corridor(self, current_corridor,
                                           reason, original_error=None):
@@ -4643,6 +4725,19 @@ class WheelchairNode:
                             "[wc] no_progress timeout avoided with fallback corridor=%s dist=%.3f best=%.3f",
                             self._corridor_id(corridor), dist, best_dist)
                         continue
+                elif not self.baseline:
+                    switched, did_switch = self._switch_to_ranked_topology_candidate(
+                        corridor, "no_progress_timeout")
+                    if switched is not None and did_switch:
+                        corridor = switched
+                        last_progress_time = now
+                        last_replan_time = now
+                        last_replan_dist = dist
+                        replan_progress_time = now
+                        rospy.logwarn(
+                            "[wc] no_progress timeout avoided by topology candidate switch corridor=%s dist=%.3f best=%.3f",
+                            self._corridor_id(corridor), dist, best_dist)
+                        continue
                 self._publish_runtime_stop("timeout:no_progress")
                 rospy.logwarn(
                     "[wc] no progress timeout, dist=%.3f best=%.3f "
@@ -4697,12 +4792,25 @@ class WheelchairNode:
                             need_replan = True
                             replan_reason = "no_progress"
                         else:
-                            self.replan_deadline_skip_count += 1
-                            replan_progress_time = now
-                            rospy.logwarn_throttle(
-                                5.0,
-                                "[wc] skip runtime blocking replan reason=no_progress current=%s",
-                                self._corridor_label(corridor, ""))
+                            switched, did_switch = (
+                                self._switch_to_ranked_topology_candidate(
+                                    corridor, "no_progress"))
+                            if switched is not None and did_switch:
+                                corridor = switched
+                                last_replan_time = now
+                                last_replan_dist = dist
+                                replan_progress_time = now
+                                last_progress_time = now
+                                rospy.logwarn(
+                                    "[wc] topology candidate switch on no_progress current=%s",
+                                    self._corridor_label(corridor, ""))
+                            else:
+                                self.replan_deadline_skip_count += 1
+                                replan_progress_time = now
+                                rospy.logwarn_throttle(
+                                    5.0,
+                                    "[wc] skip runtime blocking replan reason=no_progress current=%s",
+                                    self._corridor_label(corridor, ""))
                 if corridor is not None:
                     _, d_tube = corridor.project(
                         np.array([self.state[0], self.state[1], 0.0]))
@@ -4806,6 +4914,12 @@ class WheelchairNode:
                     self.mpc.last_alignment_translation),
                 "replan_deadline_skip_count": int(
                     self.replan_deadline_skip_count),
+                "topology_runtime_candidate_switch_count": int(
+                    self.runtime_topology_candidate_switch_count),
+                "topology_runtime_candidate_switch": bool(getattr(
+                    corridor, "runtime_topology_candidate_switch", False)),
+                "runtime_topology_previous_corridor_id": str(getattr(
+                    corridor, "runtime_topology_previous_corridor_id", "")),
                 "last_corridor_plan_duration_s": float(
                     self.last_corridor_plan_duration_s),
                 "first_control": [float(v), float(w)],
