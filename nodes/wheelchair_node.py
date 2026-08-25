@@ -197,6 +197,12 @@ class WheelchairNode:
             "~stsm_progress_floor_min_adp_scale", 0.85))
         self.stsm_progress_floor_w_max = float(rospy.get_param(
             "~stsm_progress_floor_w_max", 0.65))
+        self.stsm_liveness_progress_stale_s = float(rospy.get_param(
+            "~stsm_liveness_progress_stale_s", self.no_progress_replan_time))
+        self.stsm_liveness_floor_v = float(rospy.get_param(
+            "~stsm_liveness_floor_v", 0.14))
+        self.stsm_liveness_w_max = float(rospy.get_param(
+            "~stsm_liveness_w_max", 0.35))
         self.final_w_max = float(rospy.get_param("~final_w_max", 0.85))
         self.w_slew_limit = float(rospy.get_param("~w_slew_limit", 1.00))
         self.lam_heading = float(rospy.get_param("~lam_heading", 2.5))
@@ -3543,6 +3549,7 @@ class WheelchairNode:
                 "heading_improvement", 0.0)),
             "runtime_corridor_id": str(runtime_last.get("corridor_id", cid)),
             "runtime_mpc_records": list(self.mpc_runtime_records),
+            "mpc_runtime_records": list(self.mpc_runtime_records),
         })
         diag, breakdown = self._mpc_output_paths()
         topology_constraint_path = os.path.join(
@@ -4311,27 +4318,33 @@ class WheelchairNode:
                                 np.cos(desired - self.state[2])))
 
     def _apply_stsm_progress_floor(self, corridor, ref, v, w, dist, gate,
-                                   adp_scale, interest_eval=None):
+                                   adp_scale, interest_eval=None,
+                                   progress_stale_s=0.0,
+                                   measured_speed=0.0):
         """Preserve live execution of an already-selected topology corridor."""
         floor = max(0.0, float(self.stsm_progress_floor_v))
         if (self.baseline or floor <= 0.0 or gate.stop or
                 not self._corridor_is_topological(corridor)):
-            return float(v), float(w), False, 0.0
+            return float(v), float(w), False, 0.0, False, 0.0
         if dist <= max(self.final_approach_entry_radius,
                        self.execution_stop_tolerance):
-            return float(v), float(w), False, 0.0
+            return float(v), float(w), False, 0.0, False, 0.0
         if (float(gate.scale) < self.stsm_progress_floor_min_gate_scale or
                 float(adp_scale) < self.stsm_progress_floor_min_adp_scale):
-            return float(v), float(w), False, 0.0
+            return float(v), float(w), False, 0.0, False, 0.0
         risk = float(getattr(gate, "risk", 0.0))
         if interest_eval is not None:
             risk = max(risk, float(interest_eval.get(
                 "risk_gate", interest_eval.get("phi_max", 0.0))))
         if risk >= min(float(self.gate.rho_warn),
                        float(self.footprint_gate.rho_warn)):
-            return float(v), float(w), False, 0.0
-        if float(v) >= 0.95 * floor:
-            return float(v), float(w), False, 0.0
+            return float(v), float(w), False, 0.0, False, 0.0
+        stale = max(0.0, float(progress_stale_s))
+        liveness_active = (
+            stale >= max(0.0, float(self.stsm_liveness_progress_stale_s)) and
+            float(measured_speed) < max(0.02, 0.5 * floor))
+        if liveness_active:
+            floor = max(floor, max(0.0, float(self.stsm_liveness_floor_v)))
         heading_error = abs(self._stsm_reference_heading_error(ref))
         alignment = max(0.0, float(np.cos(heading_error)))
         # During large turns still keep a small crawl, but scale the floor by
@@ -4339,11 +4352,22 @@ class WheelchairNode:
         aligned_floor = floor * max(0.55, alignment)
         capped_floor = min(aligned_floor, 0.6 * float(self.mpc.v_max))
         v_out = max(float(v), float(capped_floor))
+        w_limit = float(self.stsm_progress_floor_w_max)
+        if liveness_active:
+            # If the real base has stopped despite a feasible predictive
+            # sequence, trade some angular authority for traction/translation.
+            # The cap is still tied to the selected topology reference, not to
+            # a direct goal fallback.
+            w_limit = min(w_limit, max(0.0, float(self.stsm_liveness_w_max)))
         if v_out > float(v) + 1e-9:
             w = float(np.clip(
-                w, -self.stsm_progress_floor_w_max,
-                self.stsm_progress_floor_w_max))
-        return v_out, float(w), bool(v_out > float(v) + 1e-9), float(capped_floor)
+                w, -w_limit, w_limit))
+        elif liveness_active and abs(float(w)) > w_limit:
+            w = float(np.clip(w, -w_limit, w_limit))
+        used = bool(v_out > float(v) + 1e-9)
+        return (
+            v_out, float(w), used, float(capped_floor),
+            bool(liveness_active), float(w_limit))
 
     def _publish_metrics(self):
         z = np.array([self.state[0], self.state[1], 0.0])
@@ -4986,15 +5010,26 @@ class WheelchairNode:
             if (final_override_active and not gate.stop and
                     dist > self.goal_tolerance and v > 0.0):
                 v = max(v, 0.8 * self.final_creep_v)
-            v, w, progress_floor_used, progress_floor_value = (
+            progress_stale_s = float((now - last_progress_time).to_sec())
+            measured_speed = float(np.linalg.norm(self.world_vel[:2]))
+            (v, w, progress_floor_used, progress_floor_value,
+             liveness_active, liveness_w_limit) = (
                 self._apply_stsm_progress_floor(
                     corridor, ref, v, w, dist, gate, adp_scale,
-                    interest_eval=interest_eval))
+                    interest_eval=interest_eval,
+                    progress_stale_s=progress_stale_s,
+                    measured_speed=measured_speed))
             runtime_record["published_control"] = [float(v), float(w)]
+            runtime_record["gate_scale"] = float(gate_scale)
+            runtime_record["adp_scale"] = float(adp_scale)
+            runtime_record["progress_stale_s"] = float(progress_stale_s)
+            runtime_record["measured_speed"] = float(measured_speed)
             runtime_record["stsm_progress_floor_used"] = bool(
                 progress_floor_used)
             runtime_record["stsm_progress_floor_value"] = float(
                 progress_floor_value)
+            runtime_record["stsm_liveness_active"] = bool(liveness_active)
+            runtime_record["stsm_liveness_w_limit"] = float(liveness_w_limit)
             self._record_baseline_mpc_output(
                 corridor, ref, v_mpc_raw, w_mpc_raw, v, w, gate, adp_scale,
                 topology_constraint_for_mpc)

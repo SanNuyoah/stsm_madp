@@ -1055,6 +1055,10 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "_switch_to_ranked_topology_candidate" in wheelchair_source
     assert "topology_runtime_candidate_switch_used" in wheelchair_source
     assert "dynamic_replan_fallback = False" in wheelchair_source
+    assert "stsm_liveness_floor_v" in wheelchair_source
+    assert "stsm_liveness_w_max" in wheelchair_source
+    assert "stsm_liveness_active" in wheelchair_source
+    assert '"mpc_runtime_records": list(self.mpc_runtime_records)' in wheelchair_source
     assert "skip runtime blocking replan reason=no_progress" in wheelchair_source
     assert '"/stsm/wc_task_complete"' in wheelchair_source
     assert '"/stsm/wc_task_complete"' in metrics_source
