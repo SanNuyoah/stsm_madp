@@ -25,7 +25,8 @@ from stsm_madp.manifold import SafetyManifold, Corridor
 from stsm_madp.corridor import require_corridor_contract
 from stsm_madp.mpc import (
     WheelchairMPC, build_mpc_constraint_inputs, generate_topology_tube,
-    run_mpc_tracking, write_mpc_outputs)
+    run_mpc_tracking, wheelchair_nonholonomic_execution_profile,
+    write_mpc_outputs)
 from stsm_madp.topology_constraint import write_topology_constraint
 from stsm_madp.safety_gate import SafetyGate, SafetyGateResult
 from stsm_madp.adp import ADPCritic, ADPFeatureBuilder
@@ -58,6 +59,7 @@ def _topology_param(value, cast=float):
 
 def _effective(value, default):
     return default if value is None else value
+
 
 def _resolve_manifold_constraint_mode(mode_a, mode_b=None, node_name="stsm"):
     mode_a = str(mode_a if mode_a not in (None, "") else "soft").strip().lower()
@@ -1766,8 +1768,25 @@ class WheelchairNode:
             corr.max_turn_angle = float(metrics.get("max_turn", 0.0))
             corr.mean_turn_angle = float(metrics.get("mean_turn", 0.0))
             corr.max_curvature = float(metrics.get("max_curvature", 0.0))
+            nonholonomic_profile = wheelchair_nonholonomic_execution_profile(
+                refined, self.state, self.goal,
+                min_step=max(0.03, self.topology_min_segment_length),
+                initial_lookahead=0.12,
+                horizon_points=min(10, max(4, len(np.asarray(refined, float)))))
+            corr.nonholonomic_execution_profile = dict(nonholonomic_profile)
+            corr.diff_drive_execution_cost = float(
+                nonholonomic_profile.get("execution_profile_cost", 0.0))
+            corr.initial_heading_error = float(
+                nonholonomic_profile.get("initial_heading_error", 0.0))
+            corr.monotonic_regression = float(
+                nonholonomic_profile.get("monotonic_regression", 0.0))
+            corr.nonmonotonic_fraction = float(
+                nonholonomic_profile.get("nonmonotonic_fraction", 0.0))
+            corr.heading_oscillation = float(
+                nonholonomic_profile.get("heading_oscillation", 0.0))
             corr.execution_cost = float(
-                corr.max_turn_angle + 0.2 * corr.max_curvature)
+                corr.max_turn_angle + 0.2 * corr.max_curvature +
+                corr.diff_drive_execution_cost)
             corr.motion_cost = float(corr.execution_cost)
             center_vals = [
                 float(self.field.phi_s(np.array([p[0], p[1], 0.0], float)))
@@ -1784,11 +1803,27 @@ class WheelchairNode:
                 corr.max_turn_angle * corr.max_turn_angle +
                 0.2 * corr.max_curvature)
             corr.total_cost = float(getattr(corr, "cost", 0.0))
+            breakdown = dict(getattr(corr, "candidate_cost_breakdown", {}) or {})
+            breakdown["nonholonomic_execution_profile"] = dict(
+                nonholonomic_profile)
+            breakdown["diff_drive_execution_cost"] = float(
+                corr.diff_drive_execution_cost)
+            breakdown["initial_heading_error"] = float(
+                corr.initial_heading_error)
+            breakdown["monotonic_regression"] = float(
+                corr.monotonic_regression)
+            breakdown["nonmonotonic_fraction"] = float(
+                corr.nonmonotonic_fraction)
+            breakdown["heading_oscillation"] = float(
+                corr.heading_oscillation)
+            corr.candidate_cost_breakdown = breakdown
             prepared.append(corr)
             rospy.loginfo(
-                "[wc][refine] accepted %s length=%.3f max_turn=%.3f max_curv=%.3f source=%s",
+                "[wc][refine] accepted %s length=%.3f max_turn=%.3f max_curv=%.3f diff_drive=%.3f init_head=%.3f mono_reg=%.3f source=%s",
                 getattr(corr, "corridor_id", getattr(corr, "label", "")),
                 corr.path_length, corr.max_turn_angle, corr.max_curvature,
+                corr.diff_drive_execution_cost, corr.initial_heading_error,
+                corr.monotonic_regression,
                 reference_source)
         self._sync_refinement_attempt_debug(refinement_attempts)
         return prepared
@@ -2318,6 +2353,16 @@ class WheelchairNode:
             dbg["selected_task_semantic_class"] = str(getattr(
                 selected, "task_semantic_class", ""))
             dbg["selected_topology_diversity"] = float(getattr(selected, "topology_diversity", 0.0))
+            dbg["selected_diff_drive_execution_cost"] = float(getattr(
+                selected, "diff_drive_execution_cost", 0.0))
+            dbg["selected_initial_heading_error"] = float(getattr(
+                selected, "initial_heading_error", 0.0))
+            dbg["selected_monotonic_regression"] = float(getattr(
+                selected, "monotonic_regression", 0.0))
+            dbg["selected_nonmonotonic_fraction"] = float(getattr(
+                selected, "nonmonotonic_fraction", 0.0))
+            dbg["selected_heading_oscillation"] = float(getattr(
+                selected, "heading_oscillation", 0.0))
             dbg["candidate_selection_status"] = str(getattr(
                 selected, "candidate_status", dbg.get(
                     "candidate_selection_status", "feasible")))

@@ -21,6 +21,125 @@ from stsm_madp.task_config import resolve_task_mode, resolve_task_weight
 from stsm_madp.task_semantics import infer_task_state
 
 
+def _wrap_angle(value):
+    return float(np.arctan2(np.sin(value), np.cos(value)))
+
+
+def wheelchair_nonholonomic_execution_profile(points, state, goal,
+                                              min_step=0.03,
+                                              initial_lookahead=0.12,
+                                              horizon_points=10):
+    """Return geometric diff-drive executability costs for a path."""
+    pts = np.asarray(points, float)
+    state = np.asarray(state, float)
+    goal = np.asarray(goal, float)[:2]
+    empty = {
+        "execution_profile_cost": 0.0,
+        "initial_heading_error": 0.0,
+        "initial_alignment": 1.0,
+        "initial_backward_progress": 0.0,
+        "monotonic_regression": 0.0,
+        "monotonic_regression_ratio": 0.0,
+        "monotonic_progress": 0.0,
+        "nonmonotonic_fraction": 0.0,
+        "heading_oscillation": 0.0,
+        "mean_abs_turn": 0.0,
+        "max_abs_turn": 0.0,
+        "max_local_curvature": 0.0,
+        "evaluated_points": 0,
+    }
+    if pts.size == 0 or state.size < 3:
+        return dict(empty)
+    if pts.ndim == 1:
+        pts = pts.reshape(1, -1)
+    pts2 = pts[:, :2]
+    start = state[:2]
+    cleaned = [start]
+    for p in pts2:
+        p = np.asarray(p, float)
+        if float(np.linalg.norm(p - cleaned[-1])) >= max(float(min_step), 1e-6):
+            cleaned.append(p)
+    if len(cleaned) < 2:
+        return dict(empty)
+    local = np.asarray(cleaned[:max(2, int(horizon_points))], float)
+    seg = np.diff(local, axis=0)
+    lens = np.linalg.norm(seg, axis=1)
+    valid = lens > 1e-9
+    if not np.any(valid):
+        return dict(empty)
+    first_idx = 1
+    for idx in range(1, len(local)):
+        if float(np.linalg.norm(local[idx] - start)) >= float(initial_lookahead):
+            first_idx = idx
+            break
+    first_vec = local[first_idx] - start
+    first_len = max(float(np.linalg.norm(first_vec)), 1e-9)
+    first_heading = float(np.arctan2(first_vec[1], first_vec[0]))
+    heading_error = abs(_wrap_angle(first_heading - float(state[2])))
+    initial_alignment = float(np.cos(heading_error))
+    heading_axis = np.array([np.cos(float(state[2])), np.sin(float(state[2]))])
+    initial_forward = float(np.dot(first_vec, heading_axis))
+    initial_backward = max(0.0, -initial_forward / first_len)
+
+    dists = np.linalg.norm(local - goal.reshape(1, 2), axis=1)
+    deltas = np.diff(dists)
+    regression = float(np.sum(np.maximum(deltas, 0.0)))
+    progress = float(np.sum(np.maximum(-deltas, 0.0)))
+    nonmono = float(np.mean(deltas > 1e-6)) if deltas.size else 0.0
+    denom = max(progress + regression, 0.10)
+    regression_ratio = float(regression / denom)
+
+    headings = np.asarray([
+        np.arctan2(v[1], v[0]) for v in seg[valid]
+    ], float)
+    turns = []
+    for a, b in zip(headings[:-1], headings[1:]):
+        turns.append(_wrap_angle(float(b - a)))
+    abs_turns = np.abs(np.asarray(turns, float)) if turns else np.zeros(0)
+    mean_abs_turn = float(np.mean(abs_turns)) if abs_turns.size else 0.0
+    max_abs_turn = float(np.max(abs_turns)) if abs_turns.size else 0.0
+    signs = [1 if t > 1e-4 else -1 if t < -1e-4 else 0 for t in turns]
+    nz = [s for s in signs if s != 0]
+    sign_changes = sum(1 for a, b in zip(nz[:-1], nz[1:]) if a != b)
+    oscillation = float(sign_changes) / float(max(1, len(nz) - 1))
+    curvatures = []
+    valid_lens = lens[valid]
+    for idx, turn in enumerate(abs_turns):
+        local_len = max(
+            float(valid_lens[min(idx, len(valid_lens) - 1)]),
+            float(min_step),
+            1e-6)
+        curvatures.append(float(turn) / local_len)
+    max_curvature = float(max(curvatures)) if curvatures else 0.0
+
+    alignment_deficit = 1.0 - max(0.0, initial_alignment)
+    cost = (
+        5.0 * float(heading_error / np.pi) +
+        4.0 * float(alignment_deficit) +
+        5.0 * float(initial_backward) +
+        12.0 * float(regression_ratio) +
+        4.0 * float(nonmono) +
+        2.0 * float(oscillation) +
+        0.8 * float(mean_abs_turn) +
+        0.4 * float(max_abs_turn) +
+        0.12 * float(max_curvature))
+    return {
+        "execution_profile_cost": float(cost),
+        "initial_heading_error": float(heading_error),
+        "initial_alignment": float(initial_alignment),
+        "initial_backward_progress": float(initial_backward),
+        "monotonic_regression": float(regression),
+        "monotonic_regression_ratio": float(regression_ratio),
+        "monotonic_progress": float(progress),
+        "nonmonotonic_fraction": float(nonmono),
+        "heading_oscillation": float(oscillation),
+        "mean_abs_turn": float(mean_abs_turn),
+        "max_abs_turn": float(max_abs_turn),
+        "max_local_curvature": float(max_curvature),
+        "evaluated_points": int(len(local)),
+    }
+
+
 DEFAULT_MPC_CONFIG = {
     "enabled": True,
     "horizon": 10,

@@ -28,6 +28,7 @@ from stsm_madp.mpc import build_mpc_constraint_inputs
 from stsm_madp.mpc import audit_reference_safety
 from stsm_madp.mpc import _phase_constraint_diagnostics_payload
 from stsm_madp.mpc import evaluate_executed_trajectory
+from stsm_madp.mpc import wheelchair_nonholonomic_execution_profile
 from stsm_madp.safety_evaluator import SafetyEvaluator
 from stsm_madp.social_field import (
     HumanState, SemanticAnchor, SocialField, SocialFieldParams)
@@ -1022,6 +1023,35 @@ def test_wheelchair_heading_recovery_can_use_stsm_turn_budget():
     assert mpc.last_objective_terms["first_step_live"] is False
 
 
+def test_wheelchair_nonholonomic_profile_penalizes_regressive_initial_path():
+    state = np.array([0.0, 0.0, 0.0])
+    goal = np.array([1.0, 0.0])
+    forward = np.array([
+        [0.0, 0.0],
+        [0.25, 0.0],
+        [0.50, 0.0],
+        [0.75, 0.0],
+        [1.00, 0.0],
+    ])
+    regressive = np.array([
+        [0.0, 0.0],
+        [-0.12, 0.10],
+        [-0.05, -0.12],
+        [0.20, 0.12],
+        [0.45, -0.05],
+        [1.00, 0.0],
+    ])
+
+    good = wheelchair_nonholonomic_execution_profile(forward, state, goal)
+    bad = wheelchair_nonholonomic_execution_profile(regressive, state, goal)
+
+    assert good["execution_profile_cost"] < bad["execution_profile_cost"]
+    assert good["monotonic_regression"] == 0.0
+    assert bad["monotonic_regression"] > 0.0
+    assert bad["initial_heading_error"] > good["initial_heading_error"]
+    assert bad["heading_oscillation"] > good["heading_oscillation"]
+
+
 def test_wheelchair_beam_keeps_executable_first_step_before_pruning():
     mpc = WheelchairMPC(horizon=12, dt=0.2, a_max=0.5, beam_width=12)
     ref = np.column_stack([
@@ -1110,6 +1140,9 @@ def test_runtime_sources_preserve_p0_execution_contracts():
         os.path.join(ROOT, "launch", "wheelchair_action.launch"), "r").read()
     assert "first_step_positive_progress" in open(
         os.path.join(ROOT, "src", "stsm_madp", "mpc.py"), "r").read()
+    assert "wheelchair_nonholonomic_execution_profile" in wheelchair_source
+    assert "diff_drive_execution_cost" in wheelchair_source
+    assert "selected_monotonic_regression" in wheelchair_source
     assert '"mpc_runtime_records": list(self.mpc_runtime_records)' in wheelchair_source
     assert "skip runtime blocking replan reason=no_progress" in wheelchair_source
     assert '"/stsm/wc_task_complete"' in wheelchair_source
