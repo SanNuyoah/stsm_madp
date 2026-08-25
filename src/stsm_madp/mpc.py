@@ -5249,6 +5249,8 @@ class WheelchairMPC:
                     [item[13] for item in records] or [0.0])),
                 "best_heading_improvement": float(max(
                     [item[2] for item in records] or [0.0])),
+                "best_alignment_translation": float(max(
+                    [item[4] for item in records] or [0.0])),
                 "best_first_speed": float(max(
                     [item[8]["controls"][0][0] for item in records] or [0.0])),
             }

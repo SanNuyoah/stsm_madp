@@ -202,7 +202,7 @@ class WheelchairNode:
         self.stsm_liveness_floor_v = float(rospy.get_param(
             "~stsm_liveness_floor_v", 0.14))
         self.stsm_liveness_w_max = float(rospy.get_param(
-            "~stsm_liveness_w_max", 0.35))
+            "~stsm_liveness_w_max", min(0.65, self.stsm_w_max)))
         self.final_w_max = float(rospy.get_param("~final_w_max", 0.85))
         self.w_slew_limit = float(rospy.get_param("~w_slew_limit", 1.00))
         self.lam_heading = float(rospy.get_param("~lam_heading", 2.5))
@@ -660,7 +660,7 @@ class WheelchairNode:
         self.mpc.first_step_progress_ratio = float(rospy.get_param(
             "~mpc/first_step_progress_ratio", 0.50))
         self.mpc.heading_recovery_w_max = float(rospy.get_param(
-            "~mpc/heading_recovery_w_max", self.stsm_liveness_w_max))
+            "~mpc/heading_recovery_w_max", self.stsm_w_max))
         self.bounds = [(-2.0, 2.5), (-2.0, 2.0)]
         self.gate = SafetyGate(
             rho_warn=rospy.get_param("~safety_gate/rho_warn", 1.6),
@@ -4479,6 +4479,23 @@ class WheelchairNode:
             # The cap is still tied to the selected topology reference, not to
             # a direct goal fallback.
             w_limit = min(w_limit, max(0.0, float(self.stsm_liveness_w_max)))
+            objective = dict(getattr(self.mpc, "last_objective_terms", {}) or {})
+            heading_recovery_live = bool(
+                objective.get("heading_recovery_live", False))
+            first_step_heading_gain = float(
+                objective.get("first_step_heading_improvement", 0.0) or 0.0)
+            if (heading_recovery_live or
+                    first_step_heading_gain + 1e-9 >=
+                    float(self.mpc.min_heading_improvement)):
+                # Do not let the node-side liveness clamp undo a predictive
+                # MPC command that was accepted specifically to recover the
+                # selected Morse/topology corridor heading.  R005 showed the
+                # optimizer asking for a high-turn recovery while the publisher
+                # clipped it back to a low-w crawl, leaving Gazebo with almost
+                # no measurable progress.
+                w_limit = max(
+                    w_limit,
+                    min(float(self.stsm_w_max), abs(float(w))))
         if v_out > float(v) + 1e-9:
             w = float(np.clip(
                 w, -w_limit, w_limit))

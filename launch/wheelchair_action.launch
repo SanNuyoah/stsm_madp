@@ -42,6 +42,10 @@
   <arg name="final_max_v" default="0.30"/>
   <arg name="final_forward_gain" default="0.75"/>
   <arg name="lam_heading" default="2.5"/>
+  <arg name="stsm_w_max" default="0.95"/>
+  <arg name="stsm_progress_floor_w_max" default="0.95"/>
+  <arg name="stsm_liveness_w_max" default="0.65"/>
+  <arg name="mpc_heading_recovery_w_max" default="$(arg stsm_w_max)"/>
   <arg name="final_direct_override_enabled" default="true"/>
   <arg name="final_direct_override_radius" default="0.90"/>
   <arg name="gate_enabled" default="true"/>
@@ -161,6 +165,10 @@
     <param name="final_max_v" value="$(arg final_max_v)"/>
     <param name="final_forward_gain" value="$(arg final_forward_gain)"/>
     <param name="lam_heading" value="$(arg lam_heading)"/>
+    <param name="stsm_w_max" value="$(arg stsm_w_max)"/>
+    <param name="stsm_progress_floor_w_max" value="$(arg stsm_progress_floor_w_max)"/>
+    <param name="stsm_liveness_w_max" value="$(arg stsm_liveness_w_max)"/>
+    <param name="mpc/heading_recovery_w_max" value="$(arg mpc_heading_recovery_w_max)"/>
     <param name="final_direct_override_enabled" value="$(arg final_direct_override_enabled)"/>
     <param name="final_direct_override_radius" value="$(arg final_direct_override_radius)"/>
     <param name="safety_gate/enabled" value="$(arg gate_enabled)"/>

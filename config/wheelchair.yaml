@@ -23,6 +23,6 @@ mpc:
   optimizer: sampled_beam_sequence
   pure_pursuit_role: baseline_or_warm_start
   first_step_progress_ratio: 0.50
-  heading_recovery_w_max: 0.35
+  heading_recovery_w_max: 0.95
   tube_constraint_mode: hard
   failure_policy: safe_stop

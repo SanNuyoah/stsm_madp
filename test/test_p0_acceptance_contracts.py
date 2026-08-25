@@ -991,7 +991,7 @@ def test_wheelchair_heading_recovery_first_step_limits_spin():
         np.array([0.05, -0.8], float)]
 
     v, w = mpc.solve(
-        [0.0, 0.0, np.pi],
+        [0.0, 0.0, 2.0],
         [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0]],
         ZeroField(), goal=[1.0, 0.0], predictive=True)
 
@@ -1000,6 +1000,26 @@ def test_wheelchair_heading_recovery_first_step_limits_spin():
     assert mpc.last_solver_status == "safe_stop: insufficient_progress"
     assert mpc.last_objective_terms["max_heading_recovery_w"] == 0.35
     assert mpc.last_objective_terms["best_first_step_angular_speed"] > 0.35
+
+
+def test_wheelchair_heading_recovery_can_use_stsm_turn_budget():
+    mpc = WheelchairMPC(
+        horizon=4, dt=0.2, a_max=0.5, alpha_max=5.0,
+        w_max=1.0, beam_width=4)
+    mpc.heading_recovery_w_max = 0.95
+    mpc._sequence_step_controls = lambda previous, warm_u=None, goal_u=None: [
+        np.array([0.05, -0.8], float)]
+
+    v, w = mpc.solve(
+        [0.0, 0.0, 2.0],
+        [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0]],
+        ZeroField(), goal=[1.0, 0.0], predictive=True)
+
+    assert v == 0.05
+    assert w == -0.8
+    assert mpc.last_solver_status.startswith("predictive_beam")
+    assert mpc.last_objective_terms["heading_recovery_live"] is True
+    assert mpc.last_objective_terms["first_step_live"] is False
 
 
 def test_wheelchair_beam_keeps_executable_first_step_before_pruning():
@@ -1085,6 +1105,9 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "first_step_progress_ratio" in wheelchair_source
     assert "heading_recovery_w_max" in wheelchair_source
     assert "alignment_floor_scale = 1.0 if liveness_active" in wheelchair_source
+    assert "heading_recovery_live" in wheelchair_source
+    assert "mpc_heading_recovery_w_max" in open(
+        os.path.join(ROOT, "launch", "wheelchair_action.launch"), "r").read()
     assert "first_step_positive_progress" in open(
         os.path.join(ROOT, "src", "stsm_madp", "mpc.py"), "r").read()
     assert '"mpc_runtime_records": list(self.mpc_runtime_records)' in wheelchair_source
