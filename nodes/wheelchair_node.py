@@ -656,6 +656,10 @@ class WheelchairNode:
         self.mpc.final_max_v = self.final_max_v
         self.mpc.final_forward_gain = self.final_forward_gain
         self.mpc.lam_heading = self.lam_heading
+        self.mpc.first_step_progress_ratio = float(rospy.get_param(
+            "~mpc/first_step_progress_ratio", 0.50))
+        self.mpc.heading_recovery_w_max = float(rospy.get_param(
+            "~mpc/heading_recovery_w_max", self.stsm_liveness_w_max))
         self.bounds = [(-2.0, 2.5), (-2.0, 2.0)]
         self.gate = SafetyGate(
             rho_warn=rospy.get_param("~safety_gate/rho_warn", 1.6),
@@ -4349,7 +4353,8 @@ class WheelchairNode:
         alignment = max(0.0, float(np.cos(heading_error)))
         # During large turns still keep a small crawl, but scale the floor by
         # reference alignment so the command remains tied to the selected tube.
-        aligned_floor = floor * max(0.55, alignment)
+        alignment_floor_scale = 1.0 if liveness_active else max(0.55, alignment)
+        aligned_floor = floor * alignment_floor_scale
         capped_floor = min(aligned_floor, 0.6 * float(self.mpc.v_max))
         v_out = max(float(v), float(capped_floor))
         w_limit = float(self.stsm_progress_floor_w_max)

@@ -982,6 +982,26 @@ def test_wheelchair_predictive_mpc_rejects_nonprogressive_rollout():
     assert mpc.last_objective_terms["best_reference_progress"] < 0.0
 
 
+def test_wheelchair_heading_recovery_first_step_limits_spin():
+    mpc = WheelchairMPC(
+        horizon=4, dt=0.2, a_max=0.5, alpha_max=5.0,
+        w_max=1.0, beam_width=4)
+    mpc.heading_recovery_w_max = 0.35
+    mpc._sequence_step_controls = lambda previous, warm_u=None, goal_u=None: [
+        np.array([0.05, -0.8], float)]
+
+    v, w = mpc.solve(
+        [0.0, 0.0, np.pi],
+        [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0]],
+        ZeroField(), goal=[1.0, 0.0], predictive=True)
+
+    assert v == 0.0
+    assert w == 0.0
+    assert mpc.last_solver_status == "safe_stop: insufficient_progress"
+    assert mpc.last_objective_terms["max_heading_recovery_w"] == 0.35
+    assert mpc.last_objective_terms["best_first_step_angular_speed"] > 0.35
+
+
 def test_wheelchair_beam_keeps_executable_first_step_before_pruning():
     mpc = WheelchairMPC(horizon=12, dt=0.2, a_max=0.5, beam_width=12)
     ref = np.column_stack([
@@ -1058,6 +1078,11 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "stsm_liveness_floor_v" in wheelchair_source
     assert "stsm_liveness_w_max" in wheelchair_source
     assert "stsm_liveness_active" in wheelchair_source
+    assert "first_step_progress_ratio" in wheelchair_source
+    assert "heading_recovery_w_max" in wheelchair_source
+    assert "alignment_floor_scale = 1.0 if liveness_active" in wheelchair_source
+    assert "first_step_positive_progress" in open(
+        os.path.join(ROOT, "src", "stsm_madp", "mpc.py"), "r").read()
     assert '"mpc_runtime_records": list(self.mpc_runtime_records)' in wheelchair_source
     assert "skip runtime blocking replan reason=no_progress" in wheelchair_source
     assert '"/stsm/wc_task_complete"' in wheelchair_source
