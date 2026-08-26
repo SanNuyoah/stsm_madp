@@ -1769,12 +1769,10 @@ class WheelchairNode:
                         ref[join_idx + 1:]
                         if join_idx + 1 < len(ref) else ref[-1:])
                     repaired = np.vstack([bridge, tail])
-                    candidates.append(self._project_points_to_corridor(
-                        repaired, corridor))
+                    candidates.append(np.asarray(repaired, float))
         if not candidates:
             repaired = np.vstack([prefix, ref])
-            candidates.append(self._project_points_to_corridor(
-                repaired, corridor))
+            candidates.append(np.asarray(repaired, float))
         from stsm_madp.deform import path_curvature_metrics
         scored = []
         for candidate in candidates:
