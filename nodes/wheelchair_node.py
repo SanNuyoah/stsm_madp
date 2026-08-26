@@ -3592,26 +3592,49 @@ class WheelchairNode:
                 predictive=True)
             objective = dict(self.mpc.last_objective_terms or {})
             solver_status = str(self.mpc.last_solver_status)
+            violations = dict(self.mpc.last_constraint_violation or {})
             first_step_live = bool(objective.get("first_step_live", False))
             heading_recovery_live = bool(objective.get(
                 "heading_recovery_live", False))
+            sequence_progress = float(self.mpc.last_sequence_progress)
+            hard_violation = any(
+                int(violations.get(name, 0) or 0) > 0
+                for name in (
+                    "forbidden", "interest_point", "manifold",
+                    "trajectory_tube", "nonprogressive_rollout"))
             accepted = bool(
                 not solver_status.startswith("safe_stop:") and
-                (first_step_live or heading_recovery_live))
+                first_step_live and
+                sequence_progress >= 0.5 * float(self.min_progress_per_solve) and
+                not hard_violation)
             status.update({
                 "accepted": accepted,
                 "solver_status": solver_status,
                 "first_control": [float(v), float(w)],
                 "objective_terms": objective,
-                "constraint_violation": dict(
-                    self.mpc.last_constraint_violation or {}),
+                "constraint_violation": violations,
                 "first_step_live": first_step_live,
                 "heading_recovery_live": heading_recovery_live,
-                "sequence_progress": float(self.mpc.last_sequence_progress),
+                "sequence_progress": sequence_progress,
+                "hard_constraint_violation": bool(hard_violation),
             })
             if not accepted:
-                status["failure_reason"] = (
-                    "first_step_not_executable:%s" % solver_status)
+                if hard_violation:
+                    status["failure_reason"] = (
+                        "runtime_switch_constraint_violation:%s" %
+                        ",".join(k for k, v in sorted(violations.items())
+                                 if int(v or 0) > 0))
+                elif not first_step_live:
+                    status["failure_reason"] = (
+                        "first_step_not_executable:%s" % solver_status)
+                elif sequence_progress < 0.5 * float(
+                        self.min_progress_per_solve):
+                    status["failure_reason"] = (
+                        "runtime_switch_insufficient_progress:%.6f" %
+                        sequence_progress)
+                else:
+                    status["failure_reason"] = (
+                        "runtime_switch_not_executable:%s" % solver_status)
         except Exception as exc:
             status["failure_reason"] = "%s:%s" % (
                 type(exc).__name__, str(exc)[:160])
