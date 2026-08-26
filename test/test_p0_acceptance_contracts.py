@@ -33,6 +33,7 @@ from stsm_madp.safety_evaluator import SafetyEvaluator
 from stsm_madp.social_field import (
     HumanState, SemanticAnchor, SocialField, SocialFieldParams)
 from stsm_madp.topology import TopologicalCorridorPlanner
+from stsm_madp.topology_refinement import _limit_refinement_points
 from stsm_madp.topology_candidate_generator import (
     TopologyDrivenCandidateGenerator, candidate_topology_identity,
     rank_feasible_candidates)
@@ -1052,6 +1053,28 @@ def test_wheelchair_nonholonomic_profile_penalizes_regressive_initial_path():
     assert bad["heading_oscillation"] > good["heading_oscillation"]
 
 
+def test_wheelchair_refinement_point_limit_preserves_topology_waypoints():
+    pts = np.column_stack([
+        np.linspace(0.0, 4.0, 120),
+        np.sin(np.linspace(0.0, 2.0, 120)) * 0.05,
+        np.zeros(120),
+    ])
+    protected = np.asarray([
+        pts[0],
+        pts[57],
+        pts[-1],
+    ])
+
+    bounded, limited = _limit_refinement_points(
+        pts, max_points=16, protected_points=protected)
+
+    assert limited is True
+    assert len(bounded) <= 16
+    assert np.min(np.linalg.norm(bounded - pts[57], axis=1)) < 1e-9
+    assert np.allclose(bounded[0], pts[0])
+    assert np.allclose(bounded[-1], pts[-1])
+
+
 def test_wheelchair_beam_keeps_executable_first_step_before_pruning():
     mpc = WheelchairMPC(horizon=12, dt=0.2, a_max=0.5, beam_width=12)
     ref = np.column_stack([
@@ -1149,6 +1172,11 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "diff_drive_turn_recovery_used" in wheelchair_source
     assert "selected_diff_drive_reference_repaired" in wheelchair_source
     assert "pre_repair_nonholonomic_execution_profile" in wheelchair_source
+    assert "max_refinement_path_points" in wheelchair_source
+    assert "max_refined_footprint_check_points" in wheelchair_source
+    assert "bounded_reference_path_count" in open(
+        os.path.join(ROOT, "src", "stsm_madp",
+                     "topology_refinement.py"), "r").read()
     assert '"mpc_runtime_records": list(self.mpc_runtime_records)' in wheelchair_source
     assert "skip runtime blocking replan reason=no_progress" in wheelchair_source
     assert '"/stsm/wc_task_complete"' in wheelchair_source

@@ -436,11 +436,19 @@ class WheelchairNode:
             "~topology/refinement_enabled", True))
         self.topology_refinement_samples = int(rospy.get_param(
             "~topology/refinement_samples_per_segment", 14))
+        if not self.baseline:
+            self.topology_refinement_samples = min(
+                int(self.topology_refinement_samples), 6)
         self.topology_refinement_max_candidates = int(rospy.get_param(
             "~topology/refinement_max_candidates",
             self.topology_candidate_pool_min))
         self.last_refined_footprint_max = 0.0
         self.last_refined_footprint_mean = 0.0
+        self.last_refined_footprint_checked_points = 0
+        self.max_refined_footprint_check_points = max(8, int(rospy.get_param(
+            "~topology/max_refined_footprint_check_points", 48)))
+        self.max_refinement_path_points = max(8, int(rospy.get_param(
+            "~topology/max_refinement_path_points", 48)))
         self.interest_enabled = rospy.get_param("~interest_points/enabled", True)
         self.interest_gate_enabled = rospy.get_param(
             "~interest_points/gate_enabled", True)
@@ -1615,6 +1623,18 @@ class WheelchairNode:
 
     def _footprint_path_checker(self, path):
         pts = np.asarray(path, float)
+        raw_count = int(len(pts))
+        self.last_refined_footprint_checked_points = raw_count
+        if raw_count > int(self.max_refined_footprint_check_points):
+            keep = np.linspace(
+                0, raw_count - 1,
+                int(self.max_refined_footprint_check_points))
+            indices = sorted(set(int(round(v)) for v in keep))
+            if indices[0] != 0:
+                indices.insert(0, 0)
+            if indices[-1] != raw_count - 1:
+                indices.append(raw_count - 1)
+            pts = np.asarray([pts[i] for i in indices], float)
         phi_values = []
         max_phi = 0.0
         for idx, point in enumerate(pts):
@@ -1627,15 +1647,18 @@ class WheelchairNode:
             hit, _label, _anchor, reason = forbidden_anchor_hit(
                 self.field, labels, points)
             if hit:
+                self.last_refined_footprint_checked_points = int(len(pts))
                 return False, "refined_footprint_forbidden:" + str(reason)
             phi = float(summary.get("phi_max", 0.0))
             phi_values.append(phi)
             max_phi = max(max_phi, phi)
             if phi > float(self.footprint_gate.rho_stop) + 1e-9:
+                self.last_refined_footprint_checked_points = int(len(pts))
                 return False, "refined_footprint_risk"
         self.last_refined_footprint_max = float(max_phi)
         self.last_refined_footprint_mean = (
             float(np.mean(phi_values)) if phi_values else 0.0)
+        self.last_refined_footprint_checked_points = int(len(pts))
         return True, ""
 
     def _project_points_to_corridor(self, path, corridor, margin=0.85):
@@ -1912,9 +1935,16 @@ class WheelchairNode:
                 max_curvature=min(
                     float(self.topology_max_corridor_curvature), 8.0),
                 max_turn=self.topology_max_corridor_turn,
-                footprint_checker=self._footprint_path_checker)
+                footprint_checker=self._footprint_path_checker,
+                max_refinement_points=self.max_refinement_path_points)
             attempt = self._refinement_attempt_payload(
                 corr, metrics, reason, stage="refine_topology_path")
+            attempt["max_refinement_path_points"] = int(
+                self.max_refinement_path_points)
+            attempt["max_refined_footprint_check_points"] = int(
+                self.max_refined_footprint_check_points)
+            attempt["refined_footprint_checked_points"] = int(
+                self.last_refined_footprint_checked_points)
             if not ok:
                 corr.reject_reason = str(reason)
                 attempt["accepted"] = False

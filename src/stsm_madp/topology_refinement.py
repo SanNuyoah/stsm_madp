@@ -31,6 +31,37 @@ def _as_points(path):
     return pts[:, :3]
 
 
+def _limit_refinement_points(points, max_points=0, protected_points=None):
+    """Bound refinement work while preserving path endpoints.
+
+    Topology enumeration may hand refinement a dense centerline.  For
+    wheelchair execution we only need a bounded representative polyline here:
+    safety/tube validity is still checked after refinement, and the downstream
+    MPC reference is generated from the accepted geometry.
+    """
+    pts = _as_points(points)
+    max_points = int(max_points or 0)
+    if max_points <= 0 or len(pts) <= max_points:
+        return pts.copy(), False
+    if max_points <= 2:
+        return np.asarray([pts[0], pts[-1]], float), True
+    protected = _as_points(protected_points)
+    protected_indices = []
+    if len(protected):
+        for waypoint in protected:
+            protected_indices.append(int(np.argmin(np.linalg.norm(
+                pts - waypoint.reshape(1, 3), axis=1))))
+    budget = max(2, max_points - len(set(protected_indices)))
+    keep = np.linspace(0, len(pts) - 1, budget)
+    indices = sorted(set(
+        [int(round(v)) for v in keep] + protected_indices))
+    if indices[0] != 0:
+        indices.insert(0, 0)
+    if indices[-1] != len(pts) - 1:
+        indices.append(len(pts) - 1)
+    return np.asarray([pts[i] for i in indices], float), True
+
+
 def _boundary_points(boundary):
     if boundary is None or isinstance(boundary, str):
         return np.zeros((0, 3), float)
@@ -352,8 +383,22 @@ def smooth_wheelchair_corners(path, samples_per_segment=8, passes=2):
 def refine_topology_path(corridor, samples_per_segment=12,
                          max_curvature=None, max_turn=None,
                          footprint_checker=None, corridor_constraint=None,
-                         manifold_constraint=None):
-    original = np.asarray(getattr(corridor, "waypoints", []), float)
+                         manifold_constraint=None,
+                         max_refinement_points=0):
+    raw_original = np.asarray(getattr(corridor, "waypoints", []), float)
+    protected_waypoints = []
+    for attr in (
+            "topology_ordered_waypoints", "channel_waypoints",
+            "task_minima_waypoints"):
+        values = getattr(corridor, attr, None)
+        if values is None:
+            continue
+        values = _as_points(values)
+        if len(values):
+            protected_waypoints.extend(list(values))
+    original, refinement_points_limited = _limit_refinement_points(
+        raw_original, max_refinement_points,
+        protected_points=protected_waypoints)
     risk_fn = getattr(corridor, "risk_field", None)
     if risk_fn is None:
         risk_fn = getattr(corridor, "field", None)
@@ -373,6 +418,9 @@ def refine_topology_path(corridor, samples_per_segment=12,
                 "min_clearance": float(pre_status["min_clearance"]),
                 "risk": float(pre_status["max_risk"]),
                 "trajectory_valid": bool(pre_status["valid"]),
+                "refinement_points_limited": bool(refinement_points_limited),
+                "raw_reference_path_count": int(len(raw_original)),
+                "bounded_reference_path_count": int(len(original)),
             }],
             "pre_status": pre_status,
             "post_status": pre_status,
@@ -385,6 +433,15 @@ def refine_topology_path(corridor, samples_per_segment=12,
             manifold_constraint=manifold_constraint,
             risk_field=risk_fn,
             samples_per_segment=samples_per_segment)
+        if refinement_points_limited:
+            refinement_info.setdefault("trace", []).append({
+                "iteration": "bounded_refinement_points",
+                "accepted": True,
+                "failure_reason": "",
+                "trajectory_valid": True,
+                "raw_reference_path_count": int(len(raw_original)),
+                "bounded_reference_path_count": int(len(original)),
+            })
         projected = _project_to_corridor(refined, corridor)
         projected_status = check_refinement_manifold_validity(
             projected, manifold_constraint=manifold_constraint,
@@ -660,6 +717,9 @@ def refine_topology_path(corridor, samples_per_segment=12,
     metrics["fallback_used"] = bool(corridor.refinement_fallback)
     metrics["reference_source"] = str(corridor.final_reference_source)
     metrics["reference_path_count"] = int(len(refined))
+    metrics["raw_reference_path_count"] = int(len(raw_original))
+    metrics["bounded_reference_path_count"] = int(len(original))
+    metrics["refinement_points_limited"] = bool(refinement_points_limited)
     metrics["trajectory_manifold_violation_count"] = int(
         corridor.trajectory_manifold_violation_count)
     metrics["trajectory_corridor_violation_count"] = int(
