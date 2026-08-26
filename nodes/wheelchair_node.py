@@ -510,6 +510,7 @@ class WheelchairNode:
             "candidate_fallback", "refinement", "candidate", "fallback",
             "selected_candidate_waypoints", "raw_waypoints",
             "diff_drive_launch_prefix", "raw_diff_drive_launch_prefix",
+            "diff_drive_launch_prefix_turn_recovered",
             "runtime_replan_fallback")
 
     def _ensure_corridor_runtime_contract(self, corridor,
@@ -1678,21 +1679,77 @@ class WheelchairNode:
                 prefix.append([p2[0], p2[1]])
         prefix = np.asarray(prefix, float)
         join = prefix[-1, :2]
-        tail = ref
+        candidates = []
         if len(ref) > 1:
             dists = np.linalg.norm(ref[:, :2] - join.reshape(1, 2), axis=1)
-            join_idx = int(np.argmin(dists))
-            # Keep at least one topology point after the launch prefix.  The
-            # prefix repairs execution at the start; it must not erase the
-            # Morse channel itself.
-            join_idx = min(max(join_idx, 1), len(ref) - 1)
-            tail = ref[join_idx:]
-        repaired = np.vstack([prefix, tail])
-        repaired = self._project_points_to_corridor(repaired, corridor)
-        ok, _reason = self._footprint_path_checker(repaired)
-        if not ok:
+            nearest_idx = int(np.argmin(dists))
+            join_indices = set()
+            upper = min(len(ref) - 1, max(2, nearest_idx + 5))
+            lower = max(1, min(nearest_idx - 4, upper))
+            for idx in range(lower, upper + 1):
+                join_indices.add(idx)
+            for idx in range(1, min(len(ref), 12)):
+                join_indices.add(idx)
+            for join_idx in sorted(join_indices):
+                bridge_end = ref[join_idx]
+                if join_idx + 1 < len(ref):
+                    tail_vec = ref[join_idx + 1, :2] - ref[join_idx, :2]
+                else:
+                    tail_vec = goal - ref[join_idx, :2]
+                tail_norm = float(np.linalg.norm(tail_vec))
+                tail_dir = tail_vec / tail_norm if tail_norm > 1e-9 else goal_dir
+                bridge_len = float(np.linalg.norm(bridge_end[:2] - start))
+                if bridge_len <= 1e-6:
+                    continue
+                for scale in (0.35, 0.50, 0.70):
+                    c1 = start + heading * bridge_len * float(scale)
+                    c2 = bridge_end[:2] - tail_dir * bridge_len * float(scale)
+                    sample_count = max(14, int(np.ceil(bridge_len / 0.04)))
+                    bridge = []
+                    for j in range(sample_count + 1):
+                        u = float(j) / float(sample_count)
+                        p2 = (
+                            (1.0 - u) ** 3 * start +
+                            3.0 * (1.0 - u) ** 2 * u * c1 +
+                            3.0 * (1.0 - u) * u ** 2 * c2 +
+                            u ** 3 * bridge_end[:2])
+                        if ref.shape[1] >= 3:
+                            bridge.append([p2[0], p2[1], 0.0])
+                        else:
+                            bridge.append([p2[0], p2[1]])
+                    bridge = np.asarray(bridge, float)
+                    tail = (
+                        ref[join_idx + 1:]
+                        if join_idx + 1 < len(ref) else ref[-1:])
+                    repaired = np.vstack([bridge, tail])
+                    candidates.append(self._project_points_to_corridor(
+                        repaired, corridor))
+        if not candidates:
+            repaired = np.vstack([prefix, ref])
+            candidates.append(self._project_points_to_corridor(
+                repaired, corridor))
+        valid = []
+        from stsm_madp.deform import path_curvature_metrics
+        for candidate in candidates:
+            ok, _reason = self._footprint_path_checker(candidate)
+            if not ok:
+                continue
+            profile = wheelchair_nonholonomic_execution_profile(
+                candidate, self.state, self.goal,
+                min_step=max(0.03, self.topology_min_segment_length),
+                initial_lookahead=0.12,
+                horizon_points=min(10, max(4, len(candidate))))
+            turns = path_curvature_metrics(candidate)
+            valid.append((candidate, profile, turns))
+        if not valid:
             return None
-        return repaired
+        best, _profile, _turns = min(
+            valid,
+            key=lambda item: (
+                max(0.0, float(item[2].get("max_turn", 0.0)) - 0.40) * 20.0 +
+                max(0.0, float(item[2].get("max_curvature", 0.0)) - 18.0) +
+                float(item[1].get("execution_profile_cost", 0.0))))
+        return np.asarray(best, float)
 
     def _select_wheelchair_execution_reference(self, corr, refined, metrics):
         """Prefer a reference with executable heading and monotonic launch."""
@@ -1716,34 +1773,43 @@ class WheelchairNode:
             out["nonholonomic_execution_profile"] = dict(current)
             out["diff_drive_reference_repaired"] = False
             return base, out, False
-        candidates = [("refined", base, current)]
+        from stsm_madp.deform import path_curvature_metrics
+        candidates = [(
+            "refined", base, current, path_curvature_metrics(base))]
         repaired = self._make_heading_progress_prefix(base, corr)
         if repaired is not None and len(repaired) >= 2:
+            repaired_profile = wheelchair_nonholonomic_execution_profile(
+                repaired, self.state, self.goal,
+                min_step=max(0.03, self.topology_min_segment_length),
+                initial_lookahead=0.12,
+                horizon_points=min(10, max(4, len(repaired))))
             candidates.append((
                 "diff_drive_launch_prefix",
                 repaired,
-                wheelchair_nonholonomic_execution_profile(
-                    repaired, self.state, self.goal,
-                    min_step=max(0.03, self.topology_min_segment_length),
-                    initial_lookahead=0.12,
-                    horizon_points=min(10, max(4, len(repaired))))))
+                repaired_profile,
+                path_curvature_metrics(repaired)))
         raw = np.asarray(getattr(corr, "raw_topology_waypoints", []), float)
         if raw.size == 0:
             raw = np.asarray(getattr(corr, "topology_ordered_waypoints", []), float)
         if raw.size > 0 and raw.ndim == 2 and len(raw) >= 2:
             raw_repaired = self._make_heading_progress_prefix(raw, corr)
             if raw_repaired is not None and len(raw_repaired) >= 2:
+                raw_profile = wheelchair_nonholonomic_execution_profile(
+                    raw_repaired, self.state, self.goal,
+                    min_step=max(0.03, self.topology_min_segment_length),
+                    initial_lookahead=0.12,
+                    horizon_points=min(10, max(4, len(raw_repaired))))
                 candidates.append((
                     "raw_diff_drive_launch_prefix",
                     raw_repaired,
-                    wheelchair_nonholonomic_execution_profile(
-                        raw_repaired, self.state, self.goal,
-                        min_step=max(0.03, self.topology_min_segment_length),
-                        initial_lookahead=0.12,
-                        horizon_points=min(10, max(4, len(raw_repaired))))))
-        best_source, best_path, best_profile = min(
+                    raw_profile,
+                    path_curvature_metrics(raw_repaired)))
+        best_source, best_path, best_profile, best_turn_metrics = min(
             candidates,
-            key=lambda item: float(item[2].get("execution_profile_cost", 0.0)))
+            key=lambda item: (
+                max(0.0, float(item[3].get("max_turn", 0.0)) - 0.40) * 20.0 +
+                max(0.0, float(item[3].get("max_curvature", 0.0)) - 18.0) +
+                float(item[2].get("execution_profile_cost", 0.0))))
         repaired_used = best_source != "refined" and (
             float(best_profile.get("execution_profile_cost", 0.0)) + 1e-6 <
             float(current.get("execution_profile_cost", 0.0)))
@@ -1754,7 +1820,7 @@ class WheelchairNode:
         out["diff_drive_reference_source"] = str(best_source)
         if repaired_used:
             from stsm_madp.deform import path_curvature_metrics, path_length
-            repaired_metrics = path_curvature_metrics(best_path)
+            repaired_metrics = dict(best_turn_metrics)
             out.update(repaired_metrics)
             out["refined_path_length"] = float(path_length(best_path))
             out["reference_path_count"] = int(len(best_path))
@@ -1875,6 +1941,52 @@ class WheelchairNode:
                     "max_curvature", refined_max_curvature))
                 refined_max_turn = float(metrics.get(
                     "max_turn", refined_max_turn))
+                if refined_max_turn > (
+                        executable_turn_limit +
+                        executable_turn_tolerance + 1e-9):
+                    recovery = self._recover_refined_turn_limit(
+                        corr, refined, executable_turn_limit,
+                        executable_turn_tolerance)
+                    if recovery is not None:
+                        recovered, recovery_metrics = recovery
+                        recovered_profile = (
+                            wheelchair_nonholonomic_execution_profile(
+                                recovered, self.state, self.goal,
+                                min_step=max(
+                                    0.03, self.topology_min_segment_length),
+                                initial_lookahead=0.12,
+                                horizon_points=min(
+                                    10, max(4, len(np.asarray(
+                                        recovered, float))))))
+                        pre_profile = dict(metrics.get(
+                            "pre_repair_nonholonomic_execution_profile", {}))
+                        pre_cost = float(pre_profile.get(
+                            "execution_profile_cost",
+                            metrics.get("nonholonomic_execution_profile", {})
+                            .get("execution_profile_cost", float("inf"))))
+                        if (
+                                float(recovered_profile.get(
+                                    "execution_profile_cost", float("inf"))) <
+                                pre_cost and
+                                float(recovered_profile.get(
+                                    "initial_heading_error", 0.0)) < 1.50):
+                            refined = np.asarray(recovered, float)
+                            metrics.update(recovery_metrics)
+                            metrics["nonholonomic_execution_profile"] = dict(
+                                recovered_profile)
+                            metrics["diff_drive_reference_repaired"] = True
+                            metrics["diff_drive_reference_source"] = (
+                                "diff_drive_launch_prefix_turn_recovered")
+                            metrics["reference_source"] = (
+                                "diff_drive_launch_prefix_turn_recovered")
+                            reference_source = str(metrics["reference_source"])
+                            refined_max_curvature = float(metrics.get(
+                                "max_curvature", refined_max_curvature))
+                            refined_max_turn = float(metrics.get(
+                                "max_turn", refined_max_turn))
+                            attempt["diff_drive_turn_recovery_used"] = True
+                            attempt["diff_drive_turn_recovery_metrics"] = dict(
+                                recovery_metrics)
                 attempt["diff_drive_reference_repaired"] = True
                 attempt["diff_drive_reference_source"] = str(
                     metrics.get("diff_drive_reference_source",
