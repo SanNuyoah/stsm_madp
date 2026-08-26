@@ -1683,13 +1683,20 @@ class WheelchairNode:
         if len(ref) > 1:
             dists = np.linalg.norm(ref[:, :2] - join.reshape(1, 2), axis=1)
             nearest_idx = int(np.argmin(dists))
-            join_indices = set()
-            upper = min(len(ref) - 1, max(2, nearest_idx + 5))
-            lower = max(1, min(nearest_idx - 4, upper))
-            for idx in range(lower, upper + 1):
-                join_indices.add(idx)
-            for idx in range(1, min(len(ref), 12)):
-                join_indices.add(idx)
+            # Keep this repair strictly bounded.  R002 showed that scanning a
+            # large join/scale grid inside planning can stall before any
+            # diagnostics are written.  These few joins cover the nearest
+            # reconnection plus the empirically stable early-Morse handoff
+            # region without turning refinement into another planner.
+            join_indices = []
+            for idx in (
+                    nearest_idx,
+                    nearest_idx + 2,
+                    min(len(ref) - 1, 8),
+                    min(len(ref) - 1, 10)):
+                idx = int(min(max(idx, 1), len(ref) - 1))
+                if idx not in join_indices:
+                    join_indices.append(idx)
             for join_idx in sorted(join_indices):
                 bridge_end = ref[join_idx]
                 if join_idx + 1 < len(ref):
@@ -1701,10 +1708,11 @@ class WheelchairNode:
                 bridge_len = float(np.linalg.norm(bridge_end[:2] - start))
                 if bridge_len <= 1e-6:
                     continue
-                for scale in (0.35, 0.50, 0.70):
+                for scale in (0.45, 0.55):
                     c1 = start + heading * bridge_len * float(scale)
                     c2 = bridge_end[:2] - tail_dir * bridge_len * float(scale)
-                    sample_count = max(14, int(np.ceil(bridge_len / 0.04)))
+                    sample_count = min(
+                        24, max(12, int(np.ceil(bridge_len / 0.07))))
                     bridge = []
                     for j in range(sample_count + 1):
                         u = float(j) / float(sample_count)
@@ -1730,17 +1738,24 @@ class WheelchairNode:
                 repaired, corridor))
         valid = []
         from stsm_madp.deform import path_curvature_metrics
+        scored = []
         for candidate in candidates:
-            ok, _reason = self._footprint_path_checker(candidate)
-            if not ok:
-                continue
             profile = wheelchair_nonholonomic_execution_profile(
                 candidate, self.state, self.goal,
                 min_step=max(0.03, self.topology_min_segment_length),
                 initial_lookahead=0.12,
                 horizon_points=min(10, max(4, len(candidate))))
             turns = path_curvature_metrics(candidate)
-            valid.append((candidate, profile, turns))
+            score = (
+                max(0.0, float(turns.get("max_turn", 0.0)) - 0.40) * 20.0 +
+                max(0.0, float(turns.get("max_curvature", 0.0)) - 18.0) +
+                float(profile.get("execution_profile_cost", 0.0)))
+            scored.append((score, candidate, profile, turns))
+        for _score, candidate, profile, turns in sorted(
+                scored, key=lambda item: item[0])[:3]:
+            ok, _reason = self._footprint_path_checker(candidate)
+            if ok:
+                valid.append((candidate, profile, turns))
         if not valid:
             return None
         best, _profile, _turns = min(
