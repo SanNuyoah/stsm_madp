@@ -28,7 +28,8 @@ def _wrap_angle(value):
 def wheelchair_nonholonomic_execution_profile(points, state, goal,
                                               min_step=0.03,
                                               initial_lookahead=0.12,
-                                              horizon_points=10):
+                                              horizon_points=10,
+                                              executable_curvature=8.0):
     """Return geometric diff-drive executability costs for a path."""
     pts = np.asarray(points, float)
     state = np.asarray(state, float)
@@ -46,6 +47,7 @@ def wheelchair_nonholonomic_execution_profile(points, state, goal,
         "mean_abs_turn": 0.0,
         "max_abs_turn": 0.0,
         "max_local_curvature": 0.0,
+        "excess_local_curvature": 0.0,
         "evaluated_points": 0,
     }
     if pts.size == 0 or state.size < 3:
@@ -111,6 +113,8 @@ def wheelchair_nonholonomic_execution_profile(points, state, goal,
             1e-6)
         curvatures.append(float(turn) / local_len)
     max_curvature = float(max(curvatures)) if curvatures else 0.0
+    excess_curvature = max(
+        0.0, max_curvature - max(float(executable_curvature), 1e-6))
 
     alignment_deficit = 1.0 - max(0.0, initial_alignment)
     cost = (
@@ -122,7 +126,8 @@ def wheelchair_nonholonomic_execution_profile(points, state, goal,
         2.0 * float(oscillation) +
         0.8 * float(mean_abs_turn) +
         0.4 * float(max_abs_turn) +
-        0.12 * float(max_curvature))
+        0.18 * float(max_curvature) +
+        1.6 * float(excess_curvature * excess_curvature))
     return {
         "execution_profile_cost": float(cost),
         "initial_heading_error": float(heading_error),
@@ -136,6 +141,7 @@ def wheelchair_nonholonomic_execution_profile(points, state, goal,
         "mean_abs_turn": float(mean_abs_turn),
         "max_abs_turn": float(max_abs_turn),
         "max_local_curvature": float(max_curvature),
+        "excess_local_curvature": float(excess_curvature),
         "evaluated_points": int(len(local)),
     }
 

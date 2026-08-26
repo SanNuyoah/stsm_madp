@@ -1712,7 +1712,7 @@ class WheelchairNode:
                     c1 = start + heading * bridge_len * float(scale)
                     c2 = bridge_end[:2] - tail_dir * bridge_len * float(scale)
                     sample_count = min(
-                        24, max(12, int(np.ceil(bridge_len / 0.07))))
+                        14, max(8, int(np.ceil(bridge_len / 0.10))))
                     bridge = []
                     for j in range(sample_count + 1):
                         u = float(j) / float(sample_count)
@@ -1748,11 +1748,11 @@ class WheelchairNode:
             turns = path_curvature_metrics(candidate)
             score = (
                 max(0.0, float(turns.get("max_turn", 0.0)) - 0.40) * 20.0 +
-                max(0.0, float(turns.get("max_curvature", 0.0)) - 18.0) +
+                max(0.0, float(turns.get("max_curvature", 0.0)) - 8.0) * 4.0 +
                 float(profile.get("execution_profile_cost", 0.0)))
             scored.append((score, candidate, profile, turns))
         for _score, candidate, profile, turns in sorted(
-                scored, key=lambda item: item[0])[:3]:
+                scored, key=lambda item: item[0])[:2]:
             ok, _reason = self._footprint_path_checker(candidate)
             if ok:
                 valid.append((candidate, profile, turns))
@@ -1762,7 +1762,7 @@ class WheelchairNode:
             valid,
             key=lambda item: (
                 max(0.0, float(item[2].get("max_turn", 0.0)) - 0.40) * 20.0 +
-                max(0.0, float(item[2].get("max_curvature", 0.0)) - 18.0) +
+                max(0.0, float(item[2].get("max_curvature", 0.0)) - 8.0) * 4.0 +
                 float(item[1].get("execution_profile_cost", 0.0))))
         return np.asarray(best, float)
 
@@ -1823,7 +1823,7 @@ class WheelchairNode:
             candidates,
             key=lambda item: (
                 max(0.0, float(item[3].get("max_turn", 0.0)) - 0.40) * 20.0 +
-                max(0.0, float(item[3].get("max_curvature", 0.0)) - 18.0) +
+                max(0.0, float(item[3].get("max_curvature", 0.0)) - 8.0) * 4.0 +
                 float(item[2].get("execution_profile_cost", 0.0))))
         repaired_used = best_source != "refined" and (
             float(best_profile.get("execution_profile_cost", 0.0)) + 1e-6 <
@@ -1927,7 +1927,7 @@ class WheelchairNode:
             refined_max_curvature = float(metrics.get("max_curvature", 0.0))
             refined_max_turn = float(metrics.get("max_turn", 0.0))
             executable_curvature_limit = min(
-                float(self.topology_max_corridor_curvature), 18.0)
+                float(self.topology_max_corridor_curvature), 8.0)
             executable_turn_limit = min(
                 float(self.topology_max_corridor_turn), 0.40)
             executable_turn_tolerance = 0.03
@@ -2205,7 +2205,7 @@ class WheelchairNode:
                 continue
             if (float(metrics.get("max_turn", 0.0)) <= limit + 1e-9 and
                     float(metrics.get("max_curvature", 0.0)) <=
-                    min(float(self.topology_max_corridor_curvature), 18.0) + 1e-9):
+                    min(float(self.topology_max_corridor_curvature), 8.0) + 1e-9):
                 metrics["refined_path_length"] = float(path_length(candidate))
                 metrics["reference_path_count"] = int(len(candidate))
                 metrics["reference_source"] = "turn_recovered_refined"
