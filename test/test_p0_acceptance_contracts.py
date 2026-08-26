@@ -1169,6 +1169,7 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "mpc_reference_min_goal_progress_m" in wheelchair_source
     assert "reference_horizon_goal_progress" in wheelchair_source
     assert "runtime_switch_insufficient_goal_progress" in wheelchair_source
+    assert "runtime_switch_not_rank_improving" in wheelchair_source
     assert "wheelchair_nonholonomic_execution_profile" in wheelchair_source
     assert "diff_drive_execution_cost" in wheelchair_source
     assert "selected_monotonic_regression" in wheelchair_source

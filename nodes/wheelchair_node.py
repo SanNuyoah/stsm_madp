@@ -3682,6 +3682,10 @@ class WheelchairNode:
         if self.baseline or not self.topology_replan_on_no_progress:
             return current_corridor, False
         current_id = self._corridor_id(current_corridor, "")
+        current_rank = int(getattr(
+            current_corridor, "rank_total",
+            getattr(current_corridor, "rank_base", 999999)))
+        reason_text = str(reason or "")
         if current_id:
             self.runtime_rejected_topology_corridor_ids.add(current_id)
         switch_trials = []
@@ -3700,6 +3704,33 @@ class WheelchairNode:
         for candidate in pool:
             cid = self._corridor_id(candidate, "")
             if not cid or cid == current_id:
+                continue
+            candidate_rank = int(getattr(
+                candidate, "rank_total",
+                getattr(candidate, "rank_base", 999999)))
+            if ("no_progress" in reason_text and
+                    candidate_rank >= current_rank):
+                precheck = {
+                    "corridor_id": cid,
+                    "runtime_switch_precheck": True,
+                    "accepted": False,
+                    "failure_reason": (
+                        "runtime_switch_not_rank_improving:%d>=%d" %
+                        (candidate_rank, current_rank)),
+                    "current_corridor_id": current_id,
+                    "current_rank_total": current_rank,
+                    "candidate_rank_total": candidate_rank,
+                }
+                switch_trials.append(precheck)
+                breakdown = dict(getattr(
+                    candidate, "candidate_cost_breakdown", {}) or {})
+                breakdown["runtime_switch_precheck"] = dict(precheck)
+                breakdown["runtime_switch_reject_reason"] = str(
+                    precheck["failure_reason"])
+                candidate.candidate_cost_breakdown = breakdown
+                rospy.logwarn(
+                    "[wc][topology] runtime switch reject %s reason=%s",
+                    cid, precheck["failure_reason"])
                 continue
             if cid in self.runtime_rejected_topology_corridor_ids:
                 continue
