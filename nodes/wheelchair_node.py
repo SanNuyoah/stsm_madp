@@ -1297,6 +1297,8 @@ class WheelchairNode:
         plan_t0 = time.time()
         if self.topology_enabled:
             try:
+                wc_executable_curvature = min(
+                    float(self.topology_max_corridor_curvature), 8.0)
                 corrs = self.manifold.enumerate_topological_corridors(
                     start3, goal3, self.bounds, radius=0.4,
                     grid_resolution=self.topology_grid_resolution,
@@ -1335,7 +1337,7 @@ class WheelchairNode:
                         "lambda_tracking": self.topology_lambda_tracking,
                         "lambda_saddle_value": self.topology_lambda_saddle_value,
                         "max_corridor_turn": self.topology_max_corridor_turn,
-                        "max_corridor_curvature": self.topology_max_corridor_curvature,
+                        "max_corridor_curvature": wc_executable_curvature,
                         "min_segment_length": self.topology_min_segment_length,
                         "corridor_dedupe_distance": self.topology_corridor_dedupe_distance,
                         "candidate_pool_min": self.topology_candidate_pool_min,
@@ -1366,7 +1368,7 @@ class WheelchairNode:
                             "nominal_speed": min(
                                 0.35, max(0.10, 0.6 * self.mpc_base_v_max)),
                             "max_tracking_turn": self.topology_max_corridor_turn,
-                            "max_curvature": self.topology_max_corridor_curvature,
+                            "max_curvature": wc_executable_curvature,
                             "min_progress": self.min_progress_per_solve,
                         },
                     })
@@ -1893,7 +1895,8 @@ class WheelchairNode:
             ok, refined, metrics, reason = refine_topology_path(
                 corr,
                 samples_per_segment=self.topology_refinement_samples,
-                max_curvature=self.topology_max_corridor_curvature,
+                max_curvature=min(
+                    float(self.topology_max_corridor_curvature), 8.0),
                 max_turn=self.topology_max_corridor_turn,
                 footprint_checker=self._footprint_path_checker)
             attempt = self._refinement_attempt_payload(
