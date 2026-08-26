@@ -1170,6 +1170,11 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "reference_horizon_goal_progress" in wheelchair_source
     assert "runtime_switch_insufficient_goal_progress" in wheelchair_source
     assert "runtime_switch_not_rank_improving" in wheelchair_source
+    assert "execution_speed_floor" in wheelchair_source
+    assert "first_speed_shortfall_cost" in open(
+        os.path.join(ROOT, "src", "stsm_madp", "mpc.py"), "r").read()
+    assert "sequence_speed_shortfall_cost" in open(
+        os.path.join(ROOT, "src", "stsm_madp", "mpc.py"), "r").read()
     assert "wheelchair_nonholonomic_execution_profile" in wheelchair_source
     assert "diff_drive_execution_cost" in wheelchair_source
     assert "selected_monotonic_regression" in wheelchair_source

@@ -4874,6 +4874,8 @@ class WheelchairMPC:
         self.lam_progress = 2.8
         self.lam_speed = 0.25
         self.lam_ref_progress = 1.0
+        self.execution_speed_floor = 0.20
+        self.lam_execution_speed_floor = 35.0
         self.lam_goal_terminal = 8.0
         self.lam_stall = 10.0
         self.min_progress_per_solve = 0.005
@@ -5253,6 +5255,25 @@ class WheelchairMPC:
                 max(0.0, float(u[0])) for u in controls) * self.dt
             sequence_translation = sum(
                 max(0.0, float(u[0])) for u in controls) * self.dt
+            first_speed_shortfall_cost = 0.0
+            sequence_speed_shortfall_cost = 0.0
+            if dist0 > max(self.final_approach_radius, 0.12):
+                speed_floor = max(
+                    0.0,
+                    min(float(self.execution_speed_floor),
+                        0.6 * float(self.v_max)))
+                if speed_floor > 0.0:
+                    first_speed_shortfall = max(
+                        0.0, speed_floor - max(0.0, float(first_u[0])))
+                    nominal_sequence = speed_floor * float(horizon) * self.dt
+                    sequence_shortfall = max(
+                        0.0, nominal_sequence - sequence_translation)
+                    first_speed_shortfall_cost = (
+                        float(self.lam_execution_speed_floor) *
+                        float(first_speed_shortfall ** 2))
+                    sequence_speed_shortfall_cost = (
+                        0.5 * float(self.lam_execution_speed_floor) *
+                        float(sequence_shortfall ** 2))
             terminal_goal_cost = self.lam_goal_terminal * float(distN ** 2)
             if dist0 < self.near_goal_radius:
                 terminal_goal_cost += self.near_goal_goal_weight * float(distN ** 2)
@@ -5269,6 +5290,7 @@ class WheelchairMPC:
                 heading_cost = self.lam_heading * float(heading_err ** 2)
             total = (
                 float(item["cost"]) + terminal_goal_cost + stall_cost +
+                first_speed_shortfall_cost + sequence_speed_shortfall_cost +
                 heading_cost + float(lambda_adp_terminal) * adp_scale *
                 terminal_adp - progress_reward - ref_progress_reward -
                 speed_reward)
@@ -5281,6 +5303,12 @@ class WheelchairMPC:
                 "progress_reward": -progress_reward,
                 "reference_progress_reward": -ref_progress_reward,
                 "speed_reward": -speed_reward,
+                "first_speed_shortfall_cost": float(
+                    first_speed_shortfall_cost),
+                "sequence_speed_shortfall_cost": float(
+                    sequence_speed_shortfall_cost),
+                "execution_speed_floor": float(getattr(
+                    self, "execution_speed_floor", 0.0)),
                 "alignment_translation": float(sequence_translation),
                 "reference_progress": float(ref_progress),
                 "first_step_goal_progress": float(first_goal_progress),

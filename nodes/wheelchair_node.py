@@ -151,6 +151,10 @@ class WheelchairNode:
             "~progress_reward_weight", 2.8))
         self.speed_reward_weight = float(rospy.get_param(
             "~speed_reward_weight", 0.25))
+        self.execution_speed_floor = float(rospy.get_param(
+            "~mpc/execution_speed_floor", 0.20))
+        self.execution_speed_floor_weight = float(rospy.get_param(
+            "~mpc/execution_speed_floor_weight", 35.0))
         self.ref_progress_reward_weight = float(rospy.get_param(
             "~ref_progress_reward_weight", 1.0))
         self.corridor_speed_slowdown_gain = float(rospy.get_param(
@@ -664,6 +668,9 @@ class WheelchairNode:
         self.mpc.lam_stall = self.lam_stall
         self.mpc.lam_progress = self.progress_reward_weight
         self.mpc.lam_speed = self.speed_reward_weight
+        self.mpc.execution_speed_floor = self.execution_speed_floor
+        self.mpc.lam_execution_speed_floor = (
+            self.execution_speed_floor_weight)
         self.mpc.lam_ref_progress = self.ref_progress_reward_weight
         self.mpc.final_approach_radius = (
             0.0 if self.baseline else self.final_approach_entry_radius)
