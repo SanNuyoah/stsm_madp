@@ -409,11 +409,17 @@ def refine_topology_path(corridor, samples_per_segment=12,
     pre_status = check_refinement_manifold_validity(
         original, manifold_constraint=manifold_constraint,
         corridor_constraint=corridor_constraint, risk_field=risk_fn)
-    if len(original) <= 2:
+    wheelchair_fast_refinement = (
+        max_refinement_points and
+        (str(getattr(corridor, "robot_type", "")).lower() == "wheelchair" or
+         str(getattr(corridor, "profile", "")).lower() == "wheelchair"))
+    if len(original) <= 2 or wheelchair_fast_refinement:
         refined = original.copy()
         refinement_info = {
             "trace": [{
-                "iteration": 0,
+                "iteration": (
+                    "bounded_wheelchair_refinement"
+                    if wheelchair_fast_refinement else 0),
                 "cost": float(path_length(refined)),
                 "min_clearance": float(pre_status["min_clearance"]),
                 "risk": float(pre_status["max_risk"]),
@@ -421,6 +427,7 @@ def refine_topology_path(corridor, samples_per_segment=12,
                 "refinement_points_limited": bool(refinement_points_limited),
                 "raw_reference_path_count": int(len(raw_original)),
                 "bounded_reference_path_count": int(len(original)),
+                "generic_smoothing_skipped": bool(wheelchair_fast_refinement),
             }],
             "pre_status": pre_status,
             "post_status": pre_status,
