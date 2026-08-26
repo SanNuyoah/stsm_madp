@@ -411,7 +411,8 @@ def refine_topology_path(corridor, samples_per_segment=12,
         corridor_constraint=corridor_constraint, risk_field=risk_fn)
     wheelchair_fast_refinement = (
         max_refinement_points and
-        (str(getattr(corridor, "robot_type", "")).lower() == "wheelchair" or
+        (footprint_checker is not None or
+         str(getattr(corridor, "robot_type", "")).lower() == "wheelchair" or
          str(getattr(corridor, "profile", "")).lower() == "wheelchair"))
     if len(original) <= 2 or wheelchair_fast_refinement:
         refined = original.copy()

@@ -1929,6 +1929,12 @@ class WheelchairNode:
             if not self._corridor_is_topological(corr):
                 prepared.append(corr)
                 continue
+            rospy.loginfo(
+                "[wc][refine] start %s index=%d samples=%d max_points=%d footprint_points=%d",
+                cid, int(index), int(self.topology_refinement_samples),
+                int(self.max_refinement_path_points),
+                int(self.max_refined_footprint_check_points))
+            refine_t0 = time.time()
             ok, refined, metrics, reason = refine_topology_path(
                 corr,
                 samples_per_segment=self.topology_refinement_samples,
@@ -1937,6 +1943,9 @@ class WheelchairNode:
                 max_turn=self.topology_max_corridor_turn,
                 footprint_checker=self._footprint_path_checker,
                 max_refinement_points=self.max_refinement_path_points)
+            rospy.loginfo(
+                "[wc][refine] done %s ok=%s reason=%s elapsed=%.3fs",
+                cid, bool(ok), str(reason), time.time() - refine_t0)
             attempt = self._refinement_attempt_payload(
                 corr, metrics, reason, stage="refine_topology_path")
             attempt["max_refinement_path_points"] = int(
