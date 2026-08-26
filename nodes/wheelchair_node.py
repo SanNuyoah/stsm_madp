@@ -2267,13 +2267,37 @@ class WheelchairNode:
 
         limit = float(executable_turn_limit) + float(executable_turn_tolerance)
         best = np.asarray(refined, float)
+        if len(best) > 64:
+            keep = np.linspace(0, len(best) - 1, 64)
+            indices = sorted(set(int(round(v)) for v in keep))
+            if indices[0] != 0:
+                indices.insert(0, 0)
+            if indices[-1] != len(best) - 1:
+                indices.append(len(best) - 1)
+            best = np.asarray([best[i] for i in indices], float)
         best_metrics = path_curvature_metrics(best)
-        for samples, passes in ((8, 2), (12, 2), (16, 3)):
+        rospy.loginfo(
+            "[wc][refine] turn recovery start %s points=%d max_turn=%.3f limit=%.3f",
+            getattr(corr, "corridor_id", getattr(corr, "label", "")),
+            int(len(best)), float(best_metrics.get("max_turn", 0.0)), limit)
+        for samples, passes in ((4, 1), (6, 1), (8, 1)):
             candidate = smooth_wheelchair_corners(
                 best, samples_per_segment=samples, passes=passes)
+            if len(candidate) > 64:
+                keep = np.linspace(0, len(candidate) - 1, 64)
+                indices = sorted(set(int(round(v)) for v in keep))
+                if indices[0] != 0:
+                    indices.insert(0, 0)
+                if indices[-1] != len(candidate) - 1:
+                    indices.append(len(candidate) - 1)
+                candidate = np.asarray([candidate[i] for i in indices], float)
             ok, reason = self._footprint_path_checker(candidate)
             metrics = path_curvature_metrics(candidate)
             if not ok:
+                rospy.logwarn(
+                    "[wc][refine] turn recovery reject footprint %s samples=%d reason=%s points=%d",
+                    getattr(corr, "corridor_id", getattr(corr, "label", "")),
+                    int(samples), str(reason), int(len(candidate)))
                 continue
             if (float(metrics.get("max_turn", 0.0)) <= limit + 1e-9 and
                     float(metrics.get("max_curvature", 0.0)) <=
@@ -2285,6 +2309,7 @@ class WheelchairNode:
                 metrics["turn_recovery_samples_per_segment"] = int(samples)
                 metrics["turn_recovery_passes"] = int(passes)
                 metrics["turn_recovery_reason"] = "execution_turn_limit"
+                metrics["turn_recovery_bounded"] = True
                 metrics["failure_reason"] = ""
                 metrics["success"] = True
                 trace = list(getattr(corr, "refinement_trace", []) or [])
@@ -2296,6 +2321,7 @@ class WheelchairNode:
                     "max_turn": float(metrics.get("max_turn", 0.0)),
                     "max_curvature": float(metrics.get("max_curvature", 0.0)),
                     "reference_path_count": int(len(candidate)),
+                    "turn_recovery_bounded": True,
                 })
                 corr.refinement_trace = trace
                 metrics["refinement_trace"] = trace
