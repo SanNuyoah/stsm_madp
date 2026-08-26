@@ -372,6 +372,11 @@ class WheelchairNode:
             "~topology/route_max_paths", 512)))
         self.topology_route_max_routes = max(1, int(rospy.get_param(
             "~topology/route_max_routes", 256)))
+        if not self.baseline:
+            self.topology_route_max_paths = min(
+                int(self.topology_route_max_paths), 64)
+            self.topology_route_max_routes = min(
+                int(self.topology_route_max_routes), 32)
         self.topology_require_risk_improvement = bool(rospy.get_param(
             "~topology/require_risk_improvement", True))
         self.topology_candidate_max_risk = _topology_param(rospy.get_param(
@@ -1299,6 +1304,12 @@ class WheelchairNode:
             try:
                 wc_executable_curvature = min(
                     float(self.topology_max_corridor_curvature), 8.0)
+                rospy.loginfo(
+                    "[wc][topology] enumerate start k=%d route_max_paths=%d route_max_routes=%d max_curv=%.3f",
+                    int(self.topology_k_paths),
+                    int(self.topology_route_max_paths),
+                    int(self.topology_route_max_routes),
+                    float(wc_executable_curvature))
                 corrs = self.manifold.enumerate_topological_corridors(
                     start3, goal3, self.bounds, radius=0.4,
                     grid_resolution=self.topology_grid_resolution,
@@ -1372,6 +1383,9 @@ class WheelchairNode:
                             "min_progress": self.min_progress_per_solve,
                         },
                     })
+                rospy.loginfo(
+                    "[wc][topology] enumerate done candidates=%d elapsed=%.3fs",
+                    int(len(corrs)), time.time() - plan_t0)
                 used_topology = len(corrs) > 0
                 if not corrs:
                     self._log_topology_empty_debug("enumerate")
