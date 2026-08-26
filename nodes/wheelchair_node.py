@@ -1736,7 +1736,6 @@ class WheelchairNode:
             repaired = np.vstack([prefix, ref])
             candidates.append(self._project_points_to_corridor(
                 repaired, corridor))
-        valid = []
         from stsm_madp.deform import path_curvature_metrics
         scored = []
         for candidate in candidates:
@@ -1751,19 +1750,10 @@ class WheelchairNode:
                 max(0.0, float(turns.get("max_curvature", 0.0)) - 8.0) * 4.0 +
                 float(profile.get("execution_profile_cost", 0.0)))
             scored.append((score, candidate, profile, turns))
-        for _score, candidate, profile, turns in sorted(
-                scored, key=lambda item: item[0])[:2]:
-            ok, _reason = self._footprint_path_checker(candidate)
-            if ok:
-                valid.append((candidate, profile, turns))
-        if not valid:
+        if not scored:
             return None
-        best, _profile, _turns = min(
-            valid,
-            key=lambda item: (
-                max(0.0, float(item[2].get("max_turn", 0.0)) - 0.40) * 20.0 +
-                max(0.0, float(item[2].get("max_curvature", 0.0)) - 8.0) * 4.0 +
-                float(item[1].get("execution_profile_cost", 0.0))))
+        _score, best, _profile, _turns = min(
+            scored, key=lambda item: item[0])
         return np.asarray(best, float)
 
     def _select_wheelchair_execution_reference(self, corr, refined, metrics):
@@ -2013,6 +2003,26 @@ class WheelchairNode:
                         "pre_repair_nonholonomic_execution_profile", {}))
             else:
                 metrics.update(execution_metrics)
+            if execution_repaired and not fallback_used:
+                ok, footprint_reason = self._footprint_path_checker(refined)
+                if not ok:
+                    corr.reject_reason = (
+                        "diff_drive_launch_prefix_footprint:" +
+                        str(footprint_reason))
+                    attempt["accepted"] = False
+                    attempt["reject_reason"] = str(corr.reject_reason)
+                    attempt["diff_drive_reference_repaired"] = True
+                    attempt["diff_drive_reference_source"] = str(metrics.get(
+                        "diff_drive_reference_source", reference_source))
+                    attempt["nonholonomic_execution_profile"] = dict(
+                        metrics.get("nonholonomic_execution_profile", {}))
+                    refinement_attempts.append(attempt)
+                    rospy.logwarn(
+                        "[wc][refine] reject %s reason=%s",
+                        getattr(corr, "corridor_id",
+                                getattr(corr, "label", "")),
+                        corr.reject_reason)
+                    continue
             if (not fallback_used and
                     refined_max_curvature > executable_curvature_limit + 1e-9):
                 corr.reject_reason = "refined_execution_curvature_limit"
