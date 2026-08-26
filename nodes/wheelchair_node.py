@@ -676,6 +676,12 @@ class WheelchairNode:
         self.mpc.lam_heading = self.lam_heading
         self.mpc.first_step_progress_ratio = float(rospy.get_param(
             "~mpc/first_step_progress_ratio", 0.50))
+        self.mpc_reference_step_m = float(rospy.get_param(
+            "~mpc/reference_step_m", 0.09))
+        self.mpc_reference_min_lookahead_m = float(rospy.get_param(
+            "~mpc/reference_min_lookahead_m", 0.85))
+        self.mpc_reference_min_goal_progress_m = float(rospy.get_param(
+            "~mpc/reference_min_goal_progress_m", 0.18))
         self.mpc.heading_recovery_w_max = float(rospy.get_param(
             "~mpc/heading_recovery_w_max", self.stsm_w_max))
         self.bounds = [(-2.0, 2.5), (-2.0, 2.0)]
@@ -3597,6 +3603,16 @@ class WheelchairNode:
             heading_recovery_live = bool(objective.get(
                 "heading_recovery_live", False))
             sequence_progress = float(self.mpc.last_sequence_progress)
+            dist_goal = float(np.linalg.norm(
+                self.state[:2] - np.asarray(self.goal[:2], float)))
+            reference_goal_progress = float(getattr(
+                candidate, "reference_horizon_goal_progress", 0.0))
+            required_goal_progress = 0.0
+            if not self._in_final_approach(dist_goal):
+                required_goal_progress = max(
+                    float(self.min_progress_per_solve),
+                    0.5 * float(getattr(
+                        self, "mpc_reference_min_goal_progress_m", 0.18)))
             hard_violation = any(
                 int(violations.get(name, 0) or 0) > 0
                 for name in (
@@ -3606,6 +3622,7 @@ class WheelchairNode:
                 not solver_status.startswith("safe_stop:") and
                 first_step_live and
                 sequence_progress >= 0.5 * float(self.min_progress_per_solve) and
+                reference_goal_progress + 1e-9 >= required_goal_progress and
                 not hard_violation)
             status.update({
                 "accepted": accepted,
@@ -3616,6 +3633,14 @@ class WheelchairNode:
                 "first_step_live": first_step_live,
                 "heading_recovery_live": heading_recovery_live,
                 "sequence_progress": sequence_progress,
+                "reference_goal_progress": reference_goal_progress,
+                "required_reference_goal_progress": required_goal_progress,
+                "reference_horizon_lookahead_m": float(getattr(
+                    candidate, "reference_horizon_lookahead_m", 0.0)),
+                "reference_index": int(getattr(
+                    candidate, "reference_index", -1)),
+                "reference_nearest_index": int(getattr(
+                    candidate, "reference_nearest_index", -1)),
                 "hard_constraint_violation": bool(hard_violation),
             })
             if not accepted:
@@ -3632,6 +3657,12 @@ class WheelchairNode:
                     status["failure_reason"] = (
                         "runtime_switch_insufficient_progress:%.6f" %
                         sequence_progress)
+                elif (reference_goal_progress + 1e-9 <
+                      required_goal_progress):
+                    status["failure_reason"] = (
+                        "runtime_switch_insufficient_goal_progress:"
+                        "%.6f<%.6f" % (
+                            reference_goal_progress, required_goal_progress))
                 else:
                     status["failure_reason"] = (
                         "runtime_switch_not_executable:%s" % solver_status)
@@ -3863,17 +3894,71 @@ class WheelchairNode:
             self.manifold.last_topology_debug = dbg
             raise RuntimeError("planning_failure: reference_path_empty")
         dists = np.linalg.norm(pts - self.state[:2], axis=1)
-        i0 = int(np.argmin(dists))
+        nearest_i = int(np.argmin(dists))
+        prev_i = getattr(corridor, "reference_index", None)
+        prev_cid = str(getattr(corridor, "reference_progress_corridor_id", ""))
+        cid = self._corridor_id(corridor, "")
+        if (prev_i is not None and prev_cid == cid and
+                int(prev_i) >= 0 and int(prev_i) < len(pts)):
+            lower = int(prev_i)
+            forward_dists = dists[lower:]
+            i0 = lower + int(np.argmin(forward_dists))
+            i0 = max(lower, i0)
+        else:
+            i0 = nearest_i
         next_idx = min(i0 + 1, len(pts) - 1)
         corridor.reference_index = int(i0)
         corridor.reference_next_index = int(next_idx)
+        corridor.reference_nearest_index = int(nearest_i)
+        corridor.reference_progress_corridor_id = cid
         corridor.reference_distance = float(dists[i0])
         corridor.reference_next_distance = float(
             np.linalg.norm(pts[next_idx] - self.state[:2]))
+        if len(pts) <= 1:
+            arc = np.zeros((len(pts),), float)
+        else:
+            seg = np.linalg.norm(np.diff(pts[:, :2], axis=0), axis=1)
+            arc = np.concatenate(([0.0], np.cumsum(seg)))
+        step_m = max(0.03, float(getattr(
+            self, "mpc_reference_step_m", 0.09)))
+        min_lookahead_m = max(step_m, float(getattr(
+            self, "mpc_reference_min_lookahead_m", 0.85)))
+        current_goal_dist = float(np.linalg.norm(
+            self.state[:2] - np.asarray(self.goal[:2], float)))
+        min_goal_progress = max(0.0, float(getattr(
+            self, "mpc_reference_min_goal_progress_m", 0.18)))
+        start_s = float(arc[i0]) if len(arc) else 0.0
+        end_s = min(float(arc[-1]) if len(arc) else start_s,
+                    start_s + max(step_m * float(N), min_lookahead_m))
+        if len(pts) > 1 and min_goal_progress > 0.0:
+            goal2 = np.asarray(self.goal[:2], float)
+            ahead = pts[i0:, :2]
+            ahead_goal_dists = np.linalg.norm(ahead - goal2, axis=1)
+            progressive = np.where(
+                ahead_goal_dists <= current_goal_dist - min_goal_progress)[0]
+            if len(progressive) > 0:
+                progressive_i = i0 + int(progressive[0])
+                end_s = max(end_s, float(arc[progressive_i]))
+        target_s = [
+            min(float(arc[-1]) if len(arc) else start_s,
+                start_s + (end_s - start_s) * float(k + 1) / float(max(1, N)))
+            for k in range(N)
+        ]
         ref = []
-        for k in range(N):
-            ref.append(pts[min(i0 + 1 + k * 2, len(pts) - 1)])
-        ref = np.array(ref)
+        for s_target in target_s:
+            idx = int(np.searchsorted(arc, s_target, side="left"))
+            idx = min(max(idx, i0), len(pts) - 1)
+            ref.append(pts[idx])
+        ref = np.asarray(ref, float)
+        horizon_goal_progress = 0.0
+        if len(ref) > 0:
+            horizon_goal_progress = float(
+                current_goal_dist -
+                np.linalg.norm(ref[-1, :2] - np.asarray(self.goal[:2], float)))
+        corridor.reference_horizon_goal_progress = horizon_goal_progress
+        corridor.reference_horizon_end_distance_to_goal = float(
+            current_goal_dist - horizon_goal_progress)
+        corridor.reference_horizon_lookahead_m = float(max(0.0, end_s - start_s))
         if self.state is not None:
             dist_goal = float(np.linalg.norm(self.state[:2] - self.goal))
             if self._in_final_approach(dist_goal):
@@ -3882,6 +3967,8 @@ class WheelchairNode:
                     ref = np.asarray([goal2], float)
                 else:
                     ref[-1] = goal2
+                corridor.reference_horizon_goal_progress = float(dist_goal)
+                corridor.reference_horizon_end_distance_to_goal = 0.0
         self._record_mpc_reference(corridor, ref)
         self._record_baseline_reference_before_mpc(corridor, ref)
         return ref
@@ -5631,6 +5718,13 @@ class WheelchairNode:
                 "control_sequence_varies": bool(
                     self.mpc.last_control_sequence_varies),
                 "sequence_progress": float(self.mpc.last_sequence_progress),
+                "reference_index": int(getattr(corridor, "reference_index", -1)),
+                "reference_nearest_index": int(getattr(
+                    corridor, "reference_nearest_index", -1)),
+                "reference_horizon_goal_progress": float(getattr(
+                    corridor, "reference_horizon_goal_progress", 0.0)),
+                "reference_horizon_lookahead_m": float(getattr(
+                    corridor, "reference_horizon_lookahead_m", 0.0)),
                 "heading_improvement": float(
                     self.mpc.last_heading_improvement),
                 "alignment_translation": float(
