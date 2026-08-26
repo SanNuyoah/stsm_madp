@@ -1689,6 +1689,14 @@ class WheelchairNode:
         ref = np.asarray(reference, float)
         if ref.size == 0 or ref.ndim != 2 or ref.shape[1] < 2:
             return None
+        if len(ref) > 64:
+            keep = np.linspace(0, len(ref) - 1, 64)
+            indices = sorted(set(int(round(v)) for v in keep))
+            if indices[0] != 0:
+                indices.insert(0, 0)
+            if indices[-1] != len(ref) - 1:
+                indices.append(len(ref) - 1)
+            ref = np.asarray([ref[i] for i in indices], float)
         start = np.asarray(self.state[:2], float)
         goal = np.asarray(self.goal[:2], float)
         to_goal = goal - start
