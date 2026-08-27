@@ -3658,6 +3658,8 @@ class WheelchairNode:
             objective = dict(self.mpc.last_objective_terms or {})
             solver_status = str(self.mpc.last_solver_status)
             violations = dict(self.mpc.last_constraint_violation or {})
+            dist_goal = float(np.linalg.norm(
+                self.state[:2] - np.asarray(self.goal[:2], float)))
             post_v, post_w, post_gate_scale, post_adp_scale = (
                 self._runtime_post_scale_cmd(v, w, dist_goal, adp_scale=1.0))
             first_step_live = bool(objective.get("first_step_live", False))
@@ -3669,8 +3671,6 @@ class WheelchairNode:
             heading_recovery_live = bool(objective.get(
                 "heading_recovery_live", False))
             sequence_progress = float(self.mpc.last_sequence_progress)
-            dist_goal = float(np.linalg.norm(
-                self.state[:2] - np.asarray(self.goal[:2], float)))
             reference_goal_progress = float(getattr(
                 candidate, "reference_horizon_goal_progress", 0.0))
             required_goal_progress = 0.0
