@@ -5904,11 +5904,12 @@ class WheelchairNode:
                                 corridor, now, "no_progress", force=True,
                                 deadline=run_deadline)
                             if replanned is not None and did_replan:
+                                recovery_now = rospy.Time.now()
                                 corridor = replanned
-                                last_replan_time = now
+                                last_replan_time = recovery_now
                                 last_replan_dist = dist
-                                replan_progress_time = now
-                                last_progress_time = now
+                                replan_progress_time = recovery_now
+                                last_progress_time = recovery_now
                                 rospy.logwarn(
                                     "[wc] topology current-pose replan on no_progress current=%s",
                                     self._corridor_label(corridor, ""))
@@ -5917,11 +5918,12 @@ class WheelchairNode:
                                     self._switch_to_ranked_topology_candidate(
                                         corridor, "no_progress"))
                                 if switched is not None and did_switch:
+                                    recovery_now = rospy.Time.now()
                                     corridor = switched
-                                    last_replan_time = now
+                                    last_replan_time = recovery_now
                                     last_replan_dist = dist
-                                    replan_progress_time = now
-                                    last_progress_time = now
+                                    replan_progress_time = recovery_now
+                                    last_progress_time = recovery_now
                                     rospy.logwarn(
                                         "[wc] topology candidate switch on no_progress current=%s",
                                         self._corridor_label(corridor, ""))
@@ -5951,11 +5953,12 @@ class WheelchairNode:
                     corridor, did_replan = self._maybe_replan_corridor(
                         corridor, now, replan_reason, force=emergency_replan,
                         deadline=run_deadline)
-                    last_replan_time = now
+                    recovery_now = rospy.Time.now()
+                    last_replan_time = recovery_now
                     last_replan_dist = dist
-                    replan_progress_time = now
+                    replan_progress_time = recovery_now
                     if did_replan:
-                        last_progress_time = now
+                        last_progress_time = recovery_now
             corridor = self._ensure_corridor_runtime_contract(
                 corridor,
                 fallback_id="wheelchair_runtime_c%04d" % (
@@ -6107,13 +6110,14 @@ class WheelchairNode:
                         corridor, now, "mpc_live_negative_progress",
                         force=True, deadline=run_deadline)
                     if replanned is not None and did_replan:
+                        recovery_now = rospy.Time.now()
                         corridor = replanned
                         self.runtime_rejected_topology_corridor_ids.clear()
                         self.runtime_failed_corridors = {}
-                        last_replan_time = now
+                        last_replan_time = recovery_now
                         last_replan_dist = dist
-                        replan_progress_time = now
-                        last_progress_time = now
+                        replan_progress_time = recovery_now
+                        last_progress_time = recovery_now
                         runtime_record[
                             "live_negative_progress_replan_used"] = True
                         runtime_record[
@@ -6163,13 +6167,14 @@ class WheelchairNode:
                     corridor, now, "mpc_local_safe_stop", force=True,
                     deadline=run_deadline)
                 if replanned is not None and did_replan:
+                    recovery_now = rospy.Time.now()
                     corridor = replanned
                     self.runtime_rejected_topology_corridor_ids.clear()
                     self.runtime_failed_corridors = {}
-                    last_replan_time = now
+                    last_replan_time = recovery_now
                     last_replan_dist = dist
-                    replan_progress_time = now
-                    last_progress_time = now
+                    replan_progress_time = recovery_now
+                    last_progress_time = recovery_now
                     runtime_record["local_safe_stop_replan_used"] = True
                     runtime_record["local_safe_stop_replan_corridor_id"] = (
                         self._corridor_id(corridor))
