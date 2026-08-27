@@ -6066,6 +6066,79 @@ class WheelchairNode:
             self.mpc_runtime_records.append(runtime_record)
             if len(self.mpc_runtime_records) > 200:
                 self.mpc_runtime_records = self.mpc_runtime_records[-200:]
+            if (not self.baseline and not final_approach_active and
+                    not str(self.mpc.last_solver_status).startswith(
+                        "safe_stop:")):
+                objective = dict(self.mpc.last_objective_terms or {})
+                heading_recovery_live = bool(objective.get(
+                    "heading_recovery_live", False))
+                first_goal_progress = float(objective.get(
+                    "first_step_goal_progress", 0.0))
+                first_ref_progress = float(objective.get(
+                    "first_step_reference_progress", 0.0))
+                if (heading_recovery_live and
+                        first_goal_progress < -1.0e-3 and
+                        first_ref_progress < -1.0e-3):
+                    local_reason = (
+                        "mpc_live_negative_first_step_progress:"
+                        "goal=%.6f,ref=%.6f" %
+                        (first_goal_progress, first_ref_progress))
+                    runtime_record["live_reject_reason"] = local_reason
+                    self._mark_corridor_runtime_failed(
+                        corridor, local_reason,
+                        details={
+                            "objective_terms": objective,
+                            "constraint_violation": dict(
+                                self.mpc.last_constraint_violation or {}),
+                            "sequence_progress": float(
+                                self.mpc.last_sequence_progress),
+                            "raw_mpc_cmd": [float(v), float(w)],
+                        })
+                    switched, did_switch = (
+                        self._switch_to_ranked_topology_candidate(
+                            corridor, local_reason))
+                    if switched is not None and did_switch:
+                        corridor = switched
+                        rospy.logwarn(
+                            "[wc][mpc] rejected negative-progress heading recovery; switched corridor=%s",
+                            self._corridor_id(corridor))
+                        continue
+                    replanned, did_replan = self._maybe_replan_corridor(
+                        corridor, now, "mpc_live_negative_progress",
+                        force=True, deadline=run_deadline)
+                    if replanned is not None and did_replan:
+                        corridor = replanned
+                        self.runtime_rejected_topology_corridor_ids.clear()
+                        self.runtime_failed_corridors = {}
+                        last_replan_time = now
+                        last_replan_dist = dist
+                        replan_progress_time = now
+                        last_progress_time = now
+                        runtime_record[
+                            "live_negative_progress_replan_used"] = True
+                        runtime_record[
+                            "live_negative_progress_replan_corridor_id"] = (
+                                self._corridor_id(corridor))
+                        rospy.logwarn(
+                            "[wc][mpc] rejected negative-progress heading recovery; replanned corridor=%s",
+                            self._corridor_id(corridor))
+                        continue
+                    self.runtime_global_stop_summary = {
+                        "final_reason": "all_runtime_candidates_failed",
+                        "trigger": local_reason,
+                        "forced_replan_attempted": True,
+                        "forced_replan_succeeded": False,
+                        "attempted_corridors": list(
+                            self.runtime_failed_corridors.keys()),
+                        "failed_reasons": dict(self.runtime_failed_corridors),
+                        "runtime_switch_precheck_trials": list(
+                            self.runtime_topology_candidate_switch_trials[-20:]),
+                    }
+                    self._publish_runtime_stop(
+                        "mpc:global_safe_stop:%s" % local_reason)
+                    rospy.logerr(
+                        "[wc][mpc] global safe_stop after rejecting negative-progress heading recovery")
+                    break
             if (not self.baseline and
                     str(self.mpc.last_solver_status).startswith("safe_stop:")):
                 local_reason = "mpc_local:%s" % self.mpc.last_solver_status
