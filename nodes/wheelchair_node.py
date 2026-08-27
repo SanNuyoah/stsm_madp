@@ -1985,6 +1985,9 @@ class WheelchairNode:
             "execution_turn_limit": float(
                 min(float(self.topology_max_corridor_turn), 0.40)),
             "execution_turn_tolerance": 0.03,
+            "reference_goal_progress": 0.0,
+            "required_reference_goal_progress": 0.0,
+            "initial_goal_regression": 0.0,
             "critical_point_status": "",
             "topology_sequence_valid": True,
             "critical_point_association": {},
@@ -2029,6 +2032,40 @@ class WheelchairNode:
                     (float(profile_max_turn),
                      float(turn_limit + turn_tolerance)))
                 return status
+            if self.state is not None and len(ref) > 1:
+                goal2 = np.asarray(self.goal[:2], float)
+                current_goal_dist = float(np.linalg.norm(
+                    np.asarray(self.state[:2], float) - goal2))
+                horizon_n = min(int(getattr(self.mpc, "N", 12)), len(ref))
+                horizon = np.asarray(ref[:horizon_n, :2], float)
+                horizon_goal_dists = np.linalg.norm(horizon - goal2, axis=1)
+                horizon_progress = float(
+                    current_goal_dist - horizon_goal_dists[-1])
+                initial_regression = float(max(
+                    0.0, np.max(horizon_goal_dists) - current_goal_dist))
+                required_progress = 0.0
+                if not self._in_final_approach(current_goal_dist):
+                    required_progress = max(
+                        float(self.min_progress_per_solve),
+                        0.5 * float(getattr(
+                            self, "mpc_reference_min_goal_progress_m",
+                            0.18)))
+                status["reference_goal_progress"] = float(horizon_progress)
+                status["required_reference_goal_progress"] = float(
+                    required_progress)
+                status["initial_goal_regression"] = float(initial_regression)
+                if initial_regression > 0.03 + 1e-9:
+                    status["accepted"] = False
+                    status["failure_reason"] = (
+                        "reference_initial_goal_regression:%.3f>0.030" %
+                        float(initial_regression))
+                    return status
+                if horizon_progress + 1e-9 < required_progress:
+                    status["accepted"] = False
+                    status["failure_reason"] = (
+                        "reference_goal_progress_insufficient:%.3f<%.3f" %
+                        (float(horizon_progress), float(required_progress)))
+                    return status
             debug = dict(getattr(self.manifold, "last_topology_debug", {}) or {})
             constraint = build_topology_constraint(
                 selected_topology_graph=debug,
