@@ -5886,9 +5886,29 @@ class WheelchairNode:
                         "[wc][mpc] local safe_stop recovered by topology candidate switch corridor=%s status=%s",
                         self._corridor_id(corridor), self.mpc.last_solver_status)
                     continue
+                replanned, did_replan = self._maybe_replan_corridor(
+                    corridor, now, "mpc_local_safe_stop", force=True,
+                    deadline=run_deadline)
+                if replanned is not None and did_replan:
+                    corridor = replanned
+                    self.runtime_rejected_topology_corridor_ids.clear()
+                    self.runtime_failed_corridors = {}
+                    last_replan_time = now
+                    last_replan_dist = dist
+                    replan_progress_time = now
+                    last_progress_time = now
+                    runtime_record["local_safe_stop_replan_used"] = True
+                    runtime_record["local_safe_stop_replan_corridor_id"] = (
+                        self._corridor_id(corridor))
+                    rospy.logwarn(
+                        "[wc][mpc] local safe_stop recovered by forced topology replan corridor=%s status=%s",
+                        self._corridor_id(corridor), self.mpc.last_solver_status)
+                    continue
                 self.runtime_global_stop_summary = {
                     "final_reason": "all_runtime_candidates_failed",
                     "trigger": local_reason,
+                    "forced_replan_attempted": True,
+                    "forced_replan_succeeded": False,
                     "attempted_corridors": list(
                         self.runtime_failed_corridors.keys()),
                     "failed_reasons": dict(self.runtime_failed_corridors),
