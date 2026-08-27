@@ -1169,7 +1169,15 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "mpc_reference_min_goal_progress_m" in wheelchair_source
     assert "reference_horizon_goal_progress" in wheelchair_source
     assert "runtime_switch_insufficient_goal_progress" in wheelchair_source
-    assert "runtime_switch_not_rank_improving" in wheelchair_source
+    assert "runtime_switch_not_rank_improving" not in wheelchair_source
+    assert "_mark_corridor_runtime_failed" in wheelchair_source
+    assert "runtime_failed_corridors" in wheelchair_source
+    assert "mpc_local:%s" in wheelchair_source
+    assert "global_safe_stop" in wheelchair_source
+    assert "post_scale_first_step_live" in wheelchair_source
+    assert "raw_mpc_cmd" in wheelchair_source
+    assert "published_cmd" in wheelchair_source
+    assert "final_approach_corridor_weight" in wheelchair_source
     assert "execution_speed_floor" in wheelchair_source
     assert "first_speed_shortfall_cost" in open(
         os.path.join(ROOT, "src", "stsm_madp", "mpc.py"), "r").read()

@@ -267,8 +267,12 @@ class WheelchairNode:
         self.last_valid_topology_debug = {}
         self.runtime_topology_candidate_pool = []
         self.runtime_rejected_topology_corridor_ids = set()
+        self.runtime_failed_corridors = {}
         self.runtime_topology_candidate_switch_trials = []
         self.runtime_topology_candidate_switch_count = 0
+        self.runtime_global_stop_summary = {}
+        self._runtime_gate_scale = 1.0
+        self._runtime_gate_stop = False
         self.runtime_replan_fallback_count = 0
         self.last_corridor_plan_duration_s = 0.0
         self.replan_deadline_skip_count = 0
@@ -1587,13 +1591,18 @@ class WheelchairNode:
     def _apply_final_approach_profile(self, dist):
         active = self._in_final_approach(dist)
         if active:
+            blend = np.clip(
+                (float(self.final_approach_entry_radius) - float(dist)) /
+                max(float(self.final_approach_entry_radius) -
+                    float(self.execution_stop_tolerance), 1e-6),
+                0.0, 1.0)
+            corridor_relax = 1.0 - 0.65 * float(blend)
             self.mpc.near_goal_radius = max(
                 float(self.near_goal_radius),
                 float(self.final_approach_entry_radius))
             self.mpc.final_approach_radius = float(
                 self.final_approach_entry_radius)
-            self.mpc.lam_track = self.mpc_base_lam_track * max(
-                1.0, float(self.final_approach_goal_weight_scale))
+            self.mpc.lam_track = self.mpc_base_lam_track * float(corridor_relax)
             self.mpc.lam_goal_terminal = (
                 self.mpc_base_lam_goal_terminal *
                 max(1.0, float(self.final_approach_goal_weight_scale)))
@@ -1615,6 +1624,49 @@ class WheelchairNode:
         self.mpc.lam_social = self.mpc_base_lam_social
         self.mpc.near_goal_social_scale = self.near_goal_social_scale
         return False
+
+    def _mark_corridor_runtime_failed(self, corridor, reason, details=None):
+        cid = self._corridor_id(corridor, "")
+        if not cid:
+            return
+        record = {
+            "corridor_id": cid,
+            "rank_total": int(getattr(
+                corridor, "rank_total",
+                getattr(corridor, "rank_base", 999999))),
+            "reason": str(reason or "runtime_failed"),
+            "time": float(rospy.Time.now().to_sec()),
+            "details": dict(details or {}),
+        }
+        self.runtime_failed_corridors[cid] = record
+        self.runtime_rejected_topology_corridor_ids.add(cid)
+        try:
+            corridor.runtime_failed = True
+            corridor.runtime_failure_reason = record["reason"]
+            corridor.runtime_failure_details = dict(record["details"])
+        except Exception:
+            pass
+
+    def _runtime_post_scale_cmd(self, v, w, dist, adp_scale=1.0):
+        gate_scale = float(getattr(self, "_runtime_gate_scale", 1.0))
+        if bool(getattr(self, "_runtime_gate_stop", False)):
+            gate_scale = 0.0
+        adp_scale = float(adp_scale)
+        v_out = float(v) * gate_scale * adp_scale
+        w_out = float(w) * max(gate_scale, 0.5) * max(adp_scale, 0.5)
+        if not self.baseline:
+            w_limit = float(self.stsm_w_max)
+            if self._in_final_approach(dist):
+                blend = np.clip(
+                    (self.final_approach_entry_radius - float(dist)) /
+                    max(self.final_approach_entry_radius -
+                        self.goal_tolerance, 1e-6),
+                    0.0, 1.0)
+                w_limit = (
+                    (1.0 - float(blend)) * self.stsm_w_max +
+                    float(blend) * self.final_w_max)
+            w_out = float(np.clip(w_out, -w_limit, w_limit))
+        return float(v_out), float(w_out), float(gate_scale), float(adp_scale)
 
     def _corridor_is_topological(self, corridor):
         return (
@@ -3606,7 +3658,14 @@ class WheelchairNode:
             objective = dict(self.mpc.last_objective_terms or {})
             solver_status = str(self.mpc.last_solver_status)
             violations = dict(self.mpc.last_constraint_violation or {})
+            post_v, post_w, post_gate_scale, post_adp_scale = (
+                self._runtime_post_scale_cmd(v, w, dist_goal, adp_scale=1.0))
             first_step_live = bool(objective.get("first_step_live", False))
+            post_scale_live = bool(
+                abs(float(post_v)) >= max(
+                    0.5 * float(self.min_progress_per_solve),
+                    0.02) or
+                abs(float(post_w)) >= 0.05)
             heading_recovery_live = bool(objective.get(
                 "heading_recovery_live", False))
             sequence_progress = float(self.mpc.last_sequence_progress)
@@ -3627,7 +3686,7 @@ class WheelchairNode:
                     "trajectory_tube", "nonprogressive_rollout"))
             accepted = bool(
                 not solver_status.startswith("safe_stop:") and
-                first_step_live and
+                first_step_live and post_scale_live and
                 sequence_progress >= 0.5 * float(self.min_progress_per_solve) and
                 reference_goal_progress + 1e-9 >= required_goal_progress and
                 not hard_violation)
@@ -3635,6 +3694,12 @@ class WheelchairNode:
                 "accepted": accepted,
                 "solver_status": solver_status,
                 "first_control": [float(v), float(w)],
+                "raw_mpc_cmd": [float(v), float(w)],
+                "post_scale_cmd": [float(post_v), float(post_w)],
+                "published_cmd_preview": [float(post_v), float(post_w)],
+                "post_scale_first_step_live": bool(post_scale_live),
+                "post_scale_gate_scale": float(post_gate_scale),
+                "post_scale_adp_scale": float(post_adp_scale),
                 "objective_terms": objective,
                 "constraint_violation": violations,
                 "first_step_live": first_step_live,
@@ -3659,6 +3724,11 @@ class WheelchairNode:
                 elif not first_step_live:
                     status["failure_reason"] = (
                         "first_step_not_executable:%s" % solver_status)
+                elif not post_scale_live:
+                    status["failure_reason"] = (
+                        "post_scale_first_step_not_live:"
+                        "raw=(%.3f,%.3f),post=(%.3f,%.3f)" %
+                        (float(v), float(w), float(post_v), float(post_w)))
                 elif sequence_progress < 0.5 * float(
                         self.min_progress_per_solve):
                     status["failure_reason"] = (
@@ -3694,7 +3764,8 @@ class WheelchairNode:
             getattr(current_corridor, "rank_base", 999999)))
         reason_text = str(reason or "")
         if current_id:
-            self.runtime_rejected_topology_corridor_ids.add(current_id)
+            self._mark_corridor_runtime_failed(
+                current_corridor, reason_text or "runtime_switch_requested")
         switch_trials = []
         pool = [
             corr for corr in list(self.runtime_topology_candidate_pool or [])
@@ -3715,30 +3786,6 @@ class WheelchairNode:
             candidate_rank = int(getattr(
                 candidate, "rank_total",
                 getattr(candidate, "rank_base", 999999)))
-            if ("no_progress" in reason_text and
-                    candidate_rank >= current_rank):
-                precheck = {
-                    "corridor_id": cid,
-                    "runtime_switch_precheck": True,
-                    "accepted": False,
-                    "failure_reason": (
-                        "runtime_switch_not_rank_improving:%d>=%d" %
-                        (candidate_rank, current_rank)),
-                    "current_corridor_id": current_id,
-                    "current_rank_total": current_rank,
-                    "candidate_rank_total": candidate_rank,
-                }
-                switch_trials.append(precheck)
-                breakdown = dict(getattr(
-                    candidate, "candidate_cost_breakdown", {}) or {})
-                breakdown["runtime_switch_precheck"] = dict(precheck)
-                breakdown["runtime_switch_reject_reason"] = str(
-                    precheck["failure_reason"])
-                candidate.candidate_cost_breakdown = breakdown
-                rospy.logwarn(
-                    "[wc][topology] runtime switch reject %s reason=%s",
-                    cid, precheck["failure_reason"])
-                continue
             if cid in self.runtime_rejected_topology_corridor_ids:
                 continue
             if not bool(getattr(candidate, "candidate_manifold_valid",
@@ -3777,6 +3824,8 @@ class WheelchairNode:
             ready.runtime_topology_candidate_switch = True
             ready.runtime_topology_switch_reason = str(reason or "")
             ready.runtime_topology_previous_corridor_id = current_id
+            ready.runtime_topology_previous_rank = int(current_rank)
+            ready.runtime_topology_selected_rank = int(candidate_rank)
             ready.dynamic_replan_fallback = False
             self.selected_corridor = ready
             self.execution_corridor = ready
@@ -3789,6 +3838,7 @@ class WheelchairNode:
                 self.runtime_topology_candidate_switch_count)
             dbg["runtime_switch_reason"] = str(reason or "")
             dbg["runtime_switch_previous_corridor_id"] = current_id
+            dbg["runtime_failed_corridors"] = dict(self.runtime_failed_corridors)
             dbg["runtime_switch_selected_corridor_id"] = self._corridor_id(
                 ready, "")
             dbg["runtime_switch_precheck_used"] = 1
@@ -3812,6 +3862,7 @@ class WheelchairNode:
                 self.runtime_topology_candidate_switch_trials[-20:])
             dbg["runtime_switch_reject_all"] = 1
             dbg["runtime_switch_reason"] = str(reason or "")
+            dbg["runtime_failed_corridors"] = dict(self.runtime_failed_corridors)
             self.manifold.last_topology_debug = dbg
         return current_corridor, False
 
@@ -4356,6 +4407,26 @@ class WheelchairNode:
             "runtime_corridor_id": str(runtime_last.get("corridor_id", cid)),
             "runtime_mpc_records": list(self.mpc_runtime_records),
             "mpc_runtime_records": list(self.mpc_runtime_records),
+            "runtime_failed_corridors": dict(self.runtime_failed_corridors),
+            "runtime_candidate_switch_trials": list(
+                self.runtime_topology_candidate_switch_trials),
+            "runtime_global_stop_summary": dict(
+                self.runtime_global_stop_summary),
+            "runtime_global_stop_attempted_corridors": list(
+                (self.runtime_global_stop_summary or {}).get(
+                    "attempted_corridors", [])),
+            "raw_mpc_cmd": list(runtime_last.get("raw_mpc_cmd",
+                                                runtime_last.get(
+                                                    "first_control", []))),
+            "published_cmd": list(runtime_last.get(
+                "published_cmd", runtime_last.get("published_control", []))),
+            "final_approach_active": bool(runtime_last.get(
+                "final_approach_active", False)),
+            "final_mode": str(runtime_last.get("final_mode", "")),
+            "final_approach_goal_weight": float(runtime_last.get(
+                "final_approach_goal_weight", 0.0)),
+            "final_approach_corridor_weight": float(runtime_last.get(
+                "final_approach_corridor_weight", 0.0)),
         })
         diag, breakdown = self._mpc_output_paths()
         topology_constraint_path = os.path.join(
@@ -5527,6 +5598,8 @@ class WheelchairNode:
                     extra_reason=interest_eval.get("forbidden_reason", ""))
             gate, gate_source = self._combine_gate(
                 center_gate, footprint_gate, footprint_forbidden)
+            self._runtime_gate_scale = float(getattr(gate, "scale", 1.0))
+            self._runtime_gate_stop = bool(getattr(gate, "stop", False))
             self._publish_gate(
                 gate, gate_source=gate_source, center_gate=center_gate,
                 footprint_gate=footprint_gate, interest_eval=interest_eval)
@@ -5778,16 +5851,54 @@ class WheelchairNode:
                 "last_corridor_plan_duration_s": float(
                     self.last_corridor_plan_duration_s),
                 "first_control": [float(v), float(w)],
+                "raw_mpc_cmd": [float(v), float(w)],
+                "final_approach_active": bool(final_approach_active),
+                "final_mode": (
+                    "stsm_terminal" if final_approach_active and
+                    not self.baseline else
+                    ("baseline_terminal" if final_approach_active else
+                     "corridor_tracking")),
+                "final_approach_dist_to_goal": float(dist),
+                "final_approach_goal_weight": float(
+                    self.mpc.lam_goal_terminal),
+                "final_approach_corridor_weight": float(self.mpc.lam_track),
             }
             self.mpc_runtime_records.append(runtime_record)
             if len(self.mpc_runtime_records) > 200:
                 self.mpc_runtime_records = self.mpc_runtime_records[-200:]
             if (not self.baseline and
                     str(self.mpc.last_solver_status).startswith("safe_stop:")):
+                local_reason = "mpc_local:%s" % self.mpc.last_solver_status
+                self._mark_corridor_runtime_failed(
+                    corridor, local_reason,
+                    details={
+                        "constraint_violation": dict(
+                            self.mpc.last_constraint_violation or {}),
+                        "sequence_progress": float(
+                            self.mpc.last_sequence_progress),
+                        "raw_mpc_cmd": [float(v), float(w)],
+                    })
+                switched, did_switch = self._switch_to_ranked_topology_candidate(
+                    corridor, local_reason)
+                if switched is not None and did_switch:
+                    corridor = switched
+                    rospy.logwarn(
+                        "[wc][mpc] local safe_stop recovered by topology candidate switch corridor=%s status=%s",
+                        self._corridor_id(corridor), self.mpc.last_solver_status)
+                    continue
+                self.runtime_global_stop_summary = {
+                    "final_reason": "all_runtime_candidates_failed",
+                    "trigger": local_reason,
+                    "attempted_corridors": list(
+                        self.runtime_failed_corridors.keys()),
+                    "failed_reasons": dict(self.runtime_failed_corridors),
+                    "runtime_switch_precheck_trials": list(
+                        self.runtime_topology_candidate_switch_trials[-20:]),
+                }
                 self._publish_runtime_stop(
-                    "mpc:%s" % self.mpc.last_solver_status)
+                    "mpc:global_safe_stop:%s" % self.mpc.last_solver_status)
                 rospy.logerr(
-                    "[wc][mpc] no feasible predictive sequence: %s",
+                    "[wc][mpc] global safe_stop after candidate recovery failed: %s",
                     self.mpc.last_solver_status)
                 break
             v, w = self._baseline_corridor_follow_control(
@@ -5851,6 +5962,7 @@ class WheelchairNode:
                     progress_stale_s=progress_stale_s,
                     measured_speed=measured_speed))
             runtime_record["published_control"] = [float(v), float(w)]
+            runtime_record["published_cmd"] = [float(v), float(w)]
             runtime_record["gate_scale"] = float(gate_scale)
             runtime_record["adp_scale"] = float(adp_scale)
             runtime_record["progress_stale_s"] = float(progress_stale_s)
