@@ -2121,9 +2121,12 @@ class WheelchairNode:
         max_refine = max(1, int(self.topology_refinement_max_candidates))
         for index, corr in enumerate(list(corrs or [])):
             cid = str(getattr(corr, "corridor_id", getattr(corr, "label", "")))
-            if index >= max_refine:
+            # The cap applies to verified executable references, not to raw
+            # topology rank. Rejected candidates must not consume the entire
+            # recovery pool before later Morse corridors are checked.
+            if len(prepared) >= max_refine:
                 corr.refinement_skipped = True
-                corr.refinement_skip_reason = "refinement_max_candidates"
+                corr.refinement_skip_reason = "refinement_executable_pool_full"
                 refinement_attempts.append({
                     "robot_type": "wheelchair",
                     "stage": "refine_topology_path",
@@ -2131,18 +2134,20 @@ class WheelchairNode:
                     "candidate_id": cid,
                     "label": str(getattr(corr, "label", cid)),
                     "accepted": False,
-                    "reject_reason": "refinement_max_candidates",
-                    "failure_reason": "refinement_max_candidates",
+                    "reject_reason": "refinement_executable_pool_full",
+                    "failure_reason": "refinement_executable_pool_full",
                     "reference_source": "unrefined_candidate_for_ranking_only",
                     "reference_path_count": int(len(np.asarray(
                         getattr(corr, "waypoints",
                                 getattr(corr, "centerline", [])), float))),
                     "refinement_candidate_index": int(index),
                     "refinement_max_candidates": int(max_refine),
+                    "refinement_executable_count": int(len(prepared)),
                 })
                 rospy.logwarn(
-                    "[wc][refine] skip %s reason=refinement_max_candidates index=%d max=%d",
-                    cid, index, max_refine)
+                    "[wc][refine] skip %s reason=refinement_executable_pool_full "
+                    "index=%d executable=%d max=%d",
+                    cid, index, len(prepared), max_refine)
                 continue
             if not self._corridor_is_topological(corr):
                 prepared.append(corr)
