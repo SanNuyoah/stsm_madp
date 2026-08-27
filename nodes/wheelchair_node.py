@@ -5719,25 +5719,38 @@ class WheelchairNode:
                             need_replan = True
                             replan_reason = "no_progress"
                         else:
-                            switched, did_switch = (
-                                self._switch_to_ranked_topology_candidate(
-                                    corridor, "no_progress"))
-                            if switched is not None and did_switch:
-                                corridor = switched
+                            replanned, did_replan = self._maybe_replan_corridor(
+                                corridor, now, "no_progress", force=True,
+                                deadline=run_deadline)
+                            if replanned is not None and did_replan:
+                                corridor = replanned
                                 last_replan_time = now
                                 last_replan_dist = dist
                                 replan_progress_time = now
                                 last_progress_time = now
                                 rospy.logwarn(
-                                    "[wc] topology candidate switch on no_progress current=%s",
+                                    "[wc] topology current-pose replan on no_progress current=%s",
                                     self._corridor_label(corridor, ""))
                             else:
-                                self.replan_deadline_skip_count += 1
-                                replan_progress_time = now
-                                rospy.logwarn_throttle(
-                                    5.0,
-                                    "[wc] skip runtime blocking replan reason=no_progress current=%s",
-                                    self._corridor_label(corridor, ""))
+                                switched, did_switch = (
+                                    self._switch_to_ranked_topology_candidate(
+                                        corridor, "no_progress"))
+                                if switched is not None and did_switch:
+                                    corridor = switched
+                                    last_replan_time = now
+                                    last_replan_dist = dist
+                                    replan_progress_time = now
+                                    last_progress_time = now
+                                    rospy.logwarn(
+                                        "[wc] topology candidate switch on no_progress current=%s",
+                                        self._corridor_label(corridor, ""))
+                                else:
+                                    self.replan_deadline_skip_count += 1
+                                    replan_progress_time = now
+                                    rospy.logwarn_throttle(
+                                        5.0,
+                                        "[wc] skip runtime blocking replan reason=no_progress; no switch current=%s",
+                                        self._corridor_label(corridor, ""))
                 if corridor is not None:
                     _, d_tube = corridor.project(
                         np.array([self.state[0], self.state[1], 0.0]))
