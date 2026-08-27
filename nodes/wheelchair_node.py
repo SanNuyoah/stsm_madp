@@ -1772,12 +1772,18 @@ class WheelchairNode:
             np.cos(float(self.state[2])),
             np.sin(float(self.state[2]))], float)
         goal_dir = to_goal / goal_dist
-        # Use the current heading when it already points generally goalward;
-        # otherwise bias the prefix toward the goal rather than asking the
-        # diff-drive base to track a reverse-facing first waypoint.
+        # Build a launch prefix that the diff-drive base can actually execute
+        # from its measured yaw.  The previous reverse-facing case snapped the
+        # prefix directly toward the goal; after a runtime replan this produced
+        # references with initial_heading_error ~= pi/2 and the controller
+        # advanced while turning away from monotonic goal progress.  Keep the
+        # first short segment aligned with the chassis heading, then let the
+        # cubic bridge converge back to the Morse/topology corridor.
         blend = heading + goal_dir
-        if float(np.linalg.norm(blend)) <= 1e-6 or np.dot(heading, goal_dir) < 0.0:
-            blend = goal_dir
+        if float(np.linalg.norm(blend)) <= 1e-6:
+            blend = heading
+        if np.dot(heading, goal_dir) < 0.0:
+            blend = heading
         launch_dir = blend / max(float(np.linalg.norm(blend)), 1e-9)
         step = max(0.06, min(0.12, 4.0 * float(self.topology_min_segment_length)))
         launch_len = min(0.55, max(0.24, 0.22 * goal_dist))
