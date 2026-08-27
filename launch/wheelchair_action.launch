@@ -9,7 +9,6 @@
   <arg name="max_runtime_s" default="180.0"/>
   <arg name="no_progress_timeout_s" default="45.0"/>
   <arg name="no_progress_epsilon" default="0.02"/>
-  <arg name="replan_period" default="5.0"/>
   <arg name="no_progress_replan_time" default="5.0"/>
   <arg name="progress_eps" default="0.01"/>
   <arg name="replan_tube_margin" default="0.08"/>
@@ -46,8 +45,6 @@
   <arg name="stsm_progress_floor_w_max" default="0.95"/>
   <arg name="stsm_liveness_w_max" default="0.65"/>
   <arg name="mpc_heading_recovery_w_max" default="$(arg stsm_w_max)"/>
-  <arg name="final_direct_override_enabled" default="true"/>
-  <arg name="final_direct_override_radius" default="0.90"/>
   <arg name="gate_enabled" default="true"/>
   <arg name="rho_warn" default="1.6"/>
   <arg name="rho_stop" default="2.5"/>
@@ -104,10 +101,6 @@
   <arg name="topology_min_segment_length" default="0.01"/>
   <arg name="topology_candidate_max_risk" default="7.0"/>
   <arg name="topology_fallback_enabled" default="false"/>
-  <arg name="topology_periodic_replan" default="false"/>
-  <arg name="topology_replan_min_interval" default="30.0"/>
-  <arg name="topology_replan_on_tube_exit" default="true"/>
-  <arg name="topology_replan_on_no_progress" default="true"/>
   <arg name="topology_refinement_enabled" default="true"/>
   <arg name="topology_refinement_samples_per_segment" default="14"/>
   <arg name="topology_refinement_max_candidates" default="3"/>
@@ -132,7 +125,6 @@
     <param name="max_runtime_s" value="$(arg max_runtime_s)"/>
     <param name="no_progress_timeout_s" value="$(arg no_progress_timeout_s)"/>
     <param name="no_progress_epsilon" value="$(arg no_progress_epsilon)"/>
-    <param name="replan_period" value="$(arg replan_period)"/>
     <param name="no_progress_replan_time" value="$(arg no_progress_replan_time)"/>
     <param name="progress_eps" value="$(arg progress_eps)"/>
     <param name="replan_tube_margin" value="$(arg replan_tube_margin)"/>
@@ -169,8 +161,6 @@
     <param name="stsm_progress_floor_w_max" value="$(arg stsm_progress_floor_w_max)"/>
     <param name="stsm_liveness_w_max" value="$(arg stsm_liveness_w_max)"/>
     <param name="mpc/heading_recovery_w_max" value="$(arg mpc_heading_recovery_w_max)"/>
-    <param name="final_direct_override_enabled" value="$(arg final_direct_override_enabled)"/>
-    <param name="final_direct_override_radius" value="$(arg final_direct_override_radius)"/>
     <param name="safety_gate/enabled" value="$(arg gate_enabled)"/>
     <param name="safety_gate/rho_warn" value="$(arg rho_warn)"/>
     <param name="safety_gate/rho_stop" value="$(arg rho_stop)"/>
@@ -226,10 +216,6 @@
     <param name="topology/min_segment_length" value="$(arg topology_min_segment_length)"/>
     <param name="topology/candidate_max_risk" value="$(arg topology_candidate_max_risk)"/>
     <param name="topology/fallback_enabled" value="$(arg topology_fallback_enabled)"/>
-    <param name="topology/periodic_replan" value="$(arg topology_periodic_replan)"/>
-    <param name="topology/replan_min_interval" value="$(arg topology_replan_min_interval)"/>
-    <param name="topology/replan_on_tube_exit" value="$(arg topology_replan_on_tube_exit)"/>
-    <param name="topology/replan_on_no_progress" value="$(arg topology_replan_on_no_progress)"/>
     <param name="topology/refinement_enabled" value="$(arg topology_refinement_enabled)"/>
     <param name="topology/refinement_samples_per_segment" value="$(arg topology_refinement_samples_per_segment)"/>
     <param name="topology/refinement_max_candidates" value="$(arg topology_refinement_max_candidates)"/>

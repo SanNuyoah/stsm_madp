@@ -128,7 +128,6 @@ class WheelchairNode:
             "~no_progress_timeout_s", 45.0))
         self.no_progress_epsilon = float(rospy.get_param(
             "~no_progress_epsilon", 0.02))
-        self.replan_period = float(rospy.get_param("~replan_period", 5.0))
         self.no_progress_replan_time = float(rospy.get_param(
             "~no_progress_replan_time", 5.0))
         self.progress_eps = float(rospy.get_param("~progress_eps", 0.01))
@@ -213,10 +212,6 @@ class WheelchairNode:
         self.final_w_max = float(rospy.get_param("~final_w_max", 0.85))
         self.w_slew_limit = float(rospy.get_param("~w_slew_limit", 1.00))
         self.lam_heading = float(rospy.get_param("~lam_heading", 2.5))
-        self.final_direct_override_enabled = bool(rospy.get_param(
-            "~final_direct_override_enabled", True))
-        self.final_direct_override_radius = float(rospy.get_param(
-            "~final_direct_override_radius", self.final_approach_radius))
         if self.completion_tolerance < self.goal_tolerance:
             self.completion_tolerance = self.goal_tolerance
         self.execution_stop_tolerance = (
@@ -274,7 +269,12 @@ class WheelchairNode:
         self.runtime_global_stop_summary = {}
         self._runtime_gate_scale = 1.0
         self._runtime_gate_stop = False
-        self.runtime_replan_fallback_count = 0
+        self._runtime_gate = None
+        self._runtime_interest_eval = {}
+        self._runtime_progress_stale_s = 0.0
+        # Runtime failures share one recovery budget: ranked pool switch first,
+        # then at most one full topology replan before failing closed.
+        self.runtime_full_replan_count = 0
         self.last_corridor_plan_duration_s = 0.0
         self.replan_deadline_skip_count = 0
         self.decision_trace_out = rospy.get_param("~decision_trace_out", "")
@@ -355,7 +355,7 @@ class WheelchairNode:
         self.topology_allow_semantic_with_morse = bool(rospy.get_param(
             "~topology/allow_semantic_with_morse", False))
         self.topology_allow_semantic_topology_recovery = bool(rospy.get_param(
-            "~topology/allow_semantic_topology_recovery", True))
+            "~topology/allow_semantic_topology_recovery", False))
         self.topology_allow_ring_with_morse = bool(rospy.get_param(
             "~topology/allow_ring_with_morse", False))
         self.topology_allow_graph_fallback_with_morse = bool(rospy.get_param(
@@ -428,19 +428,7 @@ class WheelchairNode:
             "~topology/safe_fallback_max_center_phi",
             float(rospy.get_param("~safety_gate/rho_stop", 2.5))))
         self.topology_fallback_enabled = bool(rospy.get_param(
-            "~topology/fallback_enabled", True))
-        if self.experiment_mode == "paper" and not self.baseline:
-            self.topology_fallback_enabled = False
-        self.topology_periodic_replan = bool(rospy.get_param(
-            "~topology/periodic_replan", False))
-        self.topology_replan_min_interval = float(rospy.get_param(
-            "~topology/replan_min_interval", 30.0))
-        self.topology_replan_on_tube_exit = bool(rospy.get_param(
-            "~topology/replan_on_tube_exit", True))
-        self.topology_replan_on_no_progress = bool(rospy.get_param(
-            "~topology/replan_on_no_progress", True))
-        self.runtime_blocking_replan_enabled = bool(rospy.get_param(
-            "~topology/runtime_blocking_replan_enabled", False))
+            "~topology/fallback_enabled", False))
         self.topology_refinement_enabled = bool(rospy.get_param(
             "~topology/refinement_enabled", True))
         self.topology_refinement_samples = int(rospy.get_param(
@@ -534,12 +522,11 @@ class WheelchairNode:
             "candidate_fallback", "refinement", "candidate", "fallback",
             "selected_candidate_waypoints", "raw_waypoints",
             "diff_drive_launch_prefix", "raw_diff_drive_launch_prefix",
-            "diff_drive_launch_prefix_turn_recovered",
-            "runtime_replan_fallback")
+            "diff_drive_launch_prefix_turn_recovered")
 
     def _ensure_corridor_runtime_contract(self, corridor,
                                           fallback_id="wheelchair_runtime_c0001",
-                                          fallback_source="runtime_replan_fallback"):
+                                          fallback_source="refinement"):
         if corridor is None:
             return None
         strict_stsm = bool(not self.baseline)
@@ -667,6 +654,7 @@ class WheelchairNode:
         self.mpc_base_lam_track = float(self.mpc.lam_track)
         self.mpc_base_lam_social = float(self.mpc.lam_social)
         self.mpc_base_lam_goal_terminal = float(self.mpc.lam_goal_terminal)
+        self.mpc_base_lam_heading = float(self.mpc.lam_heading)
         self.mpc.min_progress_per_solve = self.min_progress_per_solve
         self.mpc.near_goal_radius = self.near_goal_radius
         self.mpc.near_goal_goal_weight = self.near_goal_goal_weight
@@ -688,6 +676,7 @@ class WheelchairNode:
         self.mpc.final_max_v = self.final_max_v
         self.mpc.final_forward_gain = self.final_forward_gain
         self.mpc.lam_heading = self.lam_heading
+        self.mpc_base_lam_heading = float(self.mpc.lam_heading)
         self.mpc.first_step_progress_ratio = float(rospy.get_param(
             "~mpc/first_step_progress_ratio", 0.50))
         self.mpc_reference_step_m = float(rospy.get_param(
@@ -1460,10 +1449,6 @@ class WheelchairNode:
                 ",".join(getattr(c, "topology_nodes", [])))
         selected = self._select_wheelchair_corridor(corrs)
         if selected is None:
-            selected = self._runtime_replan_fallback_corridor(
-                None, "empty_selected_corridor",
-                RuntimeError("topology candidate selection returned None"))
-        if selected is None:
             raise RuntimeError("topology candidate selection returned no corridor")
         self.selected_corridor = selected
         self.execution_corridor = selected
@@ -1609,6 +1594,8 @@ class WheelchairNode:
             self.mpc.lam_goal_terminal = (
                 self.mpc_base_lam_goal_terminal *
                 max(1.0, float(self.final_approach_goal_weight_scale)))
+            self.mpc.lam_heading = self.mpc_base_lam_heading * max(
+                1.0, float(self.final_approach_goal_weight_scale))
             self.mpc.near_goal_goal_weight = (
                 self.near_goal_goal_weight *
                 max(1.0, float(self.final_approach_goal_weight_scale)))
@@ -1623,6 +1610,7 @@ class WheelchairNode:
             0.0 if self.baseline else self.final_approach_entry_radius)
         self.mpc.lam_track = self.mpc_base_lam_track
         self.mpc.lam_goal_terminal = self.mpc_base_lam_goal_terminal
+        self.mpc.lam_heading = self.mpc_base_lam_heading
         self.mpc.near_goal_goal_weight = self.near_goal_goal_weight
         self.mpc.lam_social = self.mpc_base_lam_social
         self.mpc.near_goal_social_scale = self.near_goal_social_scale
@@ -1650,9 +1638,17 @@ class WheelchairNode:
         except Exception:
             pass
 
-    def _runtime_post_scale_cmd(self, v, w, dist, adp_scale=1.0):
-        gate_scale = float(getattr(self, "_runtime_gate_scale", 1.0))
-        if bool(getattr(self, "_runtime_gate_stop", False)):
+    def _runtime_post_scale_cmd(self, v, w, dist, adp_scale=1.0,
+                                corridor=None, ref=None, gate=None,
+                                interest_eval=None, progress_stale_s=None,
+                                measured_speed=None):
+        """Apply the same deterministic post-MPC controls used for cmd_vel."""
+        gate = gate if gate is not None else getattr(self, "_runtime_gate", None)
+        gate_scale = float(getattr(
+            gate, "scale", getattr(self, "_runtime_gate_scale", 1.0)))
+        gate_stop = bool(getattr(
+            gate, "stop", getattr(self, "_runtime_gate_stop", False)))
+        if gate_stop:
             gate_scale = 0.0
         adp_scale = float(adp_scale)
         v_out = float(v) * gate_scale * adp_scale
@@ -1669,7 +1665,31 @@ class WheelchairNode:
                     (1.0 - float(blend)) * self.stsm_w_max +
                     float(blend) * self.final_w_max)
             w_out = float(np.clip(w_out, -w_limit, w_limit))
-        return float(v_out), float(w_out), float(gate_scale), float(adp_scale)
+            prev_w = float(self.u_prev[1]) if self.u_prev is not None else 0.0
+            w_out = prev_w + float(np.clip(
+                w_out - prev_w, -self.w_slew_limit, self.w_slew_limit))
+        progress_floor_used = False
+        progress_floor_value = 0.0
+        liveness_active = False
+        liveness_w_limit = 0.0
+        if corridor is not None and ref is not None and gate is not None:
+            if progress_stale_s is None:
+                progress_stale_s = float(getattr(
+                    self, "_runtime_progress_stale_s", 0.0))
+            if measured_speed is None:
+                measured_speed = float(np.linalg.norm(self.world_vel[:2]))
+            (v_out, w_out, progress_floor_used, progress_floor_value,
+             liveness_active, liveness_w_limit) = (
+                self._apply_stsm_progress_floor(
+                    corridor, ref, v_out, w_out, dist, gate, adp_scale,
+                    interest_eval=(interest_eval if interest_eval is not None
+                                   else getattr(self, "_runtime_interest_eval", {})),
+                    progress_stale_s=progress_stale_s,
+                    measured_speed=measured_speed))
+        return (
+            float(v_out), float(w_out), float(gate_scale), float(adp_scale),
+            bool(progress_floor_used), float(progress_floor_value),
+            bool(liveness_active), float(liveness_w_limit))
 
     def _corridor_is_topological(self, corridor):
         return (
@@ -2200,20 +2220,6 @@ class WheelchairNode:
             executable_turn_limit = min(
                 float(self.topology_max_corridor_turn), 0.40)
             executable_turn_tolerance = 0.03
-            if (not fallback_used and refined_max_turn > (
-                    executable_turn_limit + executable_turn_tolerance + 1e-9)):
-                recovery = self._recover_refined_turn_limit(
-                    corr, refined, executable_turn_limit,
-                    executable_turn_tolerance)
-                if recovery is not None:
-                    refined, recovery_metrics = recovery
-                    metrics.update(recovery_metrics)
-                    refined_max_curvature = float(metrics.get(
-                        "max_curvature", refined_max_curvature))
-                    refined_max_turn = float(metrics.get(
-                        "max_turn", refined_max_turn))
-                    attempt["turn_recovery_used"] = True
-                    attempt["turn_recovery_metrics"] = dict(recovery_metrics)
             refined, execution_metrics, execution_repaired = (
                 self._select_wheelchair_execution_reference(
                     corr, refined, metrics))
@@ -2524,7 +2530,7 @@ class WheelchairNode:
             "[wc][refine] turn recovery start %s points=%d max_turn=%.3f limit=%.3f",
             getattr(corr, "corridor_id", getattr(corr, "label", "")),
             int(len(best)), float(best_metrics.get("max_turn", 0.0)), limit)
-        for samples, passes in ((4, 1), (6, 1), (8, 1)):
+        for samples, passes in ((6, 1),):
             candidate = smooth_wheelchair_corners(
                 best, samples_per_segment=samples, passes=passes)
             if len(candidate) > 64:
@@ -3703,18 +3709,24 @@ class WheelchairNode:
             corr.corridor_id, corr.morse_node_ids[0], float(max_phi))
         return corr
 
-    def _maybe_replan_corridor(self, corridor, now, reason, force=False,
-                               deadline=None):
-        is_topology = self._corridor_is_topological(corridor)
-        if is_topology and not force:
-            elapsed = (now - self.last_topology_replan_time).to_sec()
-            if elapsed < self.topology_replan_min_interval:
-                rospy.loginfo_throttle(
-                    5.0,
-                    "[wc][topology] skip replan reason=%s elapsed=%.1fs min=%.1fs; keep %s",
-                    reason, elapsed, self.topology_replan_min_interval,
-                    getattr(corridor, "label", ""))
-                return corridor, False
+    def _runtime_recovery(self, corridor, now, reason, deadline=None):
+        """Recover a local STSM failure through one ordered, bounded chain.
+
+        A ranked candidate from the current topology decision is always tried
+        before a fresh plan. A full replan is allowed once per execution and
+        never falls back to a synthetic direct corridor.
+        """
+        if self.baseline:
+            return corridor, False
+        switched, did_switch = self._switch_to_ranked_topology_candidate(
+            corridor, reason)
+        if switched is not None and did_switch:
+            return switched, True
+        if self.runtime_full_replan_count >= 1:
+            rospy.logwarn(
+                "[wc][recovery] fail closed reason=%s full_replan_count=%d",
+                reason, self.runtime_full_replan_count)
+            return corridor, False
         if deadline is not None:
             remaining = float((deadline - now).to_sec())
             required = max(
@@ -3724,18 +3736,20 @@ class WheelchairNode:
             if remaining <= required:
                 self.replan_deadline_skip_count += 1
                 rospy.logwarn(
-                    "[wc] skip blocking replan reason=%s remaining=%.1fs required=%.1fs; keep %s",
+                    "[wc][recovery] skip full replan reason=%s remaining=%.1fs required=%.1fs; keep %s",
                     reason, remaining, required,
                     self._corridor_label(corridor, ""))
                 return corridor, False
+        self.runtime_full_replan_count += 1
         try:
-            rospy.loginfo("[wc] replanning corridor reason=%s current=%s",
-                          reason, self._corridor_label(corridor, ""))
+            rospy.loginfo("[wc][recovery] full replan reason=%s current=%s count=%d",
+                          reason, self._corridor_label(corridor, ""),
+                          self.runtime_full_replan_count)
             new_corridor = self._plan_corridor()
             new_corridor = self._ensure_corridor_runtime_contract(
                 new_corridor,
                 fallback_id="wheelchair_replan_c%04d" % (
-                    self.runtime_replan_fallback_count + 1),
+                    self.runtime_full_replan_count),
                 fallback_source="refinement")
             if new_corridor is None:
                 raise RuntimeError("replan produced empty runtime corridor")
@@ -3755,27 +3769,10 @@ class WheelchairNode:
                     self._corridor_is_topological(corridor), False)
             self.selected_corridor_pub.publish(String(
                 self._corridor_id(corridor, "wheelchair_selected")))
-            if (self.experiment_mode == "paper" and not self.baseline and
-                    not self.topology_fallback_enabled):
-                rospy.logerr(
-                    "[wc] replan failed closed in paper mode reason=%s current=%s: %s",
-                    reason, self._corridor_label(corridor, ""), exc)
-                return corridor, False
-            fallback = self._runtime_replan_fallback_corridor(
-                corridor, reason, exc)
-            if fallback is not None:
-                rospy.logwarn(
-                    "[wc] replan failed reason=%s; using fallback %s after %s",
-                    reason, self._corridor_id(fallback), exc)
-                return fallback, True
-            kept = self._ensure_corridor_runtime_contract(
-                corridor,
-                fallback_id="wheelchair_replan_keep_c%04d" % (
-                    self.runtime_replan_fallback_count + 1),
-                fallback_source="runtime_replan_fallback")
-            rospy.logwarn("[wc] replan failed reason=%s; keep %s: %s",
-                          reason, self._corridor_label(kept, ""), exc)
-            return kept if kept is not None else corridor, False
+            rospy.logerr(
+                "[wc][recovery] full replan failed closed reason=%s current=%s: %s",
+                reason, self._corridor_label(corridor, ""), exc)
+            return corridor, False
 
     def _runtime_candidate_first_step_status(self, candidate):
         """Check whether a ranked topology candidate is executable now.
@@ -3800,6 +3797,9 @@ class WheelchairNode:
             status["failure_reason"] = "state_unavailable"
             return status
         try:
+            dist_goal = float(np.linalg.norm(
+                self.state[:2] - np.asarray(self.goal[:2], float)))
+            self._apply_final_approach_profile(dist_goal)
             ref = self._horizon_ref(candidate)
             contract = self._stsm_corridor_execution_contract_status(
                 candidate, ref)
@@ -3850,10 +3850,12 @@ class WheelchairNode:
             objective = dict(self.mpc.last_objective_terms or {})
             solver_status = str(self.mpc.last_solver_status)
             violations = dict(self.mpc.last_constraint_violation or {})
-            dist_goal = float(np.linalg.norm(
-                self.state[:2] - np.asarray(self.goal[:2], float)))
-            post_v, post_w, post_gate_scale, post_adp_scale = (
-                self._runtime_post_scale_cmd(v, w, dist_goal, adp_scale=1.0))
+            (post_v, post_w, post_gate_scale, post_adp_scale,
+             post_floor_used, post_floor_value, post_liveness_active,
+             post_liveness_w_limit) = self._runtime_post_scale_cmd(
+                v, w, dist_goal,
+                adp_scale=self._adp_scale(self.last_adp_value),
+                corridor=candidate, ref=ref)
             first_step_live = bool(objective.get("first_step_live", False))
             post_scale_live = bool(
                 abs(float(post_v)) >= max(
@@ -3892,6 +3894,10 @@ class WheelchairNode:
                 "post_scale_first_step_live": bool(post_scale_live),
                 "post_scale_gate_scale": float(post_gate_scale),
                 "post_scale_adp_scale": float(post_adp_scale),
+                "post_scale_progress_floor_used": bool(post_floor_used),
+                "post_scale_progress_floor_value": float(post_floor_value),
+                "post_scale_liveness_active": bool(post_liveness_active),
+                "post_scale_liveness_w_limit": float(post_liveness_w_limit),
                 "objective_terms": objective,
                 "constraint_violation": violations,
                 "first_step_live": first_step_live,
@@ -3948,7 +3954,7 @@ class WheelchairNode:
         corridor is non-progressive, while other hard-filtered and refined
         topology candidates from the same planning decision remain available.
         """
-        if self.baseline or not self.topology_replan_on_no_progress:
+        if self.baseline:
             return current_corridor, False
         current_id = self._corridor_id(current_corridor, "")
         current_rank = int(getattr(
@@ -4057,72 +4063,6 @@ class WheelchairNode:
             dbg["runtime_failed_corridors"] = dict(self.runtime_failed_corridors)
             self.manifold.last_topology_debug = dbg
         return current_corridor, False
-
-    def _runtime_replan_fallback_corridor(self, current_corridor,
-                                          reason, original_error=None):
-        if (self.experiment_mode == "paper" and not self.baseline and
-                not self.topology_fallback_enabled):
-            rospy.logerr(
-                "[wc][replan_fallback] disabled in paper mode reason=%s error=%s",
-                reason, original_error)
-            return None
-        if self.state is None:
-            return None
-        self.runtime_replan_fallback_count += 1
-        start3 = np.array([self.state[0], self.state[1], 0.0], float)
-        goal3 = np.array([self.goal[0], self.goal[1], 0.0], float)
-        cid = "wheelchair_c_runtime_replan_%04d" % (
-            self.runtime_replan_fallback_count)
-        candidates = []
-        try:
-            safe = self._wheelchair_safe_fallback_corridor(
-                start3, goal3,
-                label="runtime_replan_fallback",
-                corridor_id=cid,
-                radius=0.45,
-                use_adp=self.adp_enabled)
-            if safe is not None:
-                candidates.append(safe)
-        except Exception as exc:
-            rospy.logwarn("[wc][replan_fallback] safe fallback failed: %s", exc)
-        try:
-            direct = Corridor(np.asarray([start3, goal3], float), radius=0.45,
-                              label="runtime_replan_direct")
-            direct.corridor_id = cid + "_direct"
-            direct.source = "runtime_replan_direct"
-            direct.path_length = self._path_length(direct.waypoints)
-            direct.mean_phi_on_path = 0.0
-            direct.max_phi_on_path = 0.0
-            direct.cost = float(direct.path_length)
-            candidates.append(direct)
-        except Exception:
-            pass
-        for candidate in candidates:
-            candidate.dynamic_replan_fallback = True
-            candidate.replan_failure_reason = str(reason or "")
-            candidate.replan_original_error = str(original_error or "")
-            candidate.refinement_used = int(getattr(candidate, "refinement_used", 0))
-            candidate.refinement_success = bool(getattr(
-                candidate, "refinement_success", False))
-            candidate.refinement_fallback = True
-            candidate.final_reference_source = "runtime_replan_fallback"
-            candidate.node_sequence = list(getattr(
-                candidate, "node_sequence", []) or ["start", "goal"])
-            candidate.topology_nodes = list(getattr(
-                candidate, "topology_nodes", []) or candidate.node_sequence)
-            candidate.node_type_sequence = list(getattr(
-                candidate, "node_type_sequence", []) or ["start", "goal"])
-            ready = self._ensure_corridor_runtime_contract(
-                candidate, fallback_id=cid,
-                fallback_source="runtime_replan_fallback")
-            if ready is not None:
-                self.selected_corridor = ready
-                self._sync_runtime_topology_debug([ready], ready)
-                self._publish_topology_info(False, True)
-                self.selected_corridor_pub.publish(String(
-                    self._corridor_id(ready)))
-                return ready
-        return None
 
     def _plan_heuristic_corridor(self):
         start = self.state[:2]
@@ -4602,6 +4542,9 @@ class WheelchairNode:
             "runtime_failed_corridors": dict(self.runtime_failed_corridors),
             "runtime_candidate_switch_trials": list(
                 self.runtime_topology_candidate_switch_trials),
+            "runtime_candidate_switch_count": int(
+                self.runtime_topology_candidate_switch_count),
+            "runtime_full_replan_count": int(self.runtime_full_replan_count),
             "runtime_global_stop_summary": dict(
                 self.runtime_global_stop_summary),
             "runtime_global_stop_attempted_corridors": list(
@@ -4619,6 +4562,8 @@ class WheelchairNode:
                 "final_approach_goal_weight", 0.0)),
             "final_approach_corridor_weight": float(runtime_last.get(
                 "final_approach_corridor_weight", 0.0)),
+            "final_approach_heading_weight": float(runtime_last.get(
+                "final_approach_heading_weight", 0.0)),
         })
         diag, breakdown = self._mpc_output_paths()
         topology_constraint_path = os.path.join(
@@ -5395,10 +5340,10 @@ class WheelchairNode:
         if (self.baseline or floor <= 0.0 or gate.stop or
                 not self._corridor_is_topological(corridor)):
             return float(v), float(w), False, 0.0, False, 0.0
-        if dist <= max(self.final_approach_entry_radius,
-                       self.execution_stop_tolerance):
+        final_approach_active = self._in_final_approach(dist)
+        if float(gate.scale) < self.stsm_progress_floor_min_gate_scale:
             return float(v), float(w), False, 0.0, False, 0.0
-        if (float(gate.scale) < self.stsm_progress_floor_min_gate_scale or
+        if (not final_approach_active and
                 float(adp_scale) < self.stsm_progress_floor_min_adp_scale):
             return float(v), float(w), False, 0.0, False, 0.0
         risk = float(getattr(gate, "risk", 0.0))
@@ -5414,11 +5359,22 @@ class WheelchairNode:
             float(measured_speed) < max(0.02, 0.5 * floor))
         if liveness_active:
             floor = max(floor, max(0.0, float(self.stsm_liveness_floor_v)))
-        heading_error = abs(self._stsm_reference_heading_error(ref))
+        if final_approach_active:
+            # Terminal motion still uses the selected STSM reference and the
+            # same hard safety gates, but it must not lose all forward
+            # authority before the measured completion tolerance is reached.
+            floor = max(floor, min(
+                float(self.final_min_v), 0.6 * float(self.mpc.v_max)))
+            heading_error = abs(self._goal_heading_error())
+        else:
+            heading_error = abs(self._stsm_reference_heading_error(ref))
         alignment = max(0.0, float(np.cos(heading_error)))
         # During large turns still keep a small crawl, but scale the floor by
         # reference alignment so the command remains tied to the selected tube.
         alignment_floor_scale = 1.0 if liveness_active else max(0.55, alignment)
+        if (final_approach_active and
+                heading_error > float(self.final_heading_threshold)):
+            alignment_floor_scale = 0.0
         aligned_floor = floor * alignment_floor_scale
         capped_floor = min(aligned_floor, 0.6 * float(self.mpc.v_max))
         v_out = max(float(v), float(capped_floor))
@@ -5792,6 +5748,8 @@ class WheelchairNode:
                 center_gate, footprint_gate, footprint_forbidden)
             self._runtime_gate_scale = float(getattr(gate, "scale", 1.0))
             self._runtime_gate_stop = bool(getattr(gate, "stop", False))
+            self._runtime_gate = gate
+            self._runtime_interest_eval = dict(interest_eval or {})
             self._publish_gate(
                 gate, gate_source=gate_source, center_gate=center_gate,
                 footprint_gate=footprint_gate, interest_eval=interest_eval)
@@ -5824,31 +5782,18 @@ class WheelchairNode:
                   self.no_progress_timeout_s and
                   dist >= self.execution_stop_tolerance):
                 speed = float(np.linalg.norm(self.world_vel[:2]))
-                if not self.baseline and self.runtime_blocking_replan_enabled:
-                    fallback, did_replan = self._maybe_replan_corridor(
-                        corridor, now, "no_progress_timeout", force=True,
+                if not self.baseline:
+                    recovered, did_recover = self._runtime_recovery(
+                        corridor, now, "no_progress_timeout",
                         deadline=run_deadline)
-                    if fallback is not None and did_replan:
-                        corridor = fallback
+                    if recovered is not None and did_recover:
+                        corridor = recovered
                         last_progress_time = now
                         last_replan_time = now
                         last_replan_dist = dist
                         replan_progress_time = now
                         rospy.logwarn(
-                            "[wc] no_progress timeout avoided with fallback corridor=%s dist=%.3f best=%.3f",
-                            self._corridor_id(corridor), dist, best_dist)
-                        continue
-                elif not self.baseline:
-                    switched, did_switch = self._switch_to_ranked_topology_candidate(
-                        corridor, "no_progress_timeout")
-                    if switched is not None and did_switch:
-                        corridor = switched
-                        last_progress_time = now
-                        last_replan_time = now
-                        last_replan_dist = dist
-                        replan_progress_time = now
-                        rospy.logwarn(
-                            "[wc] no_progress timeout avoided by topology candidate switch corridor=%s dist=%.3f best=%.3f",
+                            "[wc][recovery] no_progress timeout recovered corridor=%s dist=%.3f best=%.3f",
                             self._corridor_id(corridor), dist, best_dist)
                         continue
                 self._publish_runtime_stop("timeout:no_progress")
@@ -5887,95 +5832,55 @@ class WheelchairNode:
             else:
                 near_goal_since = None
             if (not self.baseline):
-                need_replan = False
-                replan_reason = ""
-                is_topology_corridor = self._corridor_is_topological(corridor)
-                if ((not is_topology_corridor or self.topology_periodic_replan) and
-                        (now - last_replan_time).to_sec() >= self.replan_period):
-                    need_replan = True
-                    replan_reason = "periodic"
                 if dist < last_replan_dist - self.progress_eps:
                     last_replan_dist = dist
                     replan_progress_time = now
                 elif ((now - replan_progress_time).to_sec() >=
                       self.no_progress_replan_time):
-                    if (not is_topology_corridor or
-                            self.topology_replan_on_no_progress):
-                        if self.runtime_blocking_replan_enabled:
-                            need_replan = True
-                            replan_reason = "no_progress"
-                        else:
-                            replanned, did_replan = self._maybe_replan_corridor(
-                                corridor, now, "no_progress", force=True,
-                                deadline=run_deadline)
-                            if replanned is not None and did_replan:
-                                recovery_now = rospy.Time.now()
-                                corridor = replanned
-                                last_replan_time = recovery_now
-                                last_replan_dist = dist
-                                replan_progress_time = recovery_now
-                                last_progress_time = recovery_now
-                                rospy.logwarn(
-                                    "[wc] topology current-pose replan on no_progress current=%s",
-                                    self._corridor_label(corridor, ""))
-                            else:
-                                switched, did_switch = (
-                                    self._switch_to_ranked_topology_candidate(
-                                        corridor, "no_progress"))
-                                if switched is not None and did_switch:
-                                    recovery_now = rospy.Time.now()
-                                    corridor = switched
-                                    last_replan_time = recovery_now
-                                    last_replan_dist = dist
-                                    replan_progress_time = recovery_now
-                                    last_progress_time = recovery_now
-                                    rospy.logwarn(
-                                        "[wc] topology candidate switch on no_progress current=%s",
-                                        self._corridor_label(corridor, ""))
-                                else:
-                                    self.replan_deadline_skip_count += 1
-                                    replan_progress_time = now
-                                    rospy.logwarn_throttle(
-                                        5.0,
-                                        "[wc] skip runtime blocking replan reason=no_progress; no switch current=%s",
-                                        self._corridor_label(corridor, ""))
+                    recovered, did_recover = self._runtime_recovery(
+                        corridor, now, "no_progress", deadline=run_deadline)
+                    if recovered is None or not did_recover:
+                        self._publish_runtime_stop(
+                            "mpc:global_safe_stop:no_progress")
+                        rospy.logerr(
+                            "[wc][recovery] no_progress exhausted corridor=%s",
+                            self._corridor_label(corridor, ""))
+                        break
+                    recovery_now = rospy.Time.now()
+                    corridor = recovered
+                    last_replan_time = recovery_now
+                    last_replan_dist = dist
+                    replan_progress_time = recovery_now
+                    last_progress_time = recovery_now
+                    continue
                 if corridor is not None:
                     _, d_tube = corridor.project(
                         np.array([self.state[0], self.state[1], 0.0]))
                     if d_tube > corridor.radius + self.replan_tube_margin:
-                        if (not is_topology_corridor or
-                                self.topology_replan_on_tube_exit):
-                            need_replan = True
-                            replan_reason = "tube_exit"
-                if need_replan:
-                    emergency_replan = False
-                    if replan_reason == "tube_exit" and interest_eval is not None:
-                        ip_risk = float(interest_eval.get(
-                            "risk_gate", interest_eval.get("phi_max", 0.0)))
-                        emergency_replan = (
-                            bool(interest_eval.get("forbidden_hit", False)) or
-                            ip_risk >= float(self.footprint_gate.rho_warn))
-                    corridor, did_replan = self._maybe_replan_corridor(
-                        corridor, now, replan_reason, force=emergency_replan,
-                        deadline=run_deadline)
-                    recovery_now = rospy.Time.now()
-                    last_replan_time = recovery_now
-                    last_replan_dist = dist
-                    replan_progress_time = recovery_now
-                    if did_replan:
+                        recovered, did_recover = self._runtime_recovery(
+                            corridor, now, "tube_exit", deadline=run_deadline)
+                        if recovered is None or not did_recover:
+                            self._publish_runtime_stop(
+                                "mpc:global_safe_stop:tube_exit")
+                            rospy.logerr(
+                                "[wc][recovery] tube_exit exhausted corridor=%s",
+                                self._corridor_label(corridor, ""))
+                            break
+                        recovery_now = rospy.Time.now()
+                        corridor = recovered
+                        last_replan_time = recovery_now
+                        last_replan_dist = dist
+                        replan_progress_time = recovery_now
                         last_progress_time = recovery_now
+                        continue
             corridor = self._ensure_corridor_runtime_contract(
                 corridor,
                 fallback_id="wheelchair_runtime_c%04d" % (
-                    self.runtime_replan_fallback_count + 1),
-                fallback_source="runtime_replan_fallback")
+                    self.runtime_full_replan_count + 1),
+                fallback_source="refinement")
             if corridor is None:
-                corridor = self._runtime_replan_fallback_corridor(
-                    corridor, "pre_mpc_invalid_corridor",
-                    RuntimeError("invalid runtime corridor before MPC"))
-            if corridor is None:
-                self._publish_runtime_stop("timeout:no_valid_corridor")
-                rospy.logerr("[wc] stopping: no valid corridor before MPC")
+                self._publish_runtime_stop("planning:invalid_runtime_corridor")
+                rospy.logerr("[wc] stopping: invalid runtime corridor before MPC")
                 break
             self.selected_corridor = corridor
             self.execution_corridor = corridor
@@ -6050,6 +5955,8 @@ class WheelchairNode:
                     self.mpc.last_alignment_translation),
                 "replan_deadline_skip_count": int(
                     self.replan_deadline_skip_count),
+                "runtime_full_replan_count": int(
+                    self.runtime_full_replan_count),
                 "topology_runtime_candidate_switch_count": int(
                     self.runtime_topology_candidate_switch_count),
                 "topology_runtime_candidate_switch": bool(getattr(
@@ -6070,6 +5977,7 @@ class WheelchairNode:
                 "final_approach_goal_weight": float(
                     self.mpc.lam_goal_terminal),
                 "final_approach_corridor_weight": float(self.mpc.lam_track),
+                "final_approach_heading_weight": float(self.mpc.lam_heading),
             }
             self.mpc_runtime_records.append(runtime_record)
             if len(self.mpc_runtime_records) > 200:
@@ -6102,41 +6010,30 @@ class WheelchairNode:
                                 self.mpc.last_sequence_progress),
                             "raw_mpc_cmd": [float(v), float(w)],
                         })
-                    switched, did_switch = (
-                        self._switch_to_ranked_topology_candidate(
-                            corridor, local_reason))
-                    if switched is not None and did_switch:
-                        corridor = switched
-                        rospy.logwarn(
-                            "[wc][mpc] rejected negative-progress heading recovery; switched corridor=%s",
-                            self._corridor_id(corridor))
-                        continue
-                    replanned, did_replan = self._maybe_replan_corridor(
-                        corridor, now, "mpc_live_negative_progress",
-                        force=True, deadline=run_deadline)
-                    if replanned is not None and did_replan:
+                    recovered, did_recover = self._runtime_recovery(
+                        corridor, now, "negative_progress",
+                        deadline=run_deadline)
+                    if recovered is not None and did_recover:
                         recovery_now = rospy.Time.now()
-                        corridor = replanned
-                        self.runtime_rejected_topology_corridor_ids.clear()
-                        self.runtime_failed_corridors = {}
+                        corridor = recovered
                         last_replan_time = recovery_now
                         last_replan_dist = dist
                         replan_progress_time = recovery_now
                         last_progress_time = recovery_now
                         runtime_record[
-                            "live_negative_progress_replan_used"] = True
+                            "live_negative_progress_recovery_used"] = True
                         runtime_record[
-                            "live_negative_progress_replan_corridor_id"] = (
-                                self._corridor_id(corridor))
+                            "live_negative_progress_recovery_corridor_id"] = (
+                            self._corridor_id(corridor))
                         rospy.logwarn(
-                            "[wc][mpc] rejected negative-progress heading recovery; replanned corridor=%s",
+                            "[wc][mpc] negative-progress recovery selected corridor=%s",
                             self._corridor_id(corridor))
                         continue
                     self.runtime_global_stop_summary = {
                         "final_reason": "all_runtime_candidates_failed",
                         "trigger": local_reason,
-                        "forced_replan_attempted": True,
-                        "forced_replan_succeeded": False,
+                        "runtime_full_replan_count": int(
+                            self.runtime_full_replan_count),
                         "attempted_corridors": list(
                             self.runtime_failed_corridors.keys()),
                         "failed_reasons": dict(self.runtime_failed_corridors),
@@ -6160,38 +6057,27 @@ class WheelchairNode:
                             self.mpc.last_sequence_progress),
                         "raw_mpc_cmd": [float(v), float(w)],
                     })
-                switched, did_switch = self._switch_to_ranked_topology_candidate(
-                    corridor, local_reason)
-                if switched is not None and did_switch:
-                    corridor = switched
-                    rospy.logwarn(
-                        "[wc][mpc] local safe_stop recovered by topology candidate switch corridor=%s status=%s",
-                        self._corridor_id(corridor), self.mpc.last_solver_status)
-                    continue
-                replanned, did_replan = self._maybe_replan_corridor(
-                    corridor, now, "mpc_local_safe_stop", force=True,
-                    deadline=run_deadline)
-                if replanned is not None and did_replan:
+                recovered, did_recover = self._runtime_recovery(
+                    corridor, now, "mpc_local_safe_stop", deadline=run_deadline)
+                if recovered is not None and did_recover:
                     recovery_now = rospy.Time.now()
-                    corridor = replanned
-                    self.runtime_rejected_topology_corridor_ids.clear()
-                    self.runtime_failed_corridors = {}
+                    corridor = recovered
                     last_replan_time = recovery_now
                     last_replan_dist = dist
                     replan_progress_time = recovery_now
                     last_progress_time = recovery_now
-                    runtime_record["local_safe_stop_replan_used"] = True
-                    runtime_record["local_safe_stop_replan_corridor_id"] = (
+                    runtime_record["local_safe_stop_recovery_used"] = True
+                    runtime_record["local_safe_stop_recovery_corridor_id"] = (
                         self._corridor_id(corridor))
                     rospy.logwarn(
-                        "[wc][mpc] local safe_stop recovered by forced topology replan corridor=%s status=%s",
+                        "[wc][mpc] local safe_stop recovery selected corridor=%s status=%s",
                         self._corridor_id(corridor), self.mpc.last_solver_status)
                     continue
                 self.runtime_global_stop_summary = {
                     "final_reason": "all_runtime_candidates_failed",
                     "trigger": local_reason,
-                    "forced_replan_attempted": True,
-                    "forced_replan_succeeded": False,
+                    "runtime_full_replan_count": int(
+                        self.runtime_full_replan_count),
                     "attempted_corridors": list(
                         self.runtime_failed_corridors.keys()),
                     "failed_reasons": dict(self.runtime_failed_corridors),
@@ -6208,64 +6094,21 @@ class WheelchairNode:
                 corridor, ref, v, w, dist)
             v_mpc_raw = float(v)
             w_mpc_raw = float(w)
-            final_override_active = False
-            stsm_final_radius = max(
-                float(self.goal_tolerance),
-                float(self.final_direct_override_radius))
-            if (self.baseline and self.final_direct_override_enabled and
-                    final_approach_active and dist < stsm_final_radius and
-                    not gate.stop):
-                if self._corridor_is_topological(corridor):
-                    v_goal, w_goal = self._direct_goal_control(dist)
-                    heading_error = abs(self._goal_heading_error())
-                    if heading_error >= self.final_heading_threshold:
-                        v_goal = 0.0
-                    else:
-                        v_goal = min(float(v_goal), 0.45 * float(dist))
-                else:
-                    v_goal, w_goal = self.mpc._goal_seek_u(self.state, self.goal)
-                v, w = float(v_goal), float(w_goal)
-                final_override_active = True
-                self.mpc.last_final_approach_used = 1
-                self.mpc.last_solver_status = "final_direct_override"
             self._publish_adp_mpc_info(corridor)
-            gate_scale = gate.scale
             adp_scale = self._adp_scale(adp_value)
-            if final_override_active:
-                adp_scale = 1.0
-            v *= gate_scale
-            v *= adp_scale
-            w *= max(gate_scale, 0.5)
-            w *= max(adp_scale, 0.5)
-            if not self.baseline:
-                w_limit = self.stsm_w_max
-                if final_approach_active:
-                    blend = np.clip(
-                        (self.final_approach_entry_radius - float(dist)) /
-                        max(self.final_approach_entry_radius - self.goal_tolerance, 1e-6),
-                        0.0, 1.0)
-                    w_limit = (
-                        (1.0 - float(blend)) * self.stsm_w_max +
-                        float(blend) * self.final_w_max)
-                w = float(np.clip(w, -w_limit, w_limit))
-                prev_w = float(self.u_prev[1]) if self.u_prev is not None else 0.0
-                dw = float(np.clip(
-                    w - prev_w, -self.w_slew_limit, self.w_slew_limit))
-                w = prev_w + dw
-            if (final_override_active and not gate.stop and
-                    dist > self.goal_tolerance and v > 0.0):
-                v = max(v, 0.8 * self.final_creep_v)
             progress_stale_s = float((now - last_progress_time).to_sec())
             measured_speed = float(np.linalg.norm(self.world_vel[:2]))
-            (v, w, progress_floor_used, progress_floor_value,
-             liveness_active, liveness_w_limit) = (
-                self._apply_stsm_progress_floor(
-                    corridor, ref, v, w, dist, gate, adp_scale,
-                    interest_eval=interest_eval,
-                    progress_stale_s=progress_stale_s,
-                    measured_speed=measured_speed))
+            self._runtime_progress_stale_s = float(progress_stale_s)
+            (v, w, gate_scale, adp_scale, progress_floor_used,
+             progress_floor_value, liveness_active,
+             liveness_w_limit) = self._runtime_post_scale_cmd(
+                v, w, dist, adp_scale=adp_scale, corridor=corridor,
+                ref=ref, gate=gate, interest_eval=interest_eval,
+                progress_stale_s=progress_stale_s,
+                measured_speed=measured_speed)
             runtime_record["published_control"] = [float(v), float(w)]
             runtime_record["published_cmd"] = [float(v), float(w)]
+            runtime_record["final_direct_override_active"] = False
             runtime_record["gate_scale"] = float(gate_scale)
             runtime_record["adp_scale"] = float(adp_scale)
             runtime_record["progress_stale_s"] = float(progress_stale_s)

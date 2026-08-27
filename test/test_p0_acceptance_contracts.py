@@ -1143,7 +1143,23 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "copy.deepcopy(\n                    self.last_valid_topology_debug)" in wheelchair_source
     assert "rospy.Timer" in wheelchair_source
     assert "_command_keepalive_cb" in wheelchair_source
-    assert "runtime_blocking_replan_enabled" in wheelchair_source
+    assert "def _runtime_recovery(" in wheelchair_source
+    assert wheelchair_source.count("_runtime_recovery(") == 6
+    assert wheelchair_source.count("new_corridor = self._plan_corridor()") == 1
+    assert "runtime_full_replan_count" in wheelchair_source
+    assert "candidate_rank >= current_rank" not in wheelchair_source
+    assert "candidate_rank > current_rank" not in wheelchair_source
+    assert "runtime_replan_fallback_count" not in wheelchair_source
+    assert "_runtime_replan_fallback_corridor" not in wheelchair_source
+    assert "_maybe_replan_corridor" not in wheelchair_source
+    assert "final_direct_override_enabled" not in wheelchair_source
+    assert "final_direct_override_enabled" not in open(
+        os.path.join(ROOT, "launch", "wheelchair_action.launch"), "r").read()
+    assert '"final_direct_override_active"] = False' in wheelchair_source
+    assert "replan_period" not in wheelchair_source
+    assert "topology_periodic_replan" not in wheelchair_source
+    assert "topology_replan_on_tube_exit" not in wheelchair_source
+    assert "topology_replan_on_no_progress" not in wheelchair_source
     assert "runtime_topology_candidate_pool" in wheelchair_source
     assert "_switch_to_ranked_topology_candidate" in wheelchair_source
     assert "topology_runtime_candidate_switch_used" in wheelchair_source
@@ -1175,10 +1191,16 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "mpc_local:%s" in wheelchair_source
     assert "global_safe_stop" in wheelchair_source
     assert "post_scale_first_step_live" in wheelchair_source
+    assert wheelchair_source.count("_runtime_post_scale_cmd(") == 3
+    assert "published_cmd_preview" in wheelchair_source
+    assert "post_scale_progress_floor_used" in wheelchair_source
     assert "raw_mpc_cmd" in wheelchair_source
     assert "published_cmd" in wheelchair_source
     assert "final_approach_corridor_weight" in wheelchair_source
     assert "execution_speed_floor" in wheelchair_source
+    assert "self.mpc.lam_heading = self.mpc_base_lam_heading *" in wheelchair_source
+    assert "final_approach_active = self._in_final_approach(dist)" in wheelchair_source
+    assert "not final_approach_active and" in wheelchair_source
     assert "first_speed_shortfall_cost" in open(
         os.path.join(ROOT, "src", "stsm_madp", "mpc.py"), "r").read()
     assert "sequence_speed_shortfall_cost" in open(
@@ -1198,7 +1220,7 @@ def test_runtime_sources_preserve_p0_execution_contracts():
         os.path.join(ROOT, "src", "stsm_madp",
                      "topology_refinement.py"), "r").read()
     assert '"mpc_runtime_records": list(self.mpc_runtime_records)' in wheelchair_source
-    assert "skip runtime blocking replan reason=no_progress" in wheelchair_source
+    assert "[wc][recovery] no_progress exhausted" in wheelchair_source
     assert '"/stsm/wc_task_complete"' in wheelchair_source
     assert '"/stsm/wc_task_complete"' in metrics_source
     assert "metrics_goal_tolerance=\"${wc_completion_tolerance}\"" in experiment_source
