@@ -27,7 +27,8 @@ from stsm_madp.mpc import (
     WheelchairMPC, build_mpc_constraint_inputs, generate_topology_tube,
     run_mpc_tracking, wheelchair_nonholonomic_execution_profile,
     write_mpc_outputs)
-from stsm_madp.topology_constraint import write_topology_constraint
+from stsm_madp.topology_constraint import (
+    build_topology_constraint, write_topology_constraint)
 from stsm_madp.safety_gate import SafetyGate, SafetyGateResult
 from stsm_madp.adp import ADPCritic, ADPFeatureBuilder
 from stsm_madp.topology import topology_param_or_auto, topology_profile_defaults
@@ -457,6 +458,8 @@ class WheelchairNode:
             "~topology/max_refined_footprint_check_points", 48)))
         self.max_refinement_path_points = max(8, int(rospy.get_param(
             "~topology/max_refinement_path_points", 48)))
+        self.max_diff_drive_execution_cost = float(rospy.get_param(
+            "~topology/max_diff_drive_execution_cost", 50.0))
         self.interest_enabled = rospy.get_param("~interest_points/enabled", True)
         self.interest_gate_enabled = rospy.get_param(
             "~interest_points/gate_enabled", True)
@@ -1969,6 +1972,79 @@ class WheelchairNode:
             out["refinement_trace"] = trace
         return np.asarray(best_path, float), out, bool(repaired_used)
 
+    def _stsm_corridor_execution_contract_status(self, corr, reference):
+        """Fail closed before an STSM corridor reaches live MPC execution."""
+        status = {
+            "accepted": True,
+            "failure_reason": "",
+            "diff_drive_execution_cost": 0.0,
+            "max_diff_drive_execution_cost": float(
+                self.max_diff_drive_execution_cost),
+            "critical_point_status": "",
+            "topology_sequence_valid": True,
+            "critical_point_association": {},
+        }
+        if self.baseline or corr is None:
+            return status
+        profile = dict(getattr(
+            corr, "nonholonomic_execution_profile", {}) or {})
+        cost = float(getattr(
+            corr, "diff_drive_execution_cost",
+            profile.get("execution_profile_cost", 0.0)) or 0.0)
+        status["diff_drive_execution_cost"] = float(cost)
+        if (not np.isfinite(cost) or
+                cost > float(self.max_diff_drive_execution_cost) + 1e-9):
+            status["accepted"] = False
+            status["failure_reason"] = (
+                "diff_drive_execution_cost_exceeded:%.3f>%.3f" %
+                (float(cost), float(self.max_diff_drive_execution_cost)))
+            return status
+        try:
+            ref = self._as_corridor_points(reference)
+            debug = dict(getattr(self.manifold, "last_topology_debug", {}) or {})
+            constraint = build_topology_constraint(
+                selected_topology_graph=debug,
+                selected_corridor=corr,
+                safe_manifold=self.manifold,
+                refined_reference=ref.tolist(),
+                safe_threshold=float(self.manifold.rho),
+                minimum_clearance=0.10,
+                phase="navigation",
+                robot_type="wheelchair",
+                manifold_constraint_mode=self.manifold_constraint_mode)
+            association = dict(
+                constraint.get("critical_point_association", {}) or {})
+            cp_status = str(association.get(
+                "critical_point_status",
+                constraint.get("topology_sequence_constraint", {}).get(
+                    "critical_point_status", "")) or "")
+            sequence_valid = bool(association.get(
+                "topology_sequence_valid",
+                constraint.get("topology_sequence_constraint", {}).get(
+                    "topology_sequence_valid", True)))
+            status["critical_point_status"] = cp_status
+            status["topology_sequence_valid"] = bool(sequence_valid)
+            status["critical_point_association"] = association
+            corr.topology_constraint_info = constraint
+            corr.critical_point_association = association
+            corr.critical_point_projection_index = {
+                str(item.get("id", "")): int(item.get("trajectory_index", -1))
+                for item in association.get("critical_points", [])
+                if isinstance(item, dict)
+            }
+            if cp_status == "hard_violation" or not sequence_valid:
+                status["accepted"] = False
+                status["failure_reason"] = (
+                    "critical_point_sequence_invalid:%s" %
+                    (cp_status or "topology_sequence_invalid"))
+                return status
+        except Exception as exc:
+            status["accepted"] = False
+            status["failure_reason"] = "topology_contract_error:%s:%s" % (
+                type(exc).__name__, str(exc)[:120])
+            return status
+        return status
+
     def _prepare_executable_corridors(self, corrs):
         if not self.topology_refinement_enabled:
             if not self.baseline:
@@ -2320,6 +2396,33 @@ class WheelchairNode:
             breakdown["diff_drive_reference_source"] = str(
                 corr.diff_drive_reference_source)
             corr.candidate_cost_breakdown = breakdown
+            contract_status = self._stsm_corridor_execution_contract_status(
+                corr, refined)
+            if not bool(contract_status.get("accepted", False)):
+                corr.reject_reason = str(contract_status.get(
+                    "failure_reason", "stsm_execution_contract_failed"))
+                corr.refinement_reject_reason = corr.reject_reason
+                corr.execution_feasible = False
+                corr.hard_feasible = False
+                attempt["accepted"] = False
+                attempt["reject_reason"] = str(corr.reject_reason)
+                attempt["stsm_execution_contract"] = dict(contract_status)
+                breakdown["stsm_execution_contract"] = dict(contract_status)
+                breakdown["execution_feasible"] = False
+                breakdown["hard_feasible"] = False
+                corr.candidate_cost_breakdown = breakdown
+                refinement_attempts.append(attempt)
+                rospy.logwarn(
+                    "[wc][refine] reject %s reason=%s diff_drive=%.3f critical=%s sequence_valid=%s",
+                    getattr(corr, "corridor_id", getattr(corr, "label", "")),
+                    corr.reject_reason,
+                    float(contract_status.get(
+                        "diff_drive_execution_cost", 0.0)),
+                    str(contract_status.get("critical_point_status", "")),
+                    bool(contract_status.get(
+                        "topology_sequence_valid", True)))
+                continue
+            attempt["stsm_execution_contract"] = dict(contract_status)
             prepared.append(corr)
             rospy.loginfo(
                 "[wc][refine] accepted %s length=%.3f max_turn=%.3f max_curv=%.3f diff_drive=%.3f init_head=%.3f mono_reg=%.3f source=%s",
@@ -3628,6 +3731,19 @@ class WheelchairNode:
             return status
         try:
             ref = self._horizon_ref(candidate)
+            contract = self._stsm_corridor_execution_contract_status(
+                candidate, ref)
+            status["stsm_execution_contract"] = dict(contract)
+            status["diff_drive_execution_cost"] = float(contract.get(
+                "diff_drive_execution_cost", 0.0))
+            status["critical_point_status"] = str(contract.get(
+                "critical_point_status", ""))
+            status["topology_sequence_valid"] = bool(contract.get(
+                "topology_sequence_valid", True))
+            if not bool(contract.get("accepted", False)):
+                status["failure_reason"] = str(contract.get(
+                    "failure_reason", "stsm_execution_contract_failed"))
+                return status
             _ti, _ci, _mi, topology_constraint_for_mpc = (
                 build_mpc_constraint_inputs(
                     candidate, self.manifold, ref,
