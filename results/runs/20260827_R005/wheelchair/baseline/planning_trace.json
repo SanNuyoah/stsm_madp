@@ -1,0 +1,19 @@
+{
+  "candidate_generated": 0,
+  "candidate_source": "",
+  "controller_success": true,
+  "failure_reason": "none",
+  "morse_route_count": 0,
+  "mpc_status": "feasible",
+  "mpc_used": true,
+  "overall_success": false,
+  "planner_success": false,
+  "reference_source": "raw_waypoints",
+  "refinement_used": false,
+  "robot_type": "wheelchair",
+  "safety_success": true,
+  "selected_candidate_source": "",
+  "success": false,
+  "task_success": true,
+  "warning_reason": ""
+}

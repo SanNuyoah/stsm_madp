@@ -1,0 +1,196 @@
+{
+  "critical_point_association": {
+    "critical_point_association_used": true, 
+    "critical_point_count": 0, 
+    "critical_point_status": "passed", 
+    "critical_points": [], 
+    "hard_radius": 1.0, 
+    "hard_violation_count": 0, 
+    "soft_radius": 0.5, 
+    "soft_violation_count": 0, 
+    "topology_sequence_valid": true, 
+    "trajectory_count": 14
+  }, 
+  "diff_drive_reference_repaired": false, 
+  "diff_drive_reference_source": "selected_candidate_waypoints", 
+  "fallback_reason": "", 
+  "fallback_used": false, 
+  "final_trajectory": [
+    [
+      1.2999999999999998, 
+      1.1111111111111107, 
+      0.0
+    ], 
+    [
+      1.15, 
+      1.2222222222222219, 
+      0.0
+    ], 
+    [
+      1.0, 
+      1.259259259259259, 
+      0.0
+    ], 
+    [
+      0.85, 
+      1.259259259259259, 
+      0.0
+    ], 
+    [
+      0.6999999999999998, 
+      1.259259259259259, 
+      0.0
+    ], 
+    [
+      0.5499999999999998, 
+      1.259259259259259, 
+      0.0
+    ], 
+    [
+      0.3999999999999999, 
+      1.259259259259259, 
+      0.0
+    ], 
+    [
+      0.25, 
+      1.259259259259259, 
+      0.0
+    ], 
+    [
+      0.10000000000000003, 
+      1.259259259259259, 
+      0.0
+    ], 
+    [
+      -0.050000000000000044, 
+      1.2222222222222219, 
+      0.0
+    ], 
+    [
+      -0.20000000000000012, 
+      1.1111111111111107, 
+      0.0
+    ], 
+    [
+      -0.3125000000000001, 
+      0.9629629629629628, 
+      0.0
+    ], 
+    [
+      -0.38750000000000007, 
+      0.8148148148148148, 
+      0.0
+    ], 
+    [
+      -0.5, 
+      0.6666666666666665, 
+      0.0
+    ]
+  ], 
+  "nonholonomic_execution_profile": {
+    "evaluated_points": 10, 
+    "excess_local_curvature": 51.12969584991897, 
+    "execution_profile_cost": 4205.187472028717, 
+    "heading_oscillation": 0.5, 
+    "initial_alignment": -0.2748061391130006, 
+    "initial_backward_progress": 0.2748061391130006, 
+    "initial_heading_error": 1.8491843999156388, 
+    "max_abs_turn": 3.1248174227597962, 
+    "max_local_curvature": 59.12969584991897, 
+    "mean_abs_turn": 0.47029577761231117, 
+    "monotonic_progress": 0.9711671657221372, 
+    "monotonic_regression": 0.03030654199699545, 
+    "monotonic_regression_ratio": 0.030261944735442862, 
+    "nonmonotonic_fraction": 0.1111111111111111
+  }, 
+  "post_clearance": 0.10000000000000003, 
+  "post_refinement_clearance": 0.10000000000000003, 
+  "post_refinement_corridor_valid": true, 
+  "pre_clearance": 0.10000000000000003, 
+  "pre_refinement_clearance": 0.10000000000000003, 
+  "pre_repair_nonholonomic_execution_profile": {}, 
+  "reference_path_count": 14, 
+  "reference_source": "selected_candidate_waypoints", 
+  "refinement_attempted": true, 
+  "refinement_changed_path": false, 
+  "refinement_fallback": false, 
+  "refinement_manifold_checked": true, 
+  "refinement_manifold_valid": true, 
+  "refinement_success": true, 
+  "refinement_tube_valid": true, 
+  "topology_stage_sequence": [], 
+  "trajectory": [
+    [
+      1.2999999999999998, 
+      1.1111111111111107, 
+      0.0
+    ], 
+    [
+      1.15, 
+      1.2222222222222219, 
+      0.0
+    ], 
+    [
+      1.0, 
+      1.259259259259259, 
+      0.0
+    ], 
+    [
+      0.85, 
+      1.259259259259259, 
+      0.0
+    ], 
+    [
+      0.6999999999999998, 
+      1.259259259259259, 
+      0.0
+    ], 
+    [
+      0.5499999999999998, 
+      1.259259259259259, 
+      0.0
+    ], 
+    [
+      0.3999999999999999, 
+      1.259259259259259, 
+      0.0
+    ], 
+    [
+      0.25, 
+      1.259259259259259, 
+      0.0
+    ], 
+    [
+      0.10000000000000003, 
+      1.259259259259259, 
+      0.0
+    ], 
+    [
+      -0.050000000000000044, 
+      1.2222222222222219, 
+      0.0
+    ], 
+    [
+      -0.20000000000000012, 
+      1.1111111111111107, 
+      0.0
+    ], 
+    [
+      -0.3125000000000001, 
+      0.9629629629629628, 
+      0.0
+    ], 
+    [
+      -0.38750000000000007, 
+      0.8148148148148148, 
+      0.0
+    ], 
+    [
+      -0.5, 
+      0.6666666666666665, 
+      0.0
+    ]
+  ], 
+  "trajectory_corridor_violation_count": 0, 
+  "trajectory_manifold_violation_count": 0
+}

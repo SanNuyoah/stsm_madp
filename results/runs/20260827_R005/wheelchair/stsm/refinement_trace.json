@@ -1,0 +1,26 @@
+[
+  {
+    "bounded_reference_path_count": 14, 
+    "cost": 2.1204440952651, 
+    "generic_smoothing_skipped": true, 
+    "iteration": "bounded_wheelchair_refinement", 
+    "min_clearance": 0.10000000000000003, 
+    "raw_reference_path_count": 14, 
+    "refinement_points_limited": false, 
+    "risk": 0.0, 
+    "trajectory_valid": true
+  }, 
+  {
+    "accepted": true, 
+    "clearance": 0.10000000000000003, 
+    "cost": 2.1204440952651, 
+    "failure_reason": "", 
+    "iteration": "protected_waypoints", 
+    "manifold_valid": true, 
+    "min_clearance": 0.10000000000000003, 
+    "risk": 0.0, 
+    "trajectory_cost": 2.1204440952651, 
+    "trajectory_valid": true, 
+    "tube_valid": true
+  }
+]

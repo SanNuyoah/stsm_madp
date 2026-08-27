@@ -1,0 +1,11 @@
+{
+  "failed_constraint": "manifold",
+  "failed_constraint_type": "manifold",
+  "failure_reason": "reference_manifold_infeasible",
+  "failure_type": "planner",
+  "replan_required": true,
+  "robot": "wheelchair",
+  "selected_corridor_id": "wheelchair_c0001",
+  "target": "wheelchair",
+  "variant": "stsm"
+}

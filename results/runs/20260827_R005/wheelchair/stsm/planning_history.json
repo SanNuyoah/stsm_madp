@@ -1,0 +1,33 @@
+[
+  {
+    "count": 19, 
+    "stage": "morse", 
+    "status": "success"
+  }, 
+  {
+    "count": 19, 
+    "stage": "candidate_generation", 
+    "status": "success"
+  }, 
+  {
+    "count": 8, 
+    "rejected": 11, 
+    "stage": "filter", 
+    "status": "partial_failure"
+  }, 
+  {
+    "count": 8, 
+    "stage": "local_refinement", 
+    "status": "not_used"
+  }, 
+  {
+    "count": 8, 
+    "stage": "ranking", 
+    "status": "success"
+  }, 
+  {
+    "count": 1, 
+    "stage": "mpc", 
+    "status": "pending"
+  }
+]

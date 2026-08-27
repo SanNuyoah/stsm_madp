@@ -1,0 +1,19 @@
+{
+  "candidate_generated": 19,
+  "candidate_source": "morse_topology",
+  "controller_success": false,
+  "failure_reason": "timeout:max_runtime",
+  "morse_route_count": 19,
+  "mpc_status": "reference_manifold_infeasible",
+  "mpc_used": true,
+  "overall_success": false,
+  "planner_success": true,
+  "reference_source": "refinement",
+  "refinement_used": true,
+  "robot_type": "wheelchair",
+  "safety_success": true,
+  "selected_candidate_source": "morse_topology",
+  "success": false,
+  "task_success": false,
+  "warning_reason": ""
+}

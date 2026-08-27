@@ -1,0 +1,9 @@
+{
+  "goal_reached": true,
+  "mpc_finished": true,
+  "planning_finished": true,
+  "result_saved": true,
+  "robot": "wheelchair",
+  "simulation_started": true,
+  "variant": "baseline"
+}

@@ -1,0 +1,19 @@
+{
+  "baseline_planner": "risk_grid_astar_safe_direct",
+  "baseline_type": "direct",
+  "constraint_used": true,
+  "execution_status": "success",
+  "final_path_source": "risk_grid_astar_safe_direct",
+  "mode": "baseline",
+  "morse_used": false,
+  "mpc_feasibility_status": "feasible",
+  "mpc_used": true,
+  "planner_source": "risk_grid_astar_safe_direct",
+  "raw_reference_source": "risk_grid_astar_safe_direct",
+  "refinement_used": false,
+  "robot": "wheelchair",
+  "selected_corridor_id": "baseline_direct",
+  "target": "wheelchair",
+  "topology_constraint_used": false,
+  "variant": "baseline"
+}

@@ -1,0 +1,20 @@
+{
+  "candidate_selection_mode": "", 
+  "candidate_selection_status": "feasible", 
+  "feasible_candidates": 2, 
+  "filtered_candidates": 0, 
+  "filtered_infeasible_candidates": 0, 
+  "recovery_mpc_tracking_margin": 0.0, 
+  "removed_candidates": 0, 
+  "selected_candidate": "wheelchair_c0001", 
+  "selected_max_risk": 1.6830331133973846, 
+  "selected_min_clearance": 0.10000000000000003, 
+  "task_mode": "navigation", 
+  "task_weight": {
+    "distance": 0.2, 
+    "risk": 0.7, 
+    "task": 0.1
+  }, 
+  "task_weight_used": true, 
+  "total_candidates": 2
+}

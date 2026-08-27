@@ -1,0 +1,290 @@
+... logging to /root/.ros/log/5cbe18ea-a1d9-11f1-929c-525400cb26f4/roslaunch-VM-32-120-ubuntu-2857.log
+Checking log directory for disk usage. This may take a while.
+Press Ctrl-C to interrupt
+Done checking log file disk usage. Usage is <1GB.
+]2;/home/sun/LLL/catkin_ws/src/stsm_madp/launch/wheelchair_action.launch
+[1mstarted roslaunch server http://VM-32-120-ubuntu:39371/[0m
+
+SUMMARY
+========
+
+PARAMETERS
+ * /rosdistro: melodic
+ * /rosversion: 1.14.13
+ * /stsm_wheelchair/adp_debug: False
+ * /stsm_wheelchair/adp_enabled: True
+ * /stsm_wheelchair/adp_min_scale: 0.35
+ * /stsm_wheelchair/adp_model: /home/sun/LLL/cat...
+ * /stsm_wheelchair/adp_post_scale_enabled: False
+ * /stsm_wheelchair/baseline: False
+ * /stsm_wheelchair/baseline_direct_retry_weight: 8.0
+ * /stsm_wheelchair/baseline_grid_resolution: 0.1
+ * /stsm_wheelchair/baseline_min_lateral_deviation: 0.25
+ * /stsm_wheelchair/baseline_risk_weight: 2.5
+ * /stsm_wheelchair/baseline_turn_weight: 0.08
+ * /stsm_wheelchair/baseline_type: direct
+ * /stsm_wheelchair/completion_hold_s: 1.5
+ * /stsm_wheelchair/completion_tolerance: 0.25
+ * /stsm_wheelchair/corridor_speed_slowdown_gain: 0.18
+ * /stsm_wheelchair/corridor_tube_gain: 0.8
+ * /stsm_wheelchair/decision_trace_out: /home/sun/LLL/cat...
+ * /stsm_wheelchair/experiment_mode: paper
+ * /stsm_wheelchair/final_approach_radius: 0.9
+ * /stsm_wheelchair/final_creep_v: 0.1
+ * /stsm_wheelchair/final_direct_override_enabled: True
+ * /stsm_wheelchair/final_direct_override_radius: 0.9
+ * /stsm_wheelchair/final_forward_gain: 0.75
+ * /stsm_wheelchair/final_heading_gain: 1.6
+ * /stsm_wheelchair/final_heading_threshold: 0.75
+ * /stsm_wheelchair/final_max_v: 0.3
+ * /stsm_wheelchair/final_min_v: 0.16
+ * /stsm_wheelchair/goal_tolerance: 0.08
+ * /stsm_wheelchair/interest_points/enabled: True
+ * /stsm_wheelchair/interest_points/forbidden_stop_enabled: True
+ * /stsm_wheelchair/interest_points/gate_enabled: True
+ * /stsm_wheelchair/interest_points/min_scale: 0.2
+ * /stsm_wheelchair/interest_points/rho_stop: 7.0
+ * /stsm_wheelchair/interest_points/rho_warn: 5.0
+ * /stsm_wheelchair/lam_heading: 2.5
+ * /stsm_wheelchair/lam_stall: 10.0
+ * /stsm_wheelchair/lambda_adp: 0.005
+ * /stsm_wheelchair/lambda_adp_corridor: 0.05
+ * /stsm_wheelchair/lambda_adp_terminal: 0.0015
+ * /stsm_wheelchair/max_runtime_s: 180.0
+ * /stsm_wheelchair/min_progress_per_solve: 0.005
+ * /stsm_wheelchair/mpc/a_max: 0.5
+ * /stsm_wheelchair/mpc/alpha_max: 1.5
+ * /stsm_wheelchair/mpc/beam_width: 12
+ * /stsm_wheelchair/mpc/dt: 0.2
+ * /stsm_wheelchair/mpc/heading_recovery_w_max: 0.95
+ * /stsm_wheelchair/mpc/horizon: 12
+ * /stsm_wheelchair/mpc/manifold_constraint_mode: soft
+ * /stsm_wheelchair/mpc/manifold_hard_tolerance: 0.25
+ * /stsm_wheelchair/mpc/manifold_soft_tolerance: 0.08
+ * /stsm_wheelchair/mpc/mpc_manifold_constraint_mode: soft
+ * /stsm_wheelchair/mpc_cost_breakdown_out: /home/sun/LLL/cat...
+ * /stsm_wheelchair/mpc_diagnostics_out: /home/sun/LLL/cat...
+ * /stsm_wheelchair/mpc_reference_out: /home/sun/LLL/cat...
+ * /stsm_wheelchair/mpc_use_adp_terminal: True
+ * /stsm_wheelchair/near_goal_adp_scale: 0.2
+ * /stsm_wheelchair/near_goal_goal_weight: 18.0
+ * /stsm_wheelchair/near_goal_radius: 0.5
+ * /stsm_wheelchair/near_goal_social_scale: 0.5
+ * /stsm_wheelchair/no_progress_epsilon: 0.02
+ * /stsm_wheelchair/no_progress_replan_time: 5.0
+ * /stsm_wheelchair/no_progress_timeout_s: 45.0
+ * /stsm_wheelchair/progress_eps: 0.01
+ * /stsm_wheelchair/progress_reward_weight: 2.8
+ * /stsm_wheelchair/ref_progress_reward_weight: 1.0
+ * /stsm_wheelchair/replan_period: 5.0
+ * /stsm_wheelchair/replan_tube_margin: 0.08
+ * /stsm_wheelchair/reset_on_start: True
+ * /stsm_wheelchair/safety_gate/abort_on_stop: True
+ * /stsm_wheelchair/safety_gate/enabled: True
+ * /stsm_wheelchair/safety_gate/min_scale: 0.2
+ * /stsm_wheelchair/safety_gate/rho_stop: 2.5
+ * /stsm_wheelchair/safety_gate/rho_warn: 1.6
+ * /stsm_wheelchair/speed_reward_weight: 0.25
+ * /stsm_wheelchair/start_pose: [2.0, 1.5, -2.4]
+ * /stsm_wheelchair/stsm_liveness_w_max: 0.65
+ * /stsm_wheelchair/stsm_progress_floor_w_max: 0.95
+ * /stsm_wheelchair[WARN] [1787809253.829819, 213.342000]: [wc][refine] accept wheelchair_c0001 with turn tolerance max_turn=0.416 limit=0.400 tolerance=0.030
+[WARN] [1787809254.364481, 213.876000]: [wc][refine] turn recovery failed wheelchair_c0002 max_turn=0.322 limit=0.430
+[WARN] [1787809254.614862, 214.126000]: [wc][refine] accept wheelchair_c0002 with turn tolerance max_turn=0.415 limit=0.400 tolerance=0.030
+[WARN] [1787809255.143565, 214.654000]: [wc][refine] turn recovery failed wheelchair_c0003 max_turn=0.394 limit=0.430
+[WARN] [1787809255.549247, 215.059000]: [wc][refine] turn recovery failed wheelchair_c0003 max_turn=0.435 limit=0.430
+[WARN] [1787809255.613883, 215.124000]: [wc][refine] reject wheelchair_c0003 reason=refined_execution_turn_limit max_turn=0.927 limit=0.400
+[INFO] [1787809238.412513, 197.953000]: [wc][adp] loaded /home/sun/LLL/catkin_ws/src/stsm_madp/config/adp_critic.yaml (linear_adp_v1)
+[INFO] [1787809238.437960, 197.978000]: [wc] reset wheelchair to start pose [ 2.   1.5 -2.4]
+[INFO] [1787809238.640056, 198.182000]: [wc] waiting for pose from /gazebo/model_states...
+[INFO] [1787809238.644278, 198.185000]: [wc] start [ 2.   1.5 -2.4] -> goal [-0.55  0.55] (mode=stsm)
+[INFO] [1787809238.649243, 198.191000]: [wc][topology] enumerate start k=3 route_max_paths=64 route_max_routes=32 max_curv=8.000
+[topology] route_to_candidate start profile=wheelchair max_paths=64 max_routes=32 nodes=10 edges=27
+[topology] route_to_candidate done profile=wheelchair routes=5 time=1.823s
+[INFO] [1787809253.424832, 212.935000]: [wc][topology] enumerate done candidates=3 elapsed=14.775s
+[INFO] [1787809253.428242, 212.941000]: [wc][refine] start wheelchair_c0001 index=0 samples=6 max_points=48 footprint_points=48
+[INFO] [1787809253.555479, 213.068000]: [wc][refine] done wheelchair_c0001 ok=True reason= elapsed=0.125s
+[INFO] [1787809253.558491, 213.071000]: [wc][refine] turn recovery start wheelchair_c0001 points=19 max_turn=0.659 limit=0.430
+[INFO] [1787809253.845691, 213.358000]: [wc][refine] accepted wheelchair_c0001 length=2.838 max_turn=0.416 max_curv=7.843 diff_drive=2.575 init_head=0.339 mono_reg=0.000 source=diff_drive_launch_prefix
+[INFO] [1787809253.847822, 213.360000]: [wc][refine] start wheelchair_c0002 index=1 samples=6 max_points=48 footprint_points=48
+[INFO] [1787809253.994415, 213.506000]: [wc][refine] done wheelchair_c0002 ok=True reason= elapsed=0.144s
+[INFO] [1787809253.998231, 213.510000]: [wc][refine] turn recovery start wheelchair_c0002 points=21 max_turn=0.917 limit=0.430
+[INFO] [1787809254.395238, 213.906000]: [wc][refine] turn recovery start wheelchair_c0002 points=25 max_turn=0.917 limit=0.430
+[INFO] [1787809254.631822, 214.143000]: [wc][refine] accepted wheelchair_c0002 length=3.201 max_turn=0.415 max_curv=7.168 diff_drive=0.984 init_head=0.142 mono_reg=0.000 source=diff_drive_launch_prefix_turn_recovered
+[INFO] [1787809254.633747, 214.145000]: [wc][refine] start wheelchair_c0003 index=2 samples=6 max_points=48 footprint_points=48
+[INFO] [1787809254.773149, 214.284000]: [wc][refine] done wheelchair_c0003 ok=True reason= elapsed=0.138s
+[INFO] [1787809254.777203, 214.288000]: [wc][refine] turn recovery start wheelchair_c0003 points=21 max_turn=0.927 limit=0.430
+[INFO] [1787809255.177430, 214.688000]: [wc][refine] turn recovery start wheelchair_c0003 points=25 max_turn=0.927 limit=0.430
+[INFO] [1787809255.616714, 215.127000]: [wc][corridor] morse_saddle_0 base=25.275 adp=0.000 total=25.275 mean_phi=0.254 max_phi=1.683 clearance=0.100 rank_base=1 rank_total=0 nodes=start,saddle_0,minimum_3,goal
+[INFO] [1787809255.618273, 215.128000]: [wc][corridor] morse_saddle_2 base=26.851 adp=0.000 total=26.851 mean_phi=0.381 max_phi=1.683 clearance=0.100 rank_base=0 rank_total=1 nodes=start,saddle_0,minimum_4,goal
+[INFO] [1787809255.661411, 215.171000]: [wc] selected corridor: wheelchair_c0002 label=morse_saddle_0 (cost 25.275, source=topology)
+[INFO] [1787809255.663277, 215.173000]: [wc] corridor planning time: 17.014s
+[INFO] [1787809259.358980, 218.856000]: [wc] pos=(1.94, 1.44, -2.40) dist=2.650 cmd=(v=0.111, w=-0.300)
+[INFO] [1787809263.659581, 223.148000]: [wc] pos=(1.92, 1.43, -2.42) dist=2.644 cmd=(v=0.111, w=-0.600)
+[INFO] [1787809268.062952, 227.545000]: [wc] pos=(1.92, 1.43, -2.45) dist=2.628 cmd=(v=0.112, w=-0.900)
+[INFO] [1787809272.538772, 232.012000]: [wc] pos=(1.92, 1.47, -2.83) dist=2.624 cmd=(v=0.120, w=-0.900)
+[INFO] [1787809272.553822, 232.028000]: [wc] replanning corridor reason=no_progress current=morse_saddle_0
+[INFO] [1787809272.555888, 232.029000]: [wc][topology] enumerate start k=3 route_max_paths=64 route_max_routes=32 max_curv=8.000
+[topology] route_to_candidate start profile=wheelchair max_paths=64 max_routes=32 nodes=10 edges=27
+[topology] route_to_candidate done profile=wheelchair routes=5 time=1.809s
+[INFO] [1787809286.689462, 246.132000]: [wc][topology] enu[WARN] [1787809287.466672, 246.910000]: [wc][refine] turn recovery failed wheelchair_c0002 max_turn=0.323 limit=0.430
+[WARN] [1787809287.469348, 246.912000]: [wc][refine] reject wheelchair_c0002 reason=refined_execution_turn_limit max_turn=0.917 limit=0.400
+[WARN] [1787809288.023174, 247.465000]: [wc][refine] turn recovery failed wheelchair_c0003 max_turn=0.304 limit=0.430
+[WARN] [1787809288.025779, 247.466000]: [wc][refine] reject wheelchair_c0003 reason=refined_execution_turn_limit max_turn=0.927 limit=0.400
+[WARN] [1787809288.086528, 247.527000]: [wc] topology current-pose replan on no_progress current=morse_saddle_2
+[WARN] [1787809325.690110, 285.059000]: [wc][refine] turn recovery failed wheelchair_c0001 max_turn=0.309 limit=0.430
+[WARN] [1787809326.096359, 285.464000]: [wc][refine] turn recovery failed wheelchair_c0001 max_turn=0.329 limit=0.430
+[WARN] [1787809326.150940, 285.519000]: [wc][refine] reject wheelchair_c0001 reason=refined_execution_turn_limit max_turn=0.927 limit=0.400
+[ERROR] [1787809326.153406, 285.521000]: [wc][refine] planning_failed: no executable refined STSM corridors in paper mode
+[ERROR] [1787809326.258482, 285.627000]: [wc] replan failed closed in paper mode reason=no_progress current=morse_saddle_2: topology refinement returned no executable STSM corridors
+[WARN] [1787809326.260640, 285.629000]: [wc] skip runtime blocking replan reason=no_progress; no switch current=morse_saddle_2
+merate done candidates=3 elapsed=14.134s
+[INFO] [1787809286.693009, 246.137000]: [wc][refine] start wheelchair_c0001 index=0 samples=6 max_points=48 footprint_points=48
+[INFO] [1787809286.810112, 246.254000]: [wc][refine] done wheelchair_c0001 ok=True reason= elapsed=0.116s
+[INFO] [1787809286.812884, 246.257000]: [wc][refine] turn recovery start wheelchair_c0001 points=18 max_turn=0.544 limit=0.430
+[INFO] [1787809286.946524, 246.391000]: [wc][refine] accepted wheelchair_c0001 length=2.711 max_turn=0.230 max_curv=4.537 diff_drive=207.881 init_head=0.424 mono_reg=0.000 source=selected_candidate_waypoints
+[INFO] [1787809286.948642, 246.393000]: [wc][refine] start wheelchair_c0002 index=1 samples=6 max_points=48 footprint_points=48
+[INFO] [1787809287.088473, 246.531000]: [wc][refine] done wheelchair_c0002 ok=True reason= elapsed=0.138s
+[INFO] [1787809287.091601, 246.534000]: [wc][refine] turn recovery start wheelchair_c0002 points=20 max_turn=0.917 limit=0.430
+[INFO] [1787809287.471296, 246.914000]: [wc][refine] start wheelchair_c0003 index=2 samples=6 max_points=48 footprint_points=48
+[INFO] [1787809287.621238, 247.064000]: [wc][refine] done wheelchair_c0003 ok=True reason= elapsed=0.148s
+[INFO] [1787809287.623983, 247.067000]: [wc][refine] turn recovery start wheelchair_c0003 points=20 max_turn=0.927 limit=0.430
+[INFO] [1787809288.028368, 247.469000]: [wc][corridor] morse_saddle_2 base=229.931 adp=0.000 total=229.931 mean_phi=0.377 max_phi=1.683 clearance=0.100 rank_base=0 rank_total=0 nodes=start,saddle_0,minimum_4,goal
+[INFO] [1787809288.082451, 247.524000]: [wc] selected corridor: wheelchair_c0001 label=morse_saddle_2 (cost 229.931, source=topology)
+[INFO] [1787809288.084303, 247.526000]: [wc] corridor planning time: 15.528s
+[INFO] [1787809291.776216, 251.206000]: [wc] pos=(1.90, 1.48, -3.00) dist=2.635 cmd=(v=0.120, w=-0.600)
+[INFO] [1787809296.043218, 255.469000]: [wc] pos=(1.68, 1.58, 2.63) dist=2.622 cmd=(v=0.120, w=-0.300)
+[INFO] [1787809299.458117, 258.871000]: [wc] pos=(1.58, 1.66, 2.44) dist=2.455 cmd=(v=0.120, w=0.000)
+[INFO] [1787809302.875012, 262.284000]: [wc] pos=(1.56, 1.69, 2.38) dist=2.406 cmd=(v=0.112, w=0.300)
+[INFO] [1787809306.226046, 265.633000]: [wc] pos=(1.55, 1.69, 2.40) dist=2.400 cmd=(v=0.072, w=0.600)
+[INFO] [1787809309.547700, 268.946000]: [wc] pos=(1.55, 1.69, 2.42) dist=2.395 cmd=(v=0.140, w=0.900)
+[INFO] [1787809312.924787, 272.314000]: [wc] pos=(1.55, 1.67, 2.69) dist=2.393 cmd=(v=0.140, w=0.950)
+[INFO] [1787809316.414606, 275.802000]: [wc] pos=(1.55, 1.66, 2.82) dist=2.380 cmd=(v=0.071, w=0.950)
+[INFO] [1787809319.828651, 279.208000]: [wc] pos=(1.56, 1.64, 3.05) dist=2.372 cmd=(v=0.096, w=0.950)
+[INFO] [1787809319.842259, 279.223000]: [wc] replanning corridor reason=no_progress current=morse_saddle_2
+[INFO] [1787809319.844494, 279.225000]: [wc][topology] enumerate start k=3 route_max_paths=64 route_max_routes=32 max_curv=8.000
+[topology] route_to_candidate start profile=wheelchair max_paths=64 max_routes=32 nodes=9 edges=21
+[topology] route_to_candidate done profile=wheelchair routes=1 time=1.282s
+[INFO] [1787809325.191108, 284.561000]: [wc][topology] enumerate done candidates=1 elapsed=5.347s
+[INFO] [1787809325.193785, 284.561000]: [wc][refine] start wheelchair_c0001 index=0 samples=6 max_points=48 footprint_points=48
+[INFO] [1787809325.313191, 284.683000]: [wc][refine] done wheelchair_c0001 ok=True reason= elapsed=0.117s
+[INFO] [1787809325.315625, 284.685000]: [wc][refine] turn recovery start wheelchair_c0001 points=18 max_turn=0.927 limit=0.430
+[INFO] [1787809325.725571, 285.094000]: [wc][refine] turn recovery start wheelchair_c0001 points=22 max_turn=0.927 limit=0.430
+[INFO] [1787809329.594028, 288.955000]: [wc] pos=(1.52, 1.55, -2.61) dist=2.376 cmd=(v=0.196, w=0.650)
+[INFO] [1787809333.468887, 292.817000]: [wc] pos=(1.50, 1.53, -2.54) dist=2.295 cmd=(v=0.196, w=0.350)
+[INFO] [1787809337.633268, 296.979000]: [wc] pos=(1.31, 1.21, -1.81) dist=2.271 cmd=(v=0.096, w=0.050)
+[INFO] [1787809340.420176, 299.756000]: [wc] pos=(1.31, 1.19, -1.77) dist=1.972 cmd=(v=0.096, w=-0.250)
+[INFO] [17[WARN] [1787809384.636020, 343.887000]: [wc][refine] turn recovery failed wheelchair_c0002 max_turn=0.506 limit=0.430
+[WARN] [1787809384.638130, 343.889000]: [wc][refine] accept wheelchair_c0002 with turn tolerance max_turn=0.506 limit=0.400 tolerance=0.030
+[WARN] [1787809385.164988, 344.415000]: [wc][refine] skip wheelchair_c0004 reason=refinement_max_candidates index=3 max=3
+[WARN] [1787809385.166848, 344.417000]: [wc][refine] skip wheelchair_c0005 reason=refinement_max_candidates index=4 max=3
+[WARN] [1787809385.168890, 344.419000]: [wc][refine] skip wheelchair_c0006 reason=refinement_max_candidates index=5 max=3
+[WARN] [1787809385.170515, 344.420000]: [wc][refine] skip wheelchair_c0007 reason=refinement_max_candidates index=6 max=3
+[WARN] [1787809385.172312, 344.422000]: [wc][refine] skip wheelchair_c0008 reason=refinement_max_candidates index=7 max=3
+[WARN] [1787809385.256780, 344.506000]: [wc] topology current-pose replan on no_progress current=morse_minima_7
+87809343.270260, 302.600000]: [wc] pos=(1.31, 1.18, -1.76) dist=1.963 cmd=(v=0.096, w=-0.550)
+[INFO] [1787809346.144407, 305.473000]: [wc] pos=(1.31, 1.18, -1.76) dist=1.960 cmd=(v=0.140, w=-0.850)
+[INFO] [1787809349.173932, 308.493000]: [wc] pos=(1.30, 1.17, -1.80) dist=1.959 cmd=(v=0.140, w=-0.950)
+[INFO] [1787809349.187083, 308.510000]: [wc] replanning corridor reason=no_progress current=morse_saddle_2
+[INFO] [1787809349.189049, 308.512000]: [wc][topology] enumerate start k=3 route_max_paths=64 route_max_routes=32 max_curv=8.000
+[topology] route_to_candidate start profile=wheelchair max_paths=64 max_routes=32 nodes=9 edges=21
+[topology] route_to_candidate done profile=wheelchair routes=19 time=3.877s
+[INFO] [1787809383.995343, 343.243000]: [wc][topology] enumerate done candidates=8 elapsed=34.806s
+[INFO] [1787809383.997743, 343.249000]: [wc][refine] start wheelchair_c0001 index=0 samples=6 max_points=48 footprint_points=48
+[INFO] [1787809384.087622, 343.339000]: [wc][refine] done wheelchair_c0001 ok=True reason= elapsed=0.088s
+[INFO] [1787809384.093455, 343.345000]: [wc][refine] accepted wheelchair_c0001 length=2.120 max_turn=0.395 max_curv=2.318 diff_drive=4205.187 init_head=1.849 mono_reg=0.030 source=selected_candidate_waypoints
+[INFO] [1787809384.094989, 343.346000]: [wc][refine] start wheelchair_c0002 index=1 samples=6 max_points=48 footprint_points=48
+[INFO] [1787809384.248723, 343.500000]: [wc][refine] done wheelchair_c0002 ok=True reason= elapsed=0.152s
+[INFO] [1787809384.282008, 343.533000]: [wc][refine] turn recovery start wheelchair_c0002 points=22 max_turn=0.506 limit=0.430
+[INFO] [1787809384.645212, 343.896000]: [wc][refine] accepted wheelchair_c0002 length=2.507 max_turn=0.506 max_curv=5.919 diff_drive=2.345 init_head=0.303 mono_reg=0.000 source=diff_drive_launch_prefix
+[INFO] [1787809384.646936, 343.897000]: [wc][refine] start wheelchair_c0003 index=2 samples=6 max_points=48 footprint_points=48
+[INFO] [1787809384.750786, 344.001000]: [wc][refine] done wheelchair_c0003 ok=True reason= elapsed=0.102s
+[INFO] [1787809384.753390, 344.004000]: [wc][refine] turn recovery start wheelchair_c0003 points=16 max_turn=0.544 limit=0.430
+[INFO] [1787809384.915028, 344.165000]: [wc][refine] turn recovery start wheelchair_c0003 points=20 max_turn=0.547 limit=0.430
+[INFO] [1787809385.162285, 344.412000]: [wc][refine] accepted wheelchair_c0003 length=2.577 max_turn=0.262 max_curv=6.872 diff_drive=1.681 init_head=0.118 mono_reg=0.000 source=diff_drive_launch_prefix_turn_recovered
+[INFO] [1787809385.174928, 344.425000]: [wc][corridor] morse_minima_7 base=25.452 adp=0.000 total=25.452 mean_phi=0.439 max_phi=1.683 clearance=0.100 rank_base=5 rank_total=0 nodes=start,minimum_2,minimum_3,goal
+[INFO] [1787809385.176254, 344.426000]: [wc][corridor] morse_minima_3 base=4226.847 adp=0.000 total=4226.847 mean_phi=0.450 max_phi=1.683 clearance=0.100 rank_base=0 rank_total=1 nodes=start,minimum_3,goal
+[INFO] [1787809385.252148, 344.502000]: [wc] selected corridor: wheelchair_c0003 label=morse_minima_7 (cost 25.452, source=topology)
+[INFO] [1787809385.254442, 344.504000]: [wc] corridor planning time: 36.065s
+[INFO] [1787809388.623223, 347.865000]: [wc] pos=(1.26, 1.14, -1.92) dist=1.951 cmd=(v=0.103, w=-0.950)
+[INFO] [1787809392.132394, 351.361000]: [wc] pos=(1.23, 1.15, -2.05) dist=1.898 cmd=(v=0.113, w=-0.950)
+[INFO] [1787809395.494539, 354.723000]: [wc] pos=(1.19, 1.15, -2.49) dist=1.882 cmd=(v=0.118, w=-0.650)
+[INFO] [1787809398.770583, 357.990000]: [wc] pos=(1.17, 1.14, -2.59) dist=1.840 cmd=(v=0.118, w=-0.350)
+[INFO] [1787809401.904671, 361.117000]: [wc] pos=(1.15, 1.13, -2.61) dist=1.816 cmd=(v=0.118, w=-0.050)
+[INFO] [1787809404.821312, 364.030000]: [wc] pos=(1.14, 1.13, -2.62) dist=1.801 cmd=(v=0.118, w=0.250)
+[INFO] [1787809407.625787, 366.833000]: [wc] pos=(1.13, 1.12, -2.61) dist=1.791 cmd=(v=0.118, w=0.550)
+[INFO] [1787809410.435799, 369.636000]: [wc] pos=(1.13, 1.12, -2.61) dist=1.779 cmd=(v=0.119, w=0.850)
+[INFO] [1787809413.140445, 372.335000]: [wc] pos=(1.12, 1.09, -2.36) dist=1.779 cmd=(v=0.140, w=0.650)
+[INFO] [17878[WARN] [1787809432.177588, 391.342000]: [wc] skip blocking replan reason=no_progress remaining=3.8s required=45.1s; keep morse_minima_7
+[WARN] [1787809434.503748, 393.664000]: [wc][topology] runtime candidate switch reason=no_progress wheelchair_c0003 -> wheelchair_c0001 label=morse_minima_3
+[WARN] [1787809434.506528, 393.666000]: [wc] topology candidate switch on no_progress current=morse_minima_3
+[WARN] [1787809437.133888, 396.290000]: [wc] max runtime reached, dist=1.685 elapsed=180.9s
+09416.053834, 375.242000]: [wc] pos=(1.12, 1.08, -2.31) dist=1.758 cmd=(v=0.112, w=0.350)
+[INFO] [1787809419.293157, 378.480000]: [wc] pos=(1.11, 1.07, -2.30) dist=1.749 cmd=(v=0.112, w=0.050)
+[INFO] [1787809422.553082, 381.732000]: [wc] pos=(1.10, 1.06, -2.30) dist=1.739 cmd=(v=0.140, w=-0.250)
+[INFO] [1787809425.784590, 384.959000]: [wc] pos=(1.09, 1.05, -2.31) dist=1.729 cmd=(v=0.097, w=-0.550)
+[INFO] [1787809428.927180, 388.093000]: [wc] pos=(1.09, 1.05, -2.31) dist=1.716 cmd=(v=0.097, w=-0.850)
+[INFO] [1787809432.163354, 391.324000]: [wc] pos=(1.08, 1.08, -2.64) dist=1.716 cmd=(v=0.140, w=-0.650)
+[INFO] [1787809436.922064, 396.077000]: [wc] pos=(1.05, 1.07, -2.75) dist=1.717 cmd=(v=0.070, w=-0.950)
+[INFO] [1787809437.143875, 396.300000]: [wc][trace] wrote MPC reference path /home/sun/LLL/catkin_ws/src/stsm_madp/results/runs/20260827_R005/wheelchair/stsm/mpc_reference_path.csv rows=444
+[INFO] [1787809437.599668, 396.755000]: [wc][trace] wrote MPC diagnostics /home/sun/LLL/catkin_ws/src/stsm_madp/results/runs/20260827_R005/wheelchair/stsm/mpc_diagnostics.json
+[INFO] [1787809437.605419, 396.761000]: [wc][trace] wrote decision trace /home/sun/LLL/catkin_ws/src/stsm_madp/results/runs/20260827_R005/wheelchair/stsm/decision_trace.json
+[INFO] [1787809437.669467, 396.825000]: [wc][trace] wrote candidate recovery diagnostics /home/sun/LLL/catkin_ws/src/stsm_madp/results/runs/20260827_R005/wheelchair/stsm
+[INFO] [1787809437.671544, 396.827000]: [wc] done (stop=True, reason=timeout:max_runtime)
+/stsm_w_max: 0.95
+ * /stsm_wheelchair/topology/allow_graph_fallback_with_morse: False
+ * /stsm_wheelchair/topology/allow_ring_with_morse: False
+ * /stsm_wheelchair/topology/allow_semantic_topology_recovery: False
+ * /stsm_wheelchair/topology/allow_semantic_with_morse: False
+ * /stsm_wheelchair/topology/candidate_max_risk: 7.0
+ * /stsm_wheelchair/topology/candidate_pool_min: 3
+ * /stsm_wheelchair/topology/enabled: True
+ * /stsm_wheelchair/topology/fallback_enabled: False
+ * /stsm_wheelchair/topology/grid_resolution: auto
+ * /stsm_wheelchair/topology/hard_clearance: auto
+ * /stsm_wheelchair/topology/k_paths: 3
+ * /stsm_wheelchair/topology/lambda_execution: 0.2
+ * /stsm_wheelchair/topology/lambda_saddle_value: 0.35
+ * /stsm_wheelchair/topology/lambda_tracking: 0.35
+ * /stsm_wheelchair/topology/max_corridor_curvature: 40.0
+ * /stsm_wheelchair/topology/max_corridor_turn: 3.4
+ * /stsm_wheelchair/topology/max_graph_nodes: 32
+ * /stsm_wheelchair/topology/merge_radius: auto
+ * /stsm_wheelchair/topology/min_clearance: auto
+ * /stsm_wheelchair/topology/min_segment_length: 0.01
+ * /stsm_wheelchair/topology/morse_core_required: True
+ * /stsm_wheelchair/topology/morse_decision_mode: priority
+ * /stsm_wheelchair/topology/morse_grad_eps: 0.6
+ * /stsm_wheelchair/topology/morse_minima_priority_ratio: 0.25
+ * /stsm_wheelchair/topology/morse_mix_priority_ratio: 0.5
+ * /stsm_wheelchair/topology/morse_priority_ratio: 0.25
+ * /stsm_wheelchair/topology/morse_saddle_priority_ratio: 0.5
+ * /stsm_wheelchair/topology/morse_w_barrier: 0.6
+ * /stsm_wheelchair/topology/morse_w_goal: 0.35
+ * /stsm_wheelchair/topology/morse_w_social: 1.0
+ * /stsm_wheelchair/topology/neighbor_k: auto
+ * /stsm_wheelchair/topology/periodic_replan: False
+ * /stsm_wheelchair/topology/profile: wheelchair
+ * /stsm_wheelchair/topology/refinement_enabled: True
+ * /stsm_wheelchair/topology/refinement_max_candidates: 3
+ * /stsm_wheelchair/topology/refinement_samples_per_segment: 14
+ * /stsm_wheelchair/topology/replan_min_interval: 30.0
+ * /stsm_wheelchair/topology/replan_on_no_progress: True
+ * /stsm_wheelchair/topology/replan_on_tube_exit: True
+ * /stsm_wheelchair/topology/route_max_paths: 512
+ * /stsm_wheelchair/topology/route_max_routes: 256
+ * /stsm_wheelchair/topology/saddle_tie_ratio: 0.05
+
+NODES
+  /
+    stsm_wheelchair (stsm_madp/wheelchair_node.py)
+
+[1mROS_MASTER_URI=http://localhost:11311[0m
+]2;/home/sun/LLL/catkin_ws/src/stsm_madp/launch/wheelchair_action.launch http://localhost:11311
+[1mprocess[stsm_wheelchair-1]: started with pid [2877][0m
+[1m[stsm_wheelchair-1] process has finished cleanly
+log file: /root/.ros/log/5cbe18ea-a1d9-11f1-929c-525400cb26f4/stsm_wheelchair-1*.log[0m
+all processes on machine have died, roslaunch will exit
+shutting down processing monitor...
+... shutting down processing monitor complete
+[1mdone[0m

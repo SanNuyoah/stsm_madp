@@ -1,0 +1,17 @@
+{
+  "baseline_type": "direct",
+  "constraint_used": true,
+  "corridor_constraint_used": false,
+  "final_traj_file": "traj.csv",
+  "manifold_constraint_used": false,
+  "mpc_output_file": "baseline_mpc_output.csv",
+  "mpc_used": true,
+  "planner_source": "risk_grid_astar_safe_direct",
+  "raw_reference_source": "risk_grid_astar_safe_direct",
+  "reference_file": "baseline_reference_before_mpc.csv",
+  "risk_cost_used": true,
+  "robot": "wheelchair",
+  "target": "wheelchair",
+  "topology_constraint_used": false,
+  "variant": "baseline"
+}

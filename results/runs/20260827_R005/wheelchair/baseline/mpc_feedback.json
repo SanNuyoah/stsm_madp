@@ -1,0 +1,9 @@
+{
+  "failure_reason": "none",
+  "failure_type": "",
+  "replan_required": false,
+  "robot": "wheelchair",
+  "selected_corridor_id": "baseline_direct",
+  "target": "wheelchair",
+  "variant": "baseline"
+}

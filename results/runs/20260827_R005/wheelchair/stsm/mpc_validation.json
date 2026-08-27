@@ -1,0 +1,23 @@
+{
+  "clearance_violation_count": 0,
+  "constraint_mode": "soft",
+  "controller_success": false,
+  "corridor_violation_count": 0,
+  "failure_reason": "timeout:max_runtime",
+  "hard_violation_count": 0,
+  "manifold_violation_count": 0,
+  "mpc_status": "reference_manifold_infeasible",
+  "mpc_used": true,
+  "overall_success": false,
+  "planner_success": true,
+  "predicted_max_risk": 1.6830331133973846,
+  "predicted_min_clearance": 0.10000000000000003,
+  "reference_path_count": 444,
+  "robot_type": "wheelchair",
+  "safety_success": true,
+  "success": false,
+  "task_success": false,
+  "tube_constraint_used": false,
+  "violation_count": 0,
+  "warning_reason": ""
+}

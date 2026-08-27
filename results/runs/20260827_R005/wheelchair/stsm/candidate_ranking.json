@@ -1,0 +1,87 @@
+[
+  {
+    "candidate_id": "wheelchair_c0001", 
+    "feasibility_cost": 0.0, 
+    "length_cost": 2.1204440952651, 
+    "rank": 1, 
+    "risk_cost": 4.3206586498171236, 
+    "selected": true, 
+    "smoothness_cost": 0.5759345461740921, 
+    "task_candidate_cost": 3.508634420736587, 
+    "task_cost": 0.6008454681158115, 
+    "task_cost_breakdown": {
+      "semantic_sequence": [
+        "start", 
+        "parking", 
+        "goal"
+      ], 
+      "task_cost": 0.6008454681158115, 
+      "task_mode": "navigation", 
+      "task_state": "moving", 
+      "terms": {
+        "arrival_stability_cost": 0.0, 
+        "distance_cost": 0.30463092423455596, 
+        "goal_alignment_cost": 0.005886265596017104, 
+        "goal_direction_cost": 0.005886265596017104, 
+        "goal_region_distance_cost": 0.30463092423455596, 
+        "goal_stability_cost": 0.0, 
+        "passage_width_cost": 0.18962086082532692, 
+        "turning_complexity_cost": 0.1007074174599115, 
+        "turning_cost": 0.1007074174599115
+      }, 
+      "topology_route_class": "right_bypass"
+    }, 
+    "task_mode": "navigation", 
+    "task_state": "moving", 
+    "task_weight": {
+      "distance": 0.2, 
+      "risk": 0.7, 
+      "task": 0.1
+    }, 
+    "task_weight_used": true, 
+    "total_cost": 7.617882759372127
+  }, 
+  {
+    "candidate_id": "wheelchair_c0003", 
+    "feasibility_cost": 0.0, 
+    "length_cost": 2.5770811128315465, 
+    "rank": 2, 
+    "risk_cost": 4.498471597785878, 
+    "selected": false, 
+    "smoothness_cost": 0.5958533279956979, 
+    "task_candidate_cost": 3.731336306065275, 
+    "task_cost": 0.6698996504885092, 
+    "task_cost_breakdown": {
+      "semantic_sequence": [
+        "start", 
+        "parking", 
+        "parking", 
+        "goal"
+      ], 
+      "task_cost": 0.6698996504885092, 
+      "task_mode": "navigation", 
+      "task_state": "moving", 
+      "terms": {
+        "arrival_stability_cost": 0.0313116724215457, 
+        "distance_cost": 0.30463092423455596, 
+        "goal_alignment_cost": 0.005886265596017104, 
+        "goal_direction_cost": 0.005886265596017104, 
+        "goal_region_distance_cost": 0.30463092423455596, 
+        "goal_stability_cost": 0.0313116724215457, 
+        "passage_width_cost": 0.18962086082532692, 
+        "turning_complexity_cost": 0.1384499274110635, 
+        "turning_cost": 0.1384499274110635
+      }, 
+      "topology_route_class": "right_bypass"
+    }, 
+    "task_mode": "navigation", 
+    "task_state": "moving", 
+    "task_weight": {
+      "distance": 0.2, 
+      "risk": 0.7, 
+      "task": 0.1
+    }, 
+    "task_weight_used": true, 
+    "total_cost": 8.341305689101631
+  }
+]
