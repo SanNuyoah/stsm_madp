@@ -1980,6 +1980,11 @@ class WheelchairNode:
             "diff_drive_execution_cost": 0.0,
             "max_diff_drive_execution_cost": float(
                 self.max_diff_drive_execution_cost),
+            "reference_max_turn": 0.0,
+            "profile_max_abs_turn": 0.0,
+            "execution_turn_limit": float(
+                min(float(self.topology_max_corridor_turn), 0.40)),
+            "execution_turn_tolerance": 0.03,
             "critical_point_status": "",
             "topology_sequence_valid": True,
             "critical_point_association": {},
@@ -2001,6 +2006,29 @@ class WheelchairNode:
             return status
         try:
             ref = self._as_corridor_points(reference)
+            from stsm_madp.deform import path_curvature_metrics
+            turn_metrics = path_curvature_metrics(ref)
+            max_turn = float(turn_metrics.get("max_turn", 0.0))
+            profile_max_turn = float(profile.get("max_abs_turn", 0.0) or 0.0)
+            turn_limit = float(status["execution_turn_limit"])
+            turn_tolerance = float(status["execution_turn_tolerance"])
+            status["reference_max_turn"] = float(max_turn)
+            status["profile_max_abs_turn"] = float(profile_max_turn)
+            if (not np.isfinite(max_turn) or
+                    max_turn > turn_limit + turn_tolerance + 1e-9):
+                status["accepted"] = False
+                status["failure_reason"] = (
+                    "reference_turn_limit_exceeded:%.3f>%.3f" %
+                    (float(max_turn), float(turn_limit + turn_tolerance)))
+                return status
+            if (not np.isfinite(profile_max_turn) or
+                    profile_max_turn > turn_limit + turn_tolerance + 1e-9):
+                status["accepted"] = False
+                status["failure_reason"] = (
+                    "diff_drive_turn_limit_exceeded:%.3f>%.3f" %
+                    (float(profile_max_turn),
+                     float(turn_limit + turn_tolerance)))
+                return status
             debug = dict(getattr(self.manifold, "last_topology_debug", {}) or {})
             constraint = build_topology_constraint(
                 selected_topology_graph=debug,
