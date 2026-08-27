@@ -229,12 +229,19 @@ class WheelchairNode:
         self.last_cmd_twist = Twist()
         self.last_cmd_time = rospy.Time(0)
         self.command_hold_s = float(rospy.get_param(
-            "~command_hold_s", 4.0))
+            "~command_hold_s", 0.6))
         self.command_keepalive_hz = float(rospy.get_param(
             "~command_keepalive_hz", 8.0))
         self.command_keepalive_enabled = bool(rospy.get_param(
             "~command_keepalive_enabled", True))
         self.command_keepalive_publish_count = 0
+        self.stale_command_stop_count = 0
+        self.mpc_solve_deadline_s = float(rospy.get_param(
+            "~mpc_solve_deadline_s", 0.6))
+        self.mpc_solve_wall_history = []
+        self.control_update_interval_history = []
+        self.mpc_solve_overrun_count = 0
+        self._last_control_update_wall = None
         self.stop_triggered = False
         self.stop_reason = ""
         self.task_completed = False
@@ -641,13 +648,13 @@ class WheelchairNode:
         self.field.set_scene([self.human], [bed, transfer, table])
         self.manifold = SafetyManifold(self.field, rho=2.0, lam_s=1.0)
         self.mpc = WheelchairMPC(
-            horizon=int(rospy.get_param("~mpc/horizon", 12)),
+            horizon=int(rospy.get_param("~mpc/horizon", 6)),
             dt=float(rospy.get_param("~mpc/dt", 0.2)),
             v_max=0.75,
             w_max=(1.2 if self.baseline else self.stsm_w_max),
             a_max=float(rospy.get_param("~mpc/a_max", 0.5)),
             alpha_max=float(rospy.get_param("~mpc/alpha_max", 1.5)),
-            beam_width=int(rospy.get_param("~mpc/beam_width", 12)),
+            beam_width=int(rospy.get_param("~mpc/beam_width", 4)),
             lam_social=0.4)
         self.mpc_base_v_max = float(self.mpc.v_max)
         self.mpc_base_lam_tube = float(self.mpc.lam_tube)
@@ -659,6 +666,11 @@ class WheelchairNode:
         self.mpc.near_goal_radius = self.near_goal_radius
         self.mpc.near_goal_goal_weight = self.near_goal_goal_weight
         self.mpc.near_goal_adp_scale = self.near_goal_adp_scale
+        rospy.loginfo(
+            "[wc][config] mpc_horizon=%d mpc_beam_width=%d mpc_dt=%.3f "
+            "command_hold_s=%.3f mpc_solve_deadline_s=%.3f",
+            int(self.mpc.N), int(self.mpc.beam_width), float(self.mpc.dt),
+            float(self.command_hold_s), float(self.mpc_solve_deadline_s))
         self.mpc.near_goal_social_scale = self.near_goal_social_scale
         self.mpc.lam_stall = self.lam_stall
         self.mpc.lam_progress = self.progress_reward_weight
@@ -4564,6 +4576,22 @@ class WheelchairNode:
                 "final_approach_corridor_weight", 0.0)),
             "final_approach_heading_weight": float(runtime_last.get(
                 "final_approach_heading_weight", 0.0)),
+            "stale_command_stop_count": int(self.stale_command_stop_count),
+            "mpc_solve_overrun_count": int(self.mpc_solve_overrun_count),
+            "solve_wall_mean_s": float(np.mean(
+                self.mpc_solve_wall_history))
+            if self.mpc_solve_wall_history else 0.0,
+            "solve_wall_p95_s": float(np.percentile(
+                self.mpc_solve_wall_history, 95))
+            if self.mpc_solve_wall_history else 0.0,
+            "solve_wall_max_s": float(max(self.mpc_solve_wall_history))
+            if self.mpc_solve_wall_history else 0.0,
+            "control_update_interval_mean_s": float(np.mean(
+                self.control_update_interval_history))
+            if self.control_update_interval_history else 0.0,
+            "control_update_interval_max_s": float(max(
+                self.control_update_interval_history))
+            if self.control_update_interval_history else 0.0,
         })
         diag, breakdown = self._mpc_output_paths()
         topology_constraint_path = os.path.join(
@@ -5672,6 +5700,15 @@ class WheelchairNode:
             return
         age = (rospy.Time.now() - self.last_cmd_time).to_sec()
         if age < 0.0 or age > self.command_hold_s:
+            self.last_cmd_twist = Twist()
+            self.last_cmd_time = rospy.Time(0)
+            self.cmd_pub.publish(Twist())
+            self.stale_command_stop_count += 1
+            rospy.logwarn_throttle(
+                1.0,
+                "[wc][watchdog] stale MPC command age=%.3fs hold=%.3fs; "
+                "published zero command",
+                max(0.0, float(age)), float(self.command_hold_s))
             return
         self.cmd_pub.publish(self.last_cmd_twist)
         self.command_keepalive_publish_count += 1
@@ -5905,6 +5942,7 @@ class WheelchairNode:
                     rospy.logerr("[wc] invalid STSM corridor before MPC: %s", exc)
                     break
                 topology_constraint_for_mpc = {}
+            solve_t0 = time.perf_counter()
             v, w = self.mpc.solve(
                 self.state, ref, self.field,
                 corridor=corridor, u_prev=self.u_prev,
@@ -5929,6 +5967,22 @@ class WheelchairNode:
                 },
                 topology_constraint=topology_constraint_for_mpc,
                 predictive=bool(not self.baseline))
+            solve_wall_s = time.perf_counter() - solve_t0
+            now_wall = time.perf_counter()
+            control_update_interval_s = 0.0
+            if self._last_control_update_wall is not None:
+                control_update_interval_s = (
+                    now_wall - self._last_control_update_wall)
+                self.control_update_interval_history.append(
+                    float(control_update_interval_s))
+            self._last_control_update_wall = now_wall
+            self.mpc_solve_wall_history.append(float(solve_wall_s))
+            solve_overrun = bool(solve_wall_s > self.mpc_solve_deadline_s)
+            if solve_overrun:
+                self.mpc_solve_overrun_count += 1
+                rospy.logwarn(
+                    "[wc][mpc] solve overrun wall=%.3fs deadline=%.3fs",
+                    float(solve_wall_s), float(self.mpc_solve_deadline_s))
             runtime_record = {
                 "solve_index": int(len(self.mpc_runtime_records)),
                 "corridor_id": self._corridor_id(corridor),
@@ -5978,6 +6032,9 @@ class WheelchairNode:
                     self.mpc.lam_goal_terminal),
                 "final_approach_corridor_weight": float(self.mpc.lam_track),
                 "final_approach_heading_weight": float(self.mpc.lam_heading),
+                "solve_wall_s": float(solve_wall_s),
+                "control_update_interval_s": float(control_update_interval_s),
+                "mpc_solve_overrun": solve_overrun,
             }
             self.mpc_runtime_records.append(runtime_record)
             if len(self.mpc_runtime_records) > 200:

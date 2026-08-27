@@ -7,6 +7,8 @@
   <arg name="completion_tolerance" default="0.25"/>
   <arg name="completion_hold_s" default="1.5"/>
   <arg name="max_runtime_s" default="180.0"/>
+  <arg name="command_hold_s" default="0.6"/>
+  <arg name="mpc_solve_deadline_s" default="0.6"/>
   <arg name="no_progress_timeout_s" default="45.0"/>
   <arg name="no_progress_epsilon" default="0.02"/>
   <arg name="no_progress_replan_time" default="5.0"/>
@@ -21,11 +23,11 @@
   <arg name="progress_reward_weight" default="2.8"/>
   <arg name="speed_reward_weight" default="0.25"/>
   <arg name="ref_progress_reward_weight" default="1.0"/>
-  <arg name="mpc_horizon" default="12"/>
+  <arg name="mpc_horizon" default="6"/>
   <arg name="mpc_dt" default="0.2"/>
   <arg name="mpc_a_max" default="0.5"/>
   <arg name="mpc_alpha_max" default="1.5"/>
-  <arg name="mpc_beam_width" default="12"/>
+  <arg name="mpc_beam_width" default="4"/>
   <arg name="corridor_speed_slowdown_gain" default="0.18"/>
   <arg name="corridor_tube_gain" default="0.80"/>
   <arg name="baseline_grid_resolution" default="0.10"/>
@@ -123,6 +125,8 @@
     <param name="completion_tolerance" value="$(arg completion_tolerance)"/>
     <param name="completion_hold_s" value="$(arg completion_hold_s)"/>
     <param name="max_runtime_s" value="$(arg max_runtime_s)"/>
+    <param name="command_hold_s" value="$(arg command_hold_s)"/>
+    <param name="mpc_solve_deadline_s" value="$(arg mpc_solve_deadline_s)"/>
     <param name="no_progress_timeout_s" value="$(arg no_progress_timeout_s)"/>
     <param name="no_progress_epsilon" value="$(arg no_progress_epsilon)"/>
     <param name="no_progress_replan_time" value="$(arg no_progress_replan_time)"/>

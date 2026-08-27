@@ -14,12 +14,15 @@ outputs:
   trajectory: results/run/wheelchair/trajectory.csv
   metrics: results/run/metrics/wheelchair_metrics.csv
 
+command_hold_s: 0.6
+mpc_solve_deadline_s: 0.6
+
 mpc:
-  horizon: 12
+  horizon: 6
   dt: 0.2
   a_max: 0.5
   alpha_max: 1.5
-  beam_width: 12
+  beam_width: 4
   optimizer: sampled_beam_sequence
   pure_pursuit_role: baseline_or_warm_start
   first_step_progress_ratio: 0.50
