@@ -75,7 +75,11 @@ clean_env="${CLEAN_ENV:-true}"
 keep_on_fail="${KEEP_ON_FAIL:-true}"
 target_filter="${TARGET:-all}"
 adp_enabled="${ADP_ENABLED:-true}"
-adp_model="${ADP_MODEL:-${pkg_dir}/config/adp_critic.yaml}"
+# A caller can still deliberately use one model for both targets with ADP_MODEL.
+# The formal default keeps each critic on the matching online-cost calibration.
+adp_model_override="${ADP_MODEL:-}"
+arm_adp_model="${ADP_ARM_MODEL:-${pkg_dir}/config/adp_critic_arm_calibrated.yaml}"
+wheelchair_adp_model="${ADP_WHEELCHAIR_MODEL:-${pkg_dir}/config/adp_critic_wheelchair_calibrated.yaml}"
 lambda_adp="${LAMBDA_ADP:-0.005}"
 lambda_adp_corridor="${LAMBDA_ADP_CORRIDOR:-0.05}"
 lambda_adp_terminal="${LAMBDA_ADP_TERMINAL:-0.0015}"
@@ -1091,6 +1095,7 @@ run_one() {
   local baseline_arg="false"
   local baseline_type="direct"
   local run_adp_enabled="${adp_enabled}"
+  local run_adp_model
   local variant="$mode"
   local metrics_target="$target"
   local metrics_csv
@@ -1135,17 +1140,23 @@ run_one() {
       metrics_csv="${run_root}/compare/arm_compare_metrics.csv"
       traj_csv="${run_root}/arm/${variant}/traj.csv"
       action_launch="arm_action.launch"
+      run_adp_model="${arm_adp_model}"
       ;;
     wheelchair)
       metrics_csv="${run_root}/compare/wheelchair_compare_metrics.csv"
       traj_csv="${run_root}/wheelchair/${variant}/traj.csv"
       action_launch="wheelchair_action.launch"
+      run_adp_model="${wheelchair_adp_model}"
       ;;
     *)
       echo "unknown target: ${target}" >&2
       exit 2
       ;;
   esac
+
+  if [ -n "${adp_model_override}" ]; then
+    run_adp_model="${adp_model_override}"
+  fi
 
   run_dir="${run_root}/${target}/${variant}"
   mkdir -p "${run_dir}"
@@ -1236,7 +1247,7 @@ run_one() {
       footprint_gate_min_scale:="${wc_footprint_gate_min_scale}" \
       footprint_forbidden_stop_enabled:="${wc_footprint_forbidden_stop_enabled}" \
       adp_enabled:="${run_adp_enabled}" \
-      adp_model:="${adp_model}" \
+      adp_model:="${run_adp_model}" \
       lambda_adp:="${lambda_adp}" \
       lambda_adp_corridor:="${lambda_adp_corridor}" \
       lambda_adp_terminal:="${lambda_adp_terminal}" \
@@ -1259,7 +1270,7 @@ run_one() {
       arm_interest_rho_stop:="${arm_interest_rho_stop}" \
       arm_interest_gate_min_scale:="${arm_interest_gate_min_scale}" \
       adp_enabled:="${run_adp_enabled}" \
-      adp_model:="${adp_model}" \
+      adp_model:="${run_adp_model}" \
       lambda_adp:="${lambda_adp}" \
       lambda_adp_path:="${lambda_adp_path}" \
       lambda_adp_arm:="${lambda_adp_arm}" \

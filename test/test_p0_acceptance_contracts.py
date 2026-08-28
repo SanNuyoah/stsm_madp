@@ -37,6 +37,7 @@ from stsm_madp.social_field import (
 from stsm_madp.adp import (
     ADPCritic, ADPTransitionLearner, adp_role_from_runtime,
     fit_critic_from_transition_records, save_and_verify_critic)
+from stsm_madp.decision_trace import trace_from_debug
 from stsm_madp.task_semantics import infer_task_context
 from stsm_madp.topology import TopologicalCorridorPlanner
 from stsm_madp.topology_refinement import _limit_refinement_points
@@ -1485,6 +1486,30 @@ def test_adp_role_uses_explicit_learning_and_influence_signals():
                                  control_contribution=True) == "control_modifier"
     assert adp_role_from_runtime(True, False, True, effective_lambda=0.02) == (
         "inactive")
+
+
+def test_decision_trace_ignores_generic_dls_delta_without_adp_influence():
+    trace = trace_from_debug(
+        {},
+        metrics={
+            "adp_enabled": 1,
+            "adp_learning_enabled": 1,
+            "adp_decision_influence_enabled": 0,
+            "adp_effective_lambda": 0.0,
+            "v_des_delta_norm": 0.5,
+            "arm_dls_adp_used": 0,
+        }, robot="arm")
+    assert trace["adp_role"] == "shadow_learning"
+    assert trace["adp_affects_control"] == 0
+
+
+def test_formal_experiments_default_to_target_calibrated_critics():
+    with open(os.path.join(ROOT, "scripts", "run_experiments.sh"), "r") as handle:
+        source = handle.read()
+    assert "adp_model_override=\"${ADP_MODEL:-}\"" in source
+    assert "adp_critic_arm_calibrated.yaml" in source
+    assert "adp_critic_wheelchair_calibrated.yaml" in source
+    assert 'adp_model:=\"${run_adp_model}\"' in source
 
 
 def test_adp_calibration_fits_real_transition_cost_to_go_targets():

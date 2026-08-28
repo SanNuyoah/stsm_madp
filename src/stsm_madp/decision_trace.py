@@ -4,6 +4,8 @@ sys.dont_write_bytecode = True
 import json
 import os
 
+from .adp import adp_role_from_runtime
+
 
 MODULE_FLAGS = (
     "risk_field_used",
@@ -312,16 +314,37 @@ def trace_from_debug(debug, metrics=None, robot="", variant="stsm"):
         metrics.get("mpc_risk_cost", debug.get("mpc_risk_cost", 0.0)), 0.0)
     trace["mpc_max_risk"] = _num(
         metrics.get("mpc_max_risk", debug.get("mpc_max_risk", 0.0)), 0.0)
-    affects_ranking = bool(_num(metrics.get("corridor_rank_changed_count"), 0))
-    affects_control = bool(
-        _num(metrics.get("arm_dls_adp_used"), 0) or
-        _num(metrics.get("v_des_delta_norm"), 0))
-    role = debug.get("adp_role") or metrics.get("adp_role") or ""
-    if not role:
-        role = "ranking_modifier" if affects_ranking else "control_modifier" if affects_control else "evaluation_only"
+    adp_enabled = bool(_num(
+        metrics.get("adp_enabled", debug.get("adp_used", 0)), 0))
+    learning_enabled = bool(_num(
+        metrics.get("adp_learning_enabled",
+                    debug.get("adp_learning_enabled", adp_enabled)), 0))
+    influence_enabled = bool(_num(
+        metrics.get("adp_decision_influence_enabled",
+                    debug.get("adp_decision_influence_enabled", 0)), 0))
+    effective_lambda = _num(
+        metrics.get("adp_effective_lambda",
+                    debug.get("adp_effective_lambda", 0.0)), 0.0)
+    ranking_signal = bool(_num(
+        metrics.get("adp_affects_candidate_ranking",
+                    debug.get("adp_affects_candidate_ranking",
+                              metrics.get("corridor_rank_changed_count", 0))), 0))
+    control_signal = bool(_num(
+        metrics.get("adp_affects_control",
+                    debug.get("adp_affects_control",
+                              metrics.get("arm_dls_adp_used", 0))), 0))
+    role = adp_role_from_runtime(
+        adp_enabled, learning_enabled, influence_enabled,
+        effective_lambda=effective_lambda,
+        ranking_contribution=ranking_signal,
+        control_contribution=control_signal)
+    affects_ranking = role in (
+        "ranking_modifier", "ranking_and_control_modifier")
+    affects_control = role in (
+        "control_modifier", "ranking_and_control_modifier")
     set_adp(
         trace,
-        bool(_num(metrics.get("adp_enabled"), 0) or debug.get("adp_used", 0)),
+        adp_enabled,
         role,
         affects_candidate_ranking=affects_ranking,
         affects_control=affects_control)
