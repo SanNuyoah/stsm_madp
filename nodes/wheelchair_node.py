@@ -781,6 +781,7 @@ class WheelchairNode:
             context={
                 "dist_to_goal": dist_to_goal,
                 "risk_ahead": risk_ahead,
+                "obstacle_ahead": False,
                 "near_narrow_passage": near_narrow,
                 "near_critical_point": near_critical,
             }, config=self.task_semantics_config)
@@ -810,6 +811,7 @@ class WheelchairNode:
             "progress": context.get("progress", None),
             "dist_to_goal": context.get("dist_to_goal", None),
             "risk_ahead": context.get("risk_ahead", None),
+            "obstacle_ahead": bool(context.get("obstacle_ahead", False)),
             "near_narrow_passage": bool(context.get(
                 "near_narrow_passage", False)),
             "near_critical_point": bool(context.get(

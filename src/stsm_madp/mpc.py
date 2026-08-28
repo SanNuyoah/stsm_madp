@@ -3567,6 +3567,7 @@ def _task_state_diagnostics_payload(diag, rows, rollout_rows,
             record["progress"] = record.get("progress", None)
             record["dist_to_goal"] = record.get("dist_to_goal", None)
             record["risk_ahead"] = record.get("risk_ahead", None)
+            record["obstacle_ahead"] = bool(record.get("obstacle_ahead", False))
             record["near_narrow_passage"] = bool(record.get(
                 "near_narrow_passage", False))
             record["near_critical_point"] = bool(record.get(

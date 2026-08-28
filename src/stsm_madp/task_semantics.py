@@ -96,7 +96,7 @@ def topology_route_class(corridor, start=None, goal=None):
 def build_task_context(profile, task_state, state_trigger,
                        progress=None, dist_to_goal=None,
                        risk_ahead=None, near_narrow_passage=False,
-                       near_critical_point=False,
+                       near_critical_point=False, obstacle_ahead=False,
                        interaction_target=None):
     """Return the lightweight, serializable context shared with risk models."""
     def _optional_float(value):
@@ -113,6 +113,7 @@ def build_task_context(profile, task_state, state_trigger,
         "progress": _optional_float(progress),
         "dist_to_goal": _optional_float(dist_to_goal),
         "risk_ahead": _optional_float(risk_ahead),
+        "obstacle_ahead": bool(obstacle_ahead),
         "near_narrow_passage": bool(near_narrow_passage),
         "near_critical_point": bool(near_critical_point),
         "interaction_target": interaction_target,
@@ -160,6 +161,7 @@ def infer_task_context(profile, task_mode=None, phase=None, progress=0.0,
         dist_to_goal = context.get("dist_to_goal", None)
         near_narrow = bool(context.get("near_narrow_passage", False))
         near_critical = bool(context.get("near_critical_point", False))
+        obstacle_ahead = bool(context.get("obstacle_ahead", False))
         try:
             risk_ahead = float(risk_ahead)
         except (TypeError, ValueError):
@@ -180,6 +182,9 @@ def infer_task_context(profile, task_mode=None, phase=None, progress=0.0,
                 risk_ahead >= avoiding_threshold:
             state = "avoiding"
             trigger = "social_risk_ahead"
+        elif obstacle_ahead:
+            state = "avoiding"
+            trigger = "obstacle_ahead"
         elif near_narrow or near_critical:
             state = "passing"
             trigger = ("narrow_passage" if near_narrow else
@@ -224,6 +229,7 @@ def infer_task_context(profile, task_mode=None, phase=None, progress=0.0,
         profile, state, trigger, progress=progress,
         dist_to_goal=context.get("dist_to_goal", None),
         risk_ahead=context.get("risk_ahead", None),
+        obstacle_ahead=context.get("obstacle_ahead", False),
         near_narrow_passage=context.get("near_narrow_passage", False),
         near_critical_point=context.get("near_critical_point", False),
         interaction_target=context.get("interaction_target", None)))

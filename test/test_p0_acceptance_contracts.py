@@ -149,6 +149,11 @@ def test_wheelchair_task_context_prefers_events_over_progress_fallback():
         context={"risk_ahead": 2.0, "dist_to_goal": 0.3}, config=cfg)
     assert avoiding["task_state"] == "avoiding"
     assert avoiding["state_trigger"] == "social_risk_ahead"
+    obstacle = infer_task_context(
+        "wheelchair", progress=0.1,
+        context={"obstacle_ahead": True}, config=cfg)
+    assert obstacle["task_state"] == "avoiding"
+    assert obstacle["state_trigger"] == "obstacle_ahead"
     passing = infer_task_context(
         "wheelchair", progress=0.2,
         context={"near_narrow_passage": True}, config=cfg)
