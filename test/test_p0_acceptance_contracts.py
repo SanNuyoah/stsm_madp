@@ -28,6 +28,7 @@ from stsm_madp.mpc import ArmMPC, WheelchairMPC, run_mpc_tracking
 from stsm_madp.mpc import build_mpc_constraint_inputs
 from stsm_madp.mpc import audit_reference_safety
 from stsm_madp.mpc import _phase_constraint_diagnostics_payload
+from stsm_madp.mpc import _task_state_diagnostics_payload
 from stsm_madp.mpc import evaluate_executed_trajectory
 from stsm_madp.mpc import wheelchair_nonholonomic_execution_profile
 from stsm_madp.safety_evaluator import SafetyEvaluator
@@ -196,6 +197,10 @@ def test_continuous_direction_is_finite_ordered_and_matches_batch():
     assert np.all(np.diff(values) < 0.0)
     assert np.allclose(field.phi_s_batch(points),
                        [field.phi_s(point) for point in points])
+    field.params.direction_model = "legacy_piecewise"
+    legacy = np.array([
+        field.phi_dir(point, field.humans[0]) for point in points])
+    assert np.allclose(legacy, [0.8, 0.8, 0.4, 0.4, 0.4, 1.5, 1.5])
 
 
 def test_task_context_changes_safety_manifold_value_and_margin():
@@ -214,6 +219,65 @@ def test_task_context_changes_safety_manifold_value_and_margin():
     assert avoiding_phi > moving_phi
     assert avoiding_psi > moving_psi
     assert avoiding_margin < moving_margin
+
+
+def test_runtime_task_state_diagnostics_keep_event_context_over_progress():
+    runtime_records = [{
+        "task_state": "moving",
+        "state_trigger": "default_motion",
+        "progress": 0.10,
+        "dist_to_goal": 2.5,
+        "risk_ahead": 0.2,
+        "near_narrow_passage": False,
+        "near_critical_point": False,
+        "effective_social_weights": {"lam_prox": 1.2},
+        "timestamp": 1.0,
+    }, {
+        "task_state": "avoiding",
+        "state_trigger": "social_risk_ahead",
+        "progress": 0.30,
+        "dist_to_goal": 1.8,
+        "risk_ahead": 1.9,
+        "near_narrow_passage": False,
+        "near_critical_point": False,
+        "effective_social_weights": {"lam_prox": 1.5},
+        "timestamp": 2.0,
+    }]
+
+    payload = _task_state_diagnostics_payload(
+        {"robot_type": "wheelchair", "task_mode": "navigation"},
+        [{"progress": 0.75}], [], runtime_records=runtime_records)
+
+    assert payload["source"] == "runtime_task_context"
+    assert payload["transitions"] == ["start->moving", "moving->avoiding"]
+    assert payload["records"][-1]["state_trigger"] == "social_risk_ahead"
+    assert payload["records"][-1]["risk_ahead"] == 1.9
+    assert payload["records"][-1]["effective_social_weights"] == {
+        "lam_prox": 1.5}
+
+
+def test_task_semantic_sensitivity_covers_all_wheelchair_states():
+    field = _task_aware_test_field()
+    manifold = SafetyManifold(field, rho=1.0, lam_s=1.0)
+    point = np.array([0.45, 0.10, 0.0])
+    goal = np.array([1.0, 0.0, 0.0])
+    values = {}
+
+    for state in ("moving", "avoiding", "passing", "arriving"):
+        field.set_task_context({"task_state": state})
+        phi_s = field.phi_s(point)
+        values[state] = {
+            "effective_social_weights": field.get_effective_weights(),
+            "phi_s": phi_s,
+            "psi": manifold.psi(point, goal),
+            "safe_margin": manifold.rho - phi_s,
+        }
+
+    assert values["moving"]["phi_s"] != values["avoiding"]["phi_s"]
+    assert values["moving"]["phi_s"] != values["passing"]["phi_s"]
+    assert values["moving"]["psi"] != values["avoiding"]["psi"]
+    assert values["moving"]["safe_margin"] != values["passing"]["safe_margin"]
+    assert field.params.lam_prox == 1.2
 
 
 def test_topology_uses_runtime_manifold_mode_instead_of_hard_default():

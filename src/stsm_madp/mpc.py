@@ -2393,6 +2393,9 @@ def run_mpc_tracking(robot_type, current_state, reference_path,
         result["actual_executed_trajectory_count"] = 0
     result["executed_evidence_required"] = bool(
         cfg.get("executed_evidence_required", False))
+    if cfg.get("task_state_diagnostics", None):
+        result["task_state_diagnostics"] = list(
+            cfg.get("task_state_diagnostics") or [])
     return _apply_success_contract(result, reference_audit)
 
 
@@ -3542,7 +3545,48 @@ def _phase_constraint_diagnostics_payload(diag, rows, rollout_rows):
     }
 
 
-def _task_state_diagnostics_payload(diag, rows, rollout_rows):
+def _task_state_diagnostics_payload(diag, rows, rollout_rows,
+                                    runtime_records=None):
+    runtime_records = list(runtime_records or [])
+    if runtime_records:
+        records = []
+        transitions = []
+        previous = ""
+        for item in runtime_records:
+            record = dict(item or {})
+            state = str(record.get("task_state", ""))
+            transition = str(record.get(
+                "state_transition", "{}->{}".format(
+                    previous or "start", state)))
+            if state != previous:
+                transitions.append(transition)
+            previous = state
+            record["task_state"] = state
+            record["state_trigger"] = str(record.get(
+                "state_trigger", "default_motion"))
+            record["progress"] = record.get("progress", None)
+            record["dist_to_goal"] = record.get("dist_to_goal", None)
+            record["risk_ahead"] = record.get("risk_ahead", None)
+            record["near_narrow_passage"] = bool(record.get(
+                "near_narrow_passage", False))
+            record["near_critical_point"] = bool(record.get(
+                "near_critical_point", False))
+            record["effective_social_weights"] = dict(record.get(
+                "effective_social_weights", {}) or {})
+            record["state_transition"] = transition
+            records.append(record)
+        return {
+            "robot_type": str(diag.get("robot_type", "")),
+            "task_mode": str(diag.get("task_mode", "")),
+            "current_phase": str(records[-1].get("current_phase", "")),
+            "task_state": str(records[-1].get("task_state", "")),
+            "state_trigger": str(records[-1].get("state_trigger", "")),
+            "state_transition": str(records[-1].get("state_transition", "")),
+            "source": "runtime_task_context",
+            "transitions": transitions,
+            "records": records,
+        }
+
     source_rows = list(rollout_rows or rows or [])
     records = []
     transitions = []
@@ -3586,6 +3630,7 @@ def _task_state_diagnostics_payload(diag, rows, rollout_rows):
         "current_phase": str(records[-1].get("current_phase", "")),
         "task_state": str(records[-1].get("task_state", "")),
         "state_transition": str(records[-1].get("state_transition", "")),
+        "source": "synthetic_progress_fallback",
         "transitions": transitions,
         "records": records,
     }
@@ -3771,6 +3816,7 @@ def _write_stsm_alias_json(path, payload):
 def write_mpc_outputs(result, diagnostics_path, breakdown_path, rollout_path=None,
                       executed_path=None):
     diag = dict(result or {})
+    runtime_task_records = list(diag.pop("task_state_diagnostics", []) or [])
     rows = list(diag.pop("cost_breakdown_rows", []) or [])
     rollout_rows = list(diag.pop("rollout_rows", []) or [])
     executed_rows = list(diag.pop("executed_trajectory_rows", []) or [])
@@ -3955,7 +4001,7 @@ def write_mpc_outputs(result, diagnostics_path, breakdown_path, rollout_path=Non
     phase_payload = _phase_constraint_diagnostics_payload(
         diag, executed_rows, rollout_rows)
     task_state_payload = _task_state_diagnostics_payload(
-        diag, rows, rollout_rows)
+        diag, rows, rollout_rows, runtime_records=runtime_task_records)
     task_opt_payload = _mpc_task_optimization_diagnostics_payload(
         diag, rows, rollout_rows)
     task_obj_payload = _mpc_task_objective_diagnostics_payload(

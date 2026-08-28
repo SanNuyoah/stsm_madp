@@ -429,6 +429,7 @@ class WheelchairNode:
         self.social_field_task_aware_enabled = bool(rospy.get_param(
             "~social_field/task_aware_enabled", True))
         self.task_context = {}
+        self.task_context_records = []
         self._task_state_wall = None
         self.mpc_cost_weights = dict(rospy.get_param(
             "~mpc/weights", {}) or {})
@@ -791,12 +792,41 @@ class WheelchairNode:
                 context.get("task_state") != previous.get("task_state") and
                 self._task_state_wall is not None and
                 now_wall - self._task_state_wall < min_hold):
+            context["state_switch_candidate"] = context.get("task_state", "")
+            context["state_switch_candidate_trigger"] = context.get(
+                "state_trigger", "default_motion")
+            context["state_switch_deferred"] = True
+            context["state_switch_defer_reason"] = "min_hold"
             context["task_state"] = previous.get("task_state", "moving")
-            context["state_trigger"] = "min_hold"
+            context["state_trigger"] = previous.get(
+                "state_trigger", "default_motion")
         elif (force or context.get("task_state") != previous.get("task_state")):
             self._task_state_wall = now_wall
         self.task_context = context
         self.field.set_task_context(context)
+        record = {
+            "task_state": str(context.get("task_state", "")),
+            "state_trigger": str(context.get("state_trigger", "")),
+            "progress": context.get("progress", None),
+            "dist_to_goal": context.get("dist_to_goal", None),
+            "risk_ahead": context.get("risk_ahead", None),
+            "near_narrow_passage": bool(context.get(
+                "near_narrow_passage", False)),
+            "near_critical_point": bool(context.get(
+                "near_critical_point", False)),
+            "effective_social_weights": self.field.get_effective_weights(),
+            "timestamp": float(now_wall),
+            "phase": str(context.get("phase", "")),
+            "current_phase": str(context.get("current_phase", "")),
+            "state_transition": "{}->{}".format(
+                previous.get("task_state", "start"),
+                context.get("task_state", "")),
+        }
+        for key in ("state_switch_candidate", "state_switch_candidate_trigger",
+                    "state_switch_deferred", "state_switch_defer_reason"):
+            if key in context:
+                record[key] = context[key]
+        self.task_context_records.append(record)
         return dict(context)
 
     def _odom_cb(self, msg):
@@ -4597,6 +4627,7 @@ class WheelchairNode:
                 "task_config": self.task_config,
                 "task_weight": self.task_weight,
                 "task_context": dict(self.task_context),
+                "task_state_diagnostics": list(self.task_context_records),
                 "effective_social_weights": self.field.get_effective_weights(),
                 "social_direction_model": self.social_field_direction_model,
                 "weights": self.mpc_cost_weights,
