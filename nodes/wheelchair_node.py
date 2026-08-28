@@ -5942,7 +5942,7 @@ class WheelchairNode:
                     rospy.logerr("[wc] invalid STSM corridor before MPC: %s", exc)
                     break
                 topology_constraint_for_mpc = {}
-            solve_t0 = time.perf_counter()
+            solve_t0 = time.time()
             v, w = self.mpc.solve(
                 self.state, ref, self.field,
                 corridor=corridor, u_prev=self.u_prev,
@@ -5967,8 +5967,8 @@ class WheelchairNode:
                 },
                 topology_constraint=topology_constraint_for_mpc,
                 predictive=bool(not self.baseline))
-            solve_wall_s = time.perf_counter() - solve_t0
-            now_wall = time.perf_counter()
+            solve_wall_s = time.time() - solve_t0
+            now_wall = time.time()
             control_update_interval_s = 0.0
             if self._last_control_update_wall is not None:
                 control_update_interval_s = (
