@@ -35,6 +35,7 @@ from stsm_madp.topology_refinement import (
 from stsm_madp.decision_trace import trace_from_debug, write_trace
 from stsm_madp.topology_diagnostics_writer import write_failed_topology_diagnostics
 from stsm_madp.task_config import resolve_task_mode, resolve_task_weight
+from stsm_madp.task_semantics import infer_task_context
 
 JOINTS = ["elfin_joint%d" % i for i in range(1, 7)]
 
@@ -182,6 +183,8 @@ class HandoverNode:
             "~mpc_handover_diagnostics_out", "")
         self.mpc_reference_records = []
         self.mpc_executed_records = []
+        self.task_context = {}
+        self.task_context_records = []
         self.corridor_evaluation_active = False
         self.task_completed = False
         self.arm_ee_debug_samples = []
@@ -1030,7 +1033,62 @@ class HandoverNode:
                 self.mpc_handover_diagnostics.get(
                     "phase3_enter_count", 0)) + 1
         self.phase_pub.publish(Int32(self.phase))
+        self._update_task_context()
         self._record_debug_state("phase_set")
+
+    def _task_context_phase_name(self):
+        """Map the real handover state-machine phase for diagnostics only."""
+        return {
+            0: "approach",
+            1: "align",
+            2: "handover",
+            3: "hold",
+            4: "return",
+        }.get(int(self.phase), "approach")
+
+    def _update_task_context(self):
+        phase = self._task_context_phase_name()
+        phase_progress = float(np.clip(float(self.phase) / 4.0, 0.0, 1.0))
+        ee = self._ee_pos()
+        target = (
+            self.home_ee_ref if phase == "return" and
+            self.home_ee_ref is not None else self.handover)
+        dist_to_goal = float(np.linalg.norm(
+            np.asarray(ee, float) - np.asarray(target, float)))
+        risk_ahead = float(self.field.phi_s(ee))
+        previous = dict(self.task_context or {})
+        context = infer_task_context(
+            "arm", self.task_mode, phase=phase, progress=phase_progress,
+            context={
+                "dist_to_goal": dist_to_goal,
+                "risk_ahead": risk_ahead,
+                "obstacle_ahead": False,
+                "near_narrow_passage": False,
+                "near_critical_point": False,
+            }, config=self.task_config)
+        self.task_context = context
+        self.field.set_task_context(context)
+        self.task_context_records.append({
+            "task_state": str(context.get("task_state", "")),
+            "state_trigger": str(context.get("state_trigger", "")),
+            "source": "runtime_task_context",
+            "progress": context.get("progress", None),
+            "dist_to_goal": context.get("dist_to_goal", None),
+            "risk_ahead": context.get("risk_ahead", None),
+            "obstacle_ahead": bool(context.get("obstacle_ahead", False)),
+            "near_narrow_passage": bool(context.get(
+                "near_narrow_passage", False)),
+            "near_critical_point": bool(context.get(
+                "near_critical_point", False)),
+            "effective_social_weights": self.field.get_effective_weights(),
+            "timestamp": float(context.get("timestamp", rospy.Time.now().to_sec())),
+            "phase": phase,
+            "current_phase": phase,
+            "state_transition": "{}->{}".format(
+                previous.get("task_state", "start"),
+                context.get("task_state", "")),
+        })
+        return dict(context)
 
     def _phase3_handover_protect_active(self, target):
         if int(self.phase) != 3 or not bool(self.handover_protection_active):
@@ -2997,6 +3055,8 @@ class HandoverNode:
                 "reference_path_count": 0,
             }
             result.update(self._runtime_mpc_diagnostic_fields())
+            result["task_state_diagnostics"] = list(
+                self.task_context_records)
             write_mpc_outputs(result, diag, breakdown)
             return
         ref_points = [
@@ -3050,6 +3110,9 @@ class HandoverNode:
                 "task_mode": self.task_mode,
                 "task_config": self.task_config,
                 "task_weight": self.task_weight,
+                "task_context": dict(self.task_context),
+                "task_state_diagnostics": list(self.task_context_records),
+                "effective_social_weights": self.field.get_effective_weights(),
                 "weights": self.mpc_cost_weights,
                 "phase_cost_weights": self.mpc_phase_cost_weights,
                 "phase_clearance_schedule": self.manifold_phase_config,

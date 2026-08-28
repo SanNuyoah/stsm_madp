@@ -261,6 +261,35 @@ def test_runtime_task_state_diagnostics_keep_event_context_over_progress():
         "lam_prox": 1.5}
 
 
+def test_arm_runtime_task_state_diagnostics_preserve_real_phases():
+    runtime_records = []
+    for index, state in enumerate(
+            ("approach", "align", "handover", "hold", "return")):
+        runtime_records.append({
+            "task_state": state,
+            "state_trigger": "explicit_phase",
+            "progress": 0.0,
+            "dist_to_goal": 1.0 - 0.1 * index,
+            "risk_ahead": 0.2 + 0.1 * index,
+            "obstacle_ahead": False,
+            "near_narrow_passage": False,
+            "near_critical_point": False,
+            "effective_social_weights": {"lam_prox": 1.0},
+            "phase": state,
+            "timestamp": float(index),
+        })
+
+    payload = _task_state_diagnostics_payload(
+        {"robot_type": "arm", "task_mode": "handover"}, [], [],
+        runtime_records=runtime_records)
+
+    assert payload["source"] == "runtime_task_context"
+    assert [record["task_state"] for record in payload["records"]] == [
+        "approach", "align", "handover", "hold", "return"]
+    assert set(record["state_trigger"] for record in payload["records"]) == {
+        "explicit_phase"}
+
+
 def test_task_semantic_sensitivity_covers_all_wheelchair_states():
     field = _task_aware_test_field()
     manifold = SafetyManifold(field, rho=1.0, lam_s=1.0)
