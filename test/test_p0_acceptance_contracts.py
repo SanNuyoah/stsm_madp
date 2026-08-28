@@ -34,6 +34,8 @@ from stsm_madp.mpc import wheelchair_nonholonomic_execution_profile
 from stsm_madp.safety_evaluator import SafetyEvaluator
 from stsm_madp.social_field import (
     HumanState, SemanticAnchor, SocialField, SocialFieldParams)
+from stsm_madp.adp import (
+    ADPCritic, ADPTransitionLearner, save_and_verify_critic)
 from stsm_madp.task_semantics import infer_task_context
 from stsm_madp.topology import TopologicalCorridorPlanner
 from stsm_madp.topology_refinement import _limit_refinement_points
@@ -1411,3 +1413,61 @@ def test_baseline_failure_stage_is_execution_not_refinement():
     with open(os.path.join(ROOT, "nodes", "metrics_node.py"), "r") as handle:
         source = handle.read()
     assert 'if variant_name == "baseline":\n                failure_stage = "execution"' in source
+
+
+def test_adp_terminal_td_target_does_not_bootstrap_next_value():
+    critic = ADPCritic(
+        feature_names=["bias"], theta=[2.0], mean=[0.0], std=[1.0],
+        gamma=0.5)
+    current = {"bias": 1.0}
+
+    nonterminal = critic.update_td_detail(
+        current, 1.0, current, alpha=0.1, terminal=False)
+    terminal = critic.update_td_detail(
+        current, 1.0, current, alpha=0.1, terminal=True)
+
+    assert np.isclose(nonterminal["target"], 2.0)
+    assert np.isclose(nonterminal["td_error"], 0.0)
+    assert np.isclose(terminal["target"], 1.0)
+    assert terminal["td_error"] < 0.0
+
+
+def test_adp_shadow_learning_bounds_updates_and_preserves_seed_file():
+    critic = ADPCritic(feature_names=["bias", "phi_total"], theta=[0.0, 0.0],
+                        mean=[0.0, 0.0], std=[1.0, 1.0], gamma=0.95)
+    learner = ADPTransitionLearner(critic, config={
+        "alpha": 1.0,
+        "td_error_clip": 0.5,
+        "theta_delta_norm_max": 0.05,
+        "min_transition_dt": 0.1,
+    }, robot="wheelchair")
+    learner.observe({"bias": 1.0, "phi_total": 0.0}, 0.0)
+    updated = learner.observe(
+        {"bias": 1.0, "phi_total": 100.0}, 0.2,
+        control_effort=1.0)
+
+    assert updated["status"] == "updated"
+    assert abs(updated["td_error"]) <= 0.5
+    assert updated["theta_delta_norm"] <= 0.05
+    assert learner.diagnostics()["theta_changed"]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "adp_critic_updated.yaml")
+        assert save_and_verify_critic(critic, path)
+        assert np.allclose(critic.theta, ADPCritic.load_yaml(path).theta)
+
+
+def test_adp_shadow_learning_skips_nonfinite_and_honors_disable_flag():
+    invalid = ADPCritic(feature_names=["bias"], theta=[0.0], mean=[np.nan],
+                        std=[1.0])
+    learner = ADPTransitionLearner(invalid)
+    record = learner.observe({"bias": 1.0}, 0.0)
+    assert record["status"] == "skipped"
+    assert record["reason"] == "nonfinite_features"
+
+    critic = ADPCritic(feature_names=["bias"], theta=[1.0], mean=[0.0],
+                        std=[1.0])
+    learner = ADPTransitionLearner(critic, config={"enabled": False})
+    learner.observe({"bias": 1.0}, 0.0)
+    learner.observe({"bias": 1.0}, 1.0, terminal=True)
+    assert np.allclose(critic.theta, [1.0])
+    assert not learner.diagnostics()["decision_influence_enabled"]

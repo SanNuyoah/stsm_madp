@@ -25,7 +25,19 @@ feature_names:
 - ip_phi_mean
 - d_corridor
 - phase_norm
-gamma: 0.97
+gamma: 0.95
+learning:
+  alpha: 0.001
+  decision_influence_enabled: false
+  enabled: true
+  failure_terminal_penalty: 3.0
+  lambda_adp: 0.0
+  min_transition_dt: 0.1
+  risk_scale: 2.0
+  save_every_n_transitions: 50
+  save_updated_critic: true
+  td_error_clip: 5.0
+  theta_delta_norm_max: 0.05
 mean:
 - 0.0
 - 1.5822094504501876

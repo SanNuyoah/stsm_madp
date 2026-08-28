@@ -28,7 +28,9 @@ from stsm_madp.mpc import (
     run_mpc_tracking, write_mpc_outputs)
 from stsm_madp.topology_constraint import write_topology_constraint
 from stsm_madp.safety_gate import SafetyGate, SafetyGateResult
-from stsm_madp.adp import ADPCritic, ADPFeatureBuilder
+from stsm_madp.adp import (
+    ADPCritic, ADPFeatureBuilder, ADPTransitionLearner,
+    save_and_verify_critic)
 from stsm_madp.topology import topology_param_or_auto, topology_profile_defaults
 from stsm_madp.topology_refinement import (
     check_refinement_manifold_validity, refine_topology_path)
@@ -155,6 +157,9 @@ class HandoverNode:
         self.adp_debug = bool(rospy.get_param("~adp_debug", False))
         self.adp_critic = None
         self.adp_features = ADPFeatureBuilder()
+        self.adp_influence_enabled = False
+        self.adp_learning = None
+        self._adp_prev_ee = None
         self.last_adp_value = 0.0
         self.path_adp_info = {
             "path_adp_mean": 0.0,
@@ -390,6 +395,7 @@ class HandoverNode:
         try:
             self.adp_critic = ADPCritic.load_yaml(self.adp_model)
             self.adp_features = ADPFeatureBuilder(self.adp_critic.feature_names)
+            self._configure_adp_learning()
             self.adp_status_pub.publish(String(
                 "arm ADP loaded: %s" % self.adp_critic.critic_version))
             rospy.loginfo("[handover][adp] loaded %s (%s)",
@@ -400,6 +406,90 @@ class HandoverNode:
             self.adp_status_pub.publish(String("arm ADP disabled: %s" % exc))
             rospy.logwarn("[handover][adp] cannot load %s: %s",
                           self.adp_model, exc)
+
+    def _configure_adp_learning(self):
+        config = dict(self.adp_critic.learning_config or {})
+        for key in ("enabled", "decision_influence_enabled", "alpha",
+                    "td_error_clip", "theta_delta_norm_max",
+                    "min_transition_dt", "save_updated_critic",
+                    "save_every_n_transitions", "risk_scale",
+                    "failure_terminal_penalty"):
+            param = "~adp/" + key
+            if rospy.has_param(param):
+                config[key] = rospy.get_param(param)
+        self.adp_influence_enabled = bool(
+            self.adp_enabled and config.get("decision_influence_enabled", False))
+        config["enabled"] = bool(self.adp_enabled and config.get("enabled", True))
+        self.adp_learning = ADPTransitionLearner(
+            self.adp_critic, config=config, robot="arm")
+        rospy.loginfo(
+            "[handover][adp] learning=%s decision_influence=%s",
+            bool(config["enabled"]), bool(self.adp_influence_enabled))
+
+    def _adp_learning_features(self, ee, gate=None, interest_eval=None,
+                               control=None):
+        gate_info = {
+            "state": gate.state if gate is not None else "NORMAL",
+            "stop": gate.stop if gate is not None else False,
+            "rho_warn": self.gate.rho_warn,
+        }
+        interest_eval = interest_eval or {}
+        risk = {
+            "phi_max": interest_eval.get("phi_max", 0.0),
+            "phi_mean": interest_eval.get("phi_mean", 0.0),
+        }
+        target = (self.home_ee_ref if self._task_context_phase_name() == "return" and
+                  self.home_ee_ref is not None else self.handover)
+        return self.adp_features.build_arm(
+            ee, target, self.field, gate_info=gate_info,
+            interest_risk=risk, phase=self.phase,
+            u=control, prev_ee_pos=self._adp_prev_ee)
+
+    def _record_adp_transition(self, ee, gate=None, interest_eval=None,
+                               control=None, terminal=False):
+        if self.adp_learning is None:
+            return
+        features = self._adp_learning_features(
+            np.asarray(ee, float), gate=gate, interest_eval=interest_eval,
+            control=control)
+        self.adp_learning.observe(
+            features, rospy.Time.now().to_sec(),
+            task_state=self.task_context.get("task_state", ""),
+            corridor_id=str(getattr(self.execution_corridor, "corridor_id", "")),
+            control_effort=float(np.linalg.norm(
+                np.asarray(control if control is not None else [], float))),
+            terminal=terminal, success=bool(self.task_completed),
+            failure_reason=self.stop_reason)
+        self._adp_prev_ee = np.asarray(ee, float).copy()
+
+    def _write_adp_learning_diagnostics(self):
+        if self.adp_learning is None or self.baseline:
+            return
+        base = os.path.dirname(
+            self.mpc_reference_out or self.decision_trace_out or
+            self.mpc_diagnostics_out or "")
+        if not base:
+            return
+        if not os.path.isdir(base):
+            os.makedirs(base)
+        payload = self.adp_learning.diagnostics()
+        payload["critic_source"] = self.adp_model
+        payload["critic_saved"] = False
+        payload["critic_reload_verified"] = False
+        if (payload["learning_enabled"] and
+                bool(self.adp_learning.config.get("save_updated_critic", True))):
+            updated = os.path.join(base, "adp_critic_updated.yaml")
+            try:
+                payload["critic_reload_verified"] = save_and_verify_critic(
+                    self.adp_critic, updated)
+                payload["critic_saved"] = True
+                payload["updated_critic_path"] = updated
+            except Exception as exc:
+                payload["critic_save_error"] = str(exc)
+        path = os.path.join(base, "adp_learning_diagnostics.json")
+        with open(path, "w") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+        rospy.loginfo("[handover][adp] wrote learning diagnostics %s", path)
 
     def _build_scene(self):
         p = self.scene.get("person", {})
@@ -962,7 +1052,7 @@ class HandoverNode:
 
     def _adp_scale(self, value):
         if (not self.adp_post_scale_enabled or
-                not self.adp_enabled or self.adp_critic is None):
+                not self.adp_influence_enabled or self.adp_critic is None):
             return 1.0
         clipped = max(0.0, min(float(value), self.adp_critic.clip_value))
         scale = 1.0 / (1.0 + self.lambda_adp * clipped)
@@ -1320,7 +1410,8 @@ class HandoverNode:
                     getattr(corr, "final_reference_source", "refined_waypoints"))
                 dbg["final_path_source"] = "Morse->Candidate->Ranking->Refinement->MPC"
                 dbg["adp_role"] = (
-                    "control_modifier" if self.adp_enabled else "disabled")
+                    "control_modifier" if self.adp_influence_enabled else
+                    ("shadow_learning" if self.adp_enabled else "disabled"))
                 for item in dbg.get("candidate_corridors", []):
                     if str(item.get("corridor_id", "")) == selected_id:
                         item["selected"] = True
@@ -1427,7 +1518,8 @@ class HandoverNode:
             else "selected_candidate_waypoints"))
         dbg["mpc_reference_source"] = reference_source
         dbg["final_path_source"] = "Morse->Candidate->Ranking->Refinement->MPC"
-        dbg["adp_role"] = "control_modifier" if self.adp_enabled else "disabled"
+        dbg["adp_role"] = "control_modifier" if self.adp_influence_enabled else (
+            "shadow_learning" if self.adp_enabled else "disabled")
         for item in dbg.get("candidate_corridors", []):
             selected = str(item.get("corridor_id", "")) == execution_id
             item["selected"] = bool(selected)
@@ -1529,10 +1621,10 @@ class HandoverNode:
             nominal, self.field, corridor=corr,
             lam_social=0.10, lam_smooth=0.18 + 0.08 * difficulty,
             iters=80,
-            critic=self.adp_critic if self.adp_enabled else None,
+            critic=self.adp_critic if self.adp_influence_enabled else None,
             feature_builder=self.adp_features,
             lambda_adp_path=(
-                self.lambda_adp_path if self.adp_enabled else 0.0),
+                self.lambda_adp_path if self.adp_influence_enabled else 0.0),
             feature_context=feature_context,
             protected_indices=protected_indices)
         deformed_length = path_length(path)
@@ -2169,7 +2261,8 @@ class HandoverNode:
                 else "selected_candidate_waypoints"))
             dbg["final_path_source"] = "Morse->Candidate->Ranking->Refinement->MPC"
             dbg["adp_role"] = (
-                "control_modifier" if self.adp_enabled else "disabled")
+                    "control_modifier" if self.adp_influence_enabled else
+                    ("shadow_learning" if self.adp_enabled else "disabled"))
             for item in dbg.get("candidate_corridors", []):
                 cid = str(item.get("corridor_id", item.get("label", "")))
                 match = cid == selected_id
@@ -2471,7 +2564,7 @@ class HandoverNode:
                                 v_cap=v_cap, ee_pos=ee, dt=dt,
                                 critic=(
                                     self.adp_critic
-                                    if self.adp_enabled else None),
+                                    if self.adp_influence_enabled else None),
                                 feature_builder=self.adp_features,
                                 field=self.field,
                                 gate_info={
@@ -2484,7 +2577,7 @@ class HandoverNode:
                                 phase=phase_name,
                                 lambda_adp_arm=(
                                     self.lambda_adp_arm
-                                    if self.adp_enabled else 0.0),
+                                    if self.adp_influence_enabled else 0.0),
                                 adp_grad_eps=self.adp_grad_eps,
                                 adp_descent_gain=self.adp_descent_gain,
                                 solver_mode=self.adp_solver_mode,
@@ -2537,7 +2630,7 @@ class HandoverNode:
                 float(self.mpc.last_adp_grad_norm),
                 float(self.mpc.last_adp_soft_cost),
                 float(self.mpc.last_v_adp_alignment),
-                1.0 if self.adp_enabled else 0.0,
+                1.0 if self.adp_influence_enabled else 0.0,
                 float(self.mpc.last_dls_adp_used),
                 float(self.mpc.last_qp_used),
                 float(self.mpc.solve_success_count),
@@ -2562,6 +2655,9 @@ class HandoverNode:
                 self.mpc.last_adp_soft_cost,
                 self.mpc.last_v_adp_alignment)
             self._send_joint(q + dq * dt, dt * 1.5)
+            self._record_adp_transition(
+                ee, gate=gate, interest_eval=interest_eval,
+                control=previous_dq)
             previous_dq = np.asarray(dq, float).copy()
             steps += 1
             rate.sleep()
@@ -3169,7 +3265,7 @@ class HandoverNode:
     def _runtime_metrics_for_trace(self):
         corr = self.execution_corridor
         affects_control = bool(
-            self.adp_enabled and (
+            self.adp_influence_enabled and (
                 float(getattr(self.mpc, "last_dls_adp_used", 0.0)) > 0.5 or
                 float(getattr(self.mpc, "last_v_des_delta_norm", 0.0)) > 1e-9))
         return {
@@ -3178,7 +3274,7 @@ class HandoverNode:
             "topology_fallback_used": 0,
             "adp_enabled": 1 if self.adp_enabled else 0,
             "adp_role": "control_modifier" if affects_control else (
-                "evaluation_only" if self.adp_enabled else "disabled"),
+                "shadow_learning" if self.adp_enabled else "disabled"),
             "corridor_rank_changed_count": 0,
             "arm_dls_adp_used": 1 if affects_control else 0,
             "v_des_delta_norm": float(getattr(self.mpc, "last_v_des_delta_norm", 0.0)),
@@ -3272,7 +3368,10 @@ class HandoverNode:
             return False
 
     def _log_done(self):
+        self._record_adp_transition(
+            self._ee_pos(), control=np.zeros(6), terminal=True)
         self._write_runtime_evidence()
+        self._write_adp_learning_diagnostics()
         rospy.loginfo(
             "Arm solver summary: calls=%d, success=%d, fallback=%d, status=%s",
             self.mpc.solve_count,

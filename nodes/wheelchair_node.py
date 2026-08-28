@@ -30,7 +30,9 @@ from stsm_madp.mpc import (
 from stsm_madp.topology_constraint import (
     build_topology_constraint, write_topology_constraint)
 from stsm_madp.safety_gate import SafetyGate, SafetyGateResult
-from stsm_madp.adp import ADPCritic, ADPFeatureBuilder
+from stsm_madp.adp import (
+    ADPCritic, ADPFeatureBuilder, ADPTransitionLearner,
+    save_and_verify_critic)
 from stsm_madp.topology import topology_param_or_auto, topology_profile_defaults
 from stsm_madp.topology_candidate_generator import (
     recover_candidate_corridor_feasibility)
@@ -264,6 +266,9 @@ class WheelchairNode:
         self.adp_debug = bool(rospy.get_param("~adp_debug", False))
         self.adp_critic = None
         self.adp_features = ADPFeatureBuilder()
+        self.adp_influence_enabled = False
+        self.adp_learning = None
+        self._adp_prev_pose = None
         self.last_adp_value = 0.0
         self.selected_corridor = None
         self.execution_corridor = None
@@ -608,6 +613,7 @@ class WheelchairNode:
         try:
             self.adp_critic = ADPCritic.load_yaml(self.adp_model)
             self.adp_features = ADPFeatureBuilder(self.adp_critic.feature_names)
+            self._configure_adp_learning()
             self.adp_status_pub.publish(String(
                 "wheelchair ADP loaded: %s" % self.adp_critic.critic_version))
             rospy.loginfo("[wc][adp] loaded %s (%s)",
@@ -619,6 +625,101 @@ class WheelchairNode:
                 "wheelchair ADP disabled: %s" % exc))
             rospy.logwarn("[wc][adp] cannot load %s: %s",
                           self.adp_model, exc)
+
+    def _configure_adp_learning(self):
+        config = dict(self.adp_critic.learning_config or {})
+        for key in ("enabled", "decision_influence_enabled", "alpha",
+                    "td_error_clip", "theta_delta_norm_max",
+                    "min_transition_dt", "save_updated_critic",
+                    "save_every_n_transitions", "risk_scale",
+                    "failure_terminal_penalty"):
+            param = "~adp/" + key
+            if rospy.has_param(param):
+                config[key] = rospy.get_param(param)
+        self.adp_influence_enabled = bool(
+            self.adp_enabled and config.get("decision_influence_enabled", False))
+        config["enabled"] = bool(self.adp_enabled and config.get("enabled", True))
+        self.adp_learning = ADPTransitionLearner(
+            self.adp_critic, config=config, robot="wheelchair")
+        rospy.loginfo(
+            "[wc][adp] learning=%s decision_influence=%s",
+            bool(config["enabled"]), bool(self.adp_influence_enabled))
+
+    def _adp_learning_features(self, gate=None, interest_eval=None,
+                               corridor=None, control=None):
+        if self.state is None:
+            return None
+        gate = gate or self._runtime_gate
+        gate_info = {
+            "state": gate.state if gate is not None else "NORMAL",
+            "stop": gate.stop if gate is not None else False,
+            "rho_warn": self.gate.rho_warn,
+        }
+        interest_eval = interest_eval or self._runtime_interest_eval or {}
+        risk = {
+            "phi_max": interest_eval.get("phi_max", interest_eval.get("risk_gate", 0.0)),
+            "phi_mean": interest_eval.get("phi_mean", 0.0),
+        }
+        return self.adp_features.build_wheelchair(
+            self.state, self.goal, self.field, gate_info=gate_info,
+            interest_risk=risk, corridor=corridor,
+            u=self.u_prev if control is None else control,
+            prev_pose2d=self._adp_prev_pose)
+
+    def _record_adp_transition(self, gate=None, interest_eval=None,
+                               corridor=None, terminal=False):
+        if self.adp_learning is None:
+            return
+        features = self._adp_learning_features(
+            gate=gate, interest_eval=interest_eval, corridor=corridor)
+        if features is None:
+            return
+        tube_violation = 0.0
+        if corridor is not None:
+            try:
+                _, tube_distance = corridor.project(
+                    np.array([self.state[0], self.state[1], 0.0]))
+                tube_violation = max(0.0, float(tube_distance) - float(corridor.radius))
+            except Exception:
+                pass
+        self.adp_learning.observe(
+            features, time.time(),
+            task_state=self.task_context.get("task_state", ""),
+            corridor_id=self._corridor_id(corridor),
+            control_effort=float(np.linalg.norm(self.u_prev)),
+            tube_violation=tube_violation,
+            terminal=terminal, success=bool(self.task_completed),
+            failure_reason=self.stop_reason)
+        self._adp_prev_pose = np.asarray(self.state, float).copy()
+
+    def _write_adp_learning_diagnostics(self):
+        if self.adp_learning is None or self.baseline:
+            return
+        base = os.path.dirname(
+            self.decision_trace_out or self.mpc_reference_out or
+            self.mpc_diagnostics_out or "")
+        if not base:
+            return
+        if not os.path.isdir(base):
+            os.makedirs(base)
+        payload = self.adp_learning.diagnostics()
+        payload["critic_source"] = self.adp_model
+        payload["critic_saved"] = False
+        payload["critic_reload_verified"] = False
+        if (payload["learning_enabled"] and
+                bool(self.adp_learning.config.get("save_updated_critic", True))):
+            updated = os.path.join(base, "adp_critic_updated.yaml")
+            try:
+                payload["critic_reload_verified"] = save_and_verify_critic(
+                    self.adp_critic, updated)
+                payload["critic_saved"] = True
+                payload["updated_critic_path"] = updated
+            except Exception as exc:
+                payload["critic_save_error"] = str(exc)
+        path = os.path.join(base, "adp_learning_diagnostics.json")
+        with open(path, "w") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+        rospy.loginfo("[wc][adp] wrote learning diagnostics %s", path)
 
     def _reset_model_pose(self):
         if not self.reset_on_start:
@@ -1467,11 +1568,11 @@ class WheelchairNode:
                     neighbor_k=self.topology_neighbor_k,
                     k=self.topology_k_paths,
                     max_graph_nodes=self.topology_max_graph_nodes,
-                    critic=self.adp_critic if self.adp_enabled else None,
+                    critic=self.adp_critic if self.adp_influence_enabled else None,
                     feature_builder=self.adp_features,
                     lambda_adp=(
                         self.lambda_adp_corridor
-                        if self.adp_enabled else 0.0),
+                        if self.adp_influence_enabled else 0.0),
                     feature_context=feature_context,
                     interest_config=interest_config,
                     topology_profile=self.topology_profile,
@@ -3184,7 +3285,7 @@ class WheelchairNode:
             "ranking_modifier"
             if any(float(getattr(c, "rank_base", 0)) != float(getattr(c, "rank_total", 0))
                    for c in list(corrs or []))
-            else ("evaluation_only" if self.adp_enabled else "disabled"))
+            else ("shadow_learning" if self.adp_enabled else "disabled"))
         if selected is not None:
             dbg["selected_corridor_label"] = selected_id
             dbg["selected_corridor_id"] = selected_id
@@ -3957,10 +4058,10 @@ class WheelchairNode:
             v, w = self.mpc.solve(
                 self.state, ref, self.field,
                 corridor=candidate, u_prev=self.u_prev,
-                critic=self.adp_critic if self.adp_enabled else None,
+                critic=self.adp_critic if self.adp_influence_enabled else None,
                 feature_builder=self.adp_features,
                 lambda_adp_terminal=(
-                    self.lambda_adp_terminal if self.adp_enabled else 0.0),
+                    self.lambda_adp_terminal if self.adp_influence_enabled else 0.0),
                 goal=self.goal,
                 gate_info={
                     "state": "runtime_switch_precheck",
@@ -3969,7 +4070,7 @@ class WheelchairNode:
                 },
                 interest_risk={},
                 use_adp_terminal=(
-                    self.adp_enabled and self.mpc_use_adp_terminal),
+                    self.adp_influence_enabled and self.mpc_use_adp_terminal),
                 interest_constraints={
                     "enabled": bool(self.interest_enabled),
                     "local_points": self.wc_local_points,
@@ -4201,9 +4302,9 @@ class WheelchairNode:
             np.array([start[0], start[1], 0.0]),
             np.array([self.goal[0], self.goal[1], 0.0]),
             self.bounds, radius=0.4,
-            critic=self.adp_critic if self.adp_enabled else None,
+            critic=self.adp_critic if self.adp_influence_enabled else None,
             feature_builder=self.adp_features,
-            lambda_adp=self.lambda_adp_corridor if self.adp_enabled else 0.0,
+            lambda_adp=self.lambda_adp_corridor if self.adp_influence_enabled else 0.0,
             feature_context={
                 "yaw": self.state[2],
                 "u": self.u_prev,
@@ -4954,7 +5055,7 @@ class WheelchairNode:
             float(getattr(corr, "rank_base", 0)) !=
             float(getattr(corr, "rank_total", 0)))
         affects_control = bool(
-            self.adp_enabled and self.mpc_use_adp_terminal and
+            self.adp_influence_enabled and self.mpc_use_adp_terminal and
             float(getattr(self.mpc, "last_terminal_adp_cost", 0.0)) != 0.0)
         if affects_ranking and affects_control:
             adp_role = "ranking_and_control_modifier"
@@ -4963,7 +5064,7 @@ class WheelchairNode:
         elif affects_control:
             adp_role = "control_modifier"
         else:
-            adp_role = "evaluation_only" if self.adp_enabled else "disabled"
+            adp_role = "shadow_learning" if self.adp_enabled else "disabled"
         return {
             "target": "wheelchair",
             "variant": "stsm" if not self.baseline else "baseline",
@@ -5674,7 +5775,7 @@ class WheelchairNode:
 
     def _adp_scale(self, value):
         if (not self.adp_post_scale_enabled or
-                not self.adp_enabled or self.adp_critic is None):
+                not self.adp_influence_enabled or self.adp_critic is None):
             return 1.0
         clipped = max(0.0, min(float(value), self.adp_critic.clip_value))
         scale = 1.0 / (1.0 + self.lambda_adp * clipped)
@@ -6084,10 +6185,10 @@ class WheelchairNode:
             v, w = self.mpc.solve(
                 self.state, ref, self.field,
                 corridor=corridor, u_prev=self.u_prev,
-                critic=self.adp_critic if self.adp_enabled else None,
+                critic=self.adp_critic if self.adp_influence_enabled else None,
                 feature_builder=self.adp_features,
                 lambda_adp_terminal=(
-                    self.lambda_adp_terminal if self.adp_enabled else 0.0),
+                    self.lambda_adp_terminal if self.adp_influence_enabled else 0.0),
                 goal=self.goal,
                 gate_info={
                     "state": gate.state,
@@ -6096,7 +6197,7 @@ class WheelchairNode:
                 },
                 interest_risk=interest_eval or {},
                 use_adp_terminal=(
-                    self.adp_enabled and self.mpc_use_adp_terminal),
+                    self.adp_influence_enabled and self.mpc_use_adp_terminal),
                 interest_constraints={
                     "enabled": bool(safety_predictive_enabled),
                     "local_points": self.wc_local_points,
@@ -6323,6 +6424,8 @@ class WheelchairNode:
             tw.angular.z = w
             self._set_command_keepalive(v, w, active=(not gate.stop))
             self.cmd_pub.publish(tw)
+            self._record_adp_transition(
+                gate=gate, interest_eval=interest_eval, corridor=corridor)
             rospy.loginfo_throttle(
                 1.0,
                 "[wc] pos=(%.2f, %.2f, %.2f) dist=%.3f cmd=(v=%.3f, w=%.3f)",
@@ -6332,7 +6435,10 @@ class WheelchairNode:
         self._publish_zero_command()
         if keepalive_timer is not None:
             keepalive_timer.shutdown()
+        self._record_adp_transition(corridor=self.execution_corridor,
+                                    terminal=True)
         self._write_runtime_evidence()
+        self._write_adp_learning_diagnostics()
         rospy.loginfo("[wc] done (stop=%s, reason=%s)",
                       self.stop_triggered, self.stop_reason)
 
