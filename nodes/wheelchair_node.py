@@ -47,7 +47,7 @@ from stsm_madp.interest_points import (
     aggregate_point_risks, forbidden_anchor_hit, pose_interest_risk)
 from stsm_madp.task_config import resolve_task_mode, resolve_task_weight
 from stsm_madp.task_semantics import (
-    evaluate_task_cost_breakdown, infer_task_state)
+    evaluate_task_cost_breakdown, infer_task_context, infer_task_state)
 
 def _pt(d):
     return np.array(d, float)
@@ -410,6 +410,26 @@ class WheelchairNode:
             self.task_mode, task_config=self.task_config,
             task_weight=rospy.get_param("~task_weight", {}),
             robot_type="wheelchair")
+        self.task_semantics_config = {
+            "wheelchair": {
+                "arriving_radius": float(rospy.get_param(
+                    "~task_semantics/arriving_radius", 0.80)),
+                "avoiding_risk_threshold": float(rospy.get_param(
+                    "~task_semantics/avoiding_risk_threshold", 1.6)),
+                "progress_fallback_enabled": bool(rospy.get_param(
+                    "~task_semantics/progress_fallback_enabled", True)),
+                "task_state_min_hold_s": float(rospy.get_param(
+                    "~task_semantics/task_state_min_hold_s", 1.0)),
+                "narrow_passage_radius": float(rospy.get_param(
+                    "~task_semantics/narrow_passage_radius", 0.70)),
+            },
+        }
+        self.social_field_direction_model = str(rospy.get_param(
+            "~social_field/direction_model", "continuous")).strip().lower()
+        self.social_field_task_aware_enabled = bool(rospy.get_param(
+            "~social_field/task_aware_enabled", True))
+        self.task_context = {}
+        self._task_state_wall = None
         self.mpc_cost_weights = dict(rospy.get_param(
             "~mpc/weights", {}) or {})
         self.mpc_phase_cost_weights = dict(rospy.get_param(
@@ -644,8 +664,13 @@ class WheelchairNode:
                                weight=1.0, forbidden=True)
         self.field = SocialField(SocialFieldParams(
             lam_prox=1.2, lam_close=1.0, lam_dir=0.5, lam_body=0.0,
-            lam_env=1.5, sigma_env=0.4))
+            lam_env=1.5, sigma_env=0.4,
+            direction_model=("legacy_piecewise" if self.baseline else
+                             self.social_field_direction_model),
+            task_aware_enabled=(self.social_field_task_aware_enabled and
+                                not self.baseline)))
         self.field.set_scene([self.human], [bed, transfer, table])
+        self._update_task_context(phase="moving", force=True)
         self.manifold = SafetyManifold(self.field, rho=2.0, lam_s=1.0)
         self.mpc = WheelchairMPC(
             horizon=int(rospy.get_param("~mpc/horizon", 6)),
@@ -678,6 +703,7 @@ class WheelchairNode:
         self.mpc.execution_speed_floor = self.execution_speed_floor
         self.mpc.lam_execution_speed_floor = (
             self.execution_speed_floor_weight)
+
         self.mpc.lam_ref_progress = self.ref_progress_reward_weight
         self.mpc.final_approach_radius = (
             0.0 if self.baseline else self.final_approach_entry_radius)
@@ -712,6 +738,66 @@ class WheelchairNode:
             enabled=self.interest_gate_enabled)
         self.abort_on_stop = bool(
             rospy.get_param("~safety_gate/abort_on_stop", True))
+
+    def _task_near_topology_segment(self, corridor):
+        if self.state is None or corridor is None:
+            return False, False
+        association = dict(getattr(
+            corridor, "critical_point_association", {}) or {})
+        critical_points = list(association.get("critical_points", []) or [])
+        radius = float(self.task_semantics_config["wheelchair"].get(
+            "narrow_passage_radius", 0.70))
+        near_critical = False
+        near_narrow = False
+        for item in critical_points:
+            try:
+                point = np.asarray(item.get("point", item.get("position")), float)
+            except (TypeError, ValueError):
+                continue
+            if point.size < 2:
+                continue
+            if float(np.linalg.norm(self.state[:2] - point[:2])) > radius:
+                continue
+            near_critical = True
+            if str(item.get("type", item.get("kind", ""))).lower() == "saddle":
+                near_narrow = True
+        return near_narrow, near_critical
+
+    def _update_task_context(self, corridor=None, phase="", risk_ahead=None,
+                             force=False):
+        if corridor is None:
+            corridor = self.execution_corridor or self.selected_corridor
+        if self.state is None:
+            dist_to_goal = float(np.linalg.norm(self.start_pose[:2] - self.goal))
+        else:
+            dist_to_goal = float(np.linalg.norm(self.state[:2] - self.goal))
+        initial_dist = max(
+            float(np.linalg.norm(self.start_pose[:2] - self.goal)), 1e-6)
+        progress = float(np.clip(1.0 - dist_to_goal / initial_dist, 0.0, 1.0))
+        near_narrow, near_critical = self._task_near_topology_segment(corridor)
+        context = infer_task_context(
+            "wheelchair", self.task_mode, phase=phase, progress=progress,
+            context={
+                "dist_to_goal": dist_to_goal,
+                "risk_ahead": risk_ahead,
+                "near_narrow_passage": near_narrow,
+                "near_critical_point": near_critical,
+            }, config=self.task_semantics_config)
+        previous = dict(self.task_context or {})
+        now_wall = time.time()
+        min_hold = float(self.task_semantics_config["wheelchair"].get(
+            "task_state_min_hold_s", 1.0))
+        if (not force and previous and
+                context.get("task_state") != previous.get("task_state") and
+                self._task_state_wall is not None and
+                now_wall - self._task_state_wall < min_hold):
+            context["task_state"] = previous.get("task_state", "moving")
+            context["state_trigger"] = "min_hold"
+        elif (force or context.get("task_state") != previous.get("task_state")):
+            self._task_state_wall = now_wall
+        self.task_context = context
+        self.field.set_task_context(context)
+        return dict(context)
 
     def _odom_cb(self, msg):
         p = msg.pose.pose.position
@@ -1285,6 +1371,7 @@ class WheelchairNode:
 
     def _plan_corridor(self):
         start = self.state[:2]
+        self._update_task_context(phase="moving", force=True)
         if self.baseline:
             if self.baseline_type == "mpc_safe":
                 corr = self._wheelchair_safe_fallback_corridor(
@@ -4509,6 +4596,9 @@ class WheelchairNode:
                 "task_mode": self.task_mode,
                 "task_config": self.task_config,
                 "task_weight": self.task_weight,
+                "task_context": dict(self.task_context),
+                "effective_social_weights": self.field.get_effective_weights(),
+                "social_direction_model": self.social_field_direction_model,
                 "weights": self.mpc_cost_weights,
                 "phase_cost_weights": self.mpc_phase_cost_weights,
                 "executed_trajectory": [
@@ -4531,6 +4621,13 @@ class WheelchairNode:
             if self.mpc_runtime_records else {})
         result.update({
             "selected_corridor_label": self._corridor_label(corridor),
+            "task_state": str(self.task_context.get("task_state", "")),
+            "task_state_trigger": str(self.task_context.get("state_trigger", "")),
+            "task_progress": self.task_context.get("progress", None),
+            "task_dist_to_goal": self.task_context.get("dist_to_goal", None),
+            "task_risk_ahead": self.task_context.get("risk_ahead", None),
+            "effective_social_weights": self.field.get_effective_weights(),
+            "social_direction_model": self.social_field_direction_model,
             "runtime_solver_status": str(runtime_last.get(
                 "solver_status", self.mpc.last_solver_status)),
             "runtime_horizon": int(self.mpc.N),
@@ -5762,6 +5859,14 @@ class WheelchairNode:
             self._publish_metrics()
             z = np.array([self.state[0], self.state[1], 0.0])
             vel = self.world_vel if self.velocity_valid else np.zeros(3)
+            ahead = np.array([
+                self.state[0] + 0.35 * np.cos(self.state[2]),
+                self.state[1] + 0.35 * np.sin(self.state[2]), 0.0])
+            prior_risk = max(
+                float(self.field.phi_s(z, vel)),
+                float(self.field.phi_s(ahead, vel)))
+            self._update_task_context(
+                corridor=corridor, risk_ahead=prior_risk)
             center_risk = self.field.phi_s(z, vel)
             center_gate = self.gate.evaluate(center_risk)
             safety_predictive_enabled = (

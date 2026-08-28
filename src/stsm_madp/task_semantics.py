@@ -93,16 +93,46 @@ def topology_route_class(corridor, start=None, goal=None):
     return "left_bypass" if mean_offset > 0.0 else "right_bypass"
 
 
-def infer_task_state(profile, task_mode=None, phase=None, progress=0.0,
-                     context=None):
+def build_task_context(profile, task_state, state_trigger,
+                       progress=None, dist_to_goal=None,
+                       risk_ahead=None, near_narrow_passage=False,
+                       near_critical_point=False,
+                       interaction_target=None):
+    """Return the lightweight, serializable context shared with risk models."""
+    def _optional_float(value):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return None
+        return value if np.isfinite(value) else None
+
+    return {
+        "profile": str(profile or "generic").strip().lower(),
+        "task_state": str(task_state or "generic").strip().lower(),
+        "state_trigger": str(state_trigger or "default_motion"),
+        "progress": _optional_float(progress),
+        "dist_to_goal": _optional_float(dist_to_goal),
+        "risk_ahead": _optional_float(risk_ahead),
+        "near_narrow_passage": bool(near_narrow_passage),
+        "near_critical_point": bool(near_critical_point),
+        "interaction_target": interaction_target,
+    }
+
+
+def infer_task_context(profile, task_mode=None, phase=None, progress=0.0,
+                       context=None, config=None):
+    """Infer task semantics with event evidence ahead of progress fallback."""
     profile = str(profile or "generic").strip().lower()
     mode = str(task_mode or "").strip().lower()
     phase = str(phase or "").strip().lower()
+    context = dict(context or {})
+    config = dict(config or {})
     try:
         progress = float(progress or 0.0)
     except (TypeError, ValueError):
         progress = 0.0
     progress = float(np.clip(progress, 0.0, 1.0))
+    trigger = "default_motion"
     if profile == "arm":
         if phase == "return" or progress >= 0.80:
             state = "return"
@@ -116,39 +146,96 @@ def infer_task_state(profile, task_mode=None, phase=None, progress=0.0,
             state = "approach"
         if mode == "holding":
             state = "hold"
+        trigger = "explicit_phase" if phase else "progress_fallback"
     elif profile == "wheelchair":
-        if phase in ("arriving", "arrival", "goal_reaching"):
-            state = "arriving"
-        elif phase in ("passing", "narrow_passage", "passage"):
-            state = "passing"
-        elif phase in ("avoiding", "obstacle_avoidance", "avoidance"):
+        wheelchair_cfg = dict(config.get("wheelchair", config) or {})
+        explicit_states = set((
+            "moving", "avoiding", "passing", "arriving", "arrival",
+            "goal_reaching", "narrow_passage", "passage",
+            "obstacle_avoidance", "avoidance"))
+        arriving_radius = float(wheelchair_cfg.get("arriving_radius", 0.80))
+        avoiding_threshold = float(wheelchair_cfg.get(
+            "avoiding_risk_threshold", 1.6))
+        risk_ahead = context.get("risk_ahead", None)
+        dist_to_goal = context.get("dist_to_goal", None)
+        near_narrow = bool(context.get("near_narrow_passage", False))
+        near_critical = bool(context.get("near_critical_point", False))
+        try:
+            risk_ahead = float(risk_ahead)
+        except (TypeError, ValueError):
+            risk_ahead = None
+        try:
+            dist_to_goal = float(dist_to_goal)
+        except (TypeError, ValueError):
+            dist_to_goal = None
+
+        if phase in explicit_states:
+            state = {
+                "arrival": "arriving", "goal_reaching": "arriving",
+                "narrow_passage": "passing", "passage": "passing",
+                "obstacle_avoidance": "avoiding", "avoidance": "avoiding",
+            }.get(phase, phase)
+            trigger = "explicit_phase"
+        elif risk_ahead is not None and np.isfinite(risk_ahead) and \
+                risk_ahead >= avoiding_threshold:
             state = "avoiding"
-        elif progress >= 0.75:
-            state = "arriving"
-        elif progress >= 0.50:
+            trigger = "social_risk_ahead"
+        elif near_narrow or near_critical:
             state = "passing"
-        elif progress >= 0.25:
-            state = "avoiding"
+            trigger = ("narrow_passage" if near_narrow else
+                       "topology_critical_segment")
+        elif dist_to_goal is not None and np.isfinite(dist_to_goal) and \
+                dist_to_goal < arriving_radius:
+            state = "arriving"
+            trigger = "goal_proximity"
+        elif bool(wheelchair_cfg.get("progress_fallback_enabled", True)):
+            if progress >= 0.75:
+                state = "arriving"
+            elif progress >= 0.50:
+                state = "passing"
+            elif progress >= 0.25:
+                state = "avoiding"
+            else:
+                state = "moving"
+            trigger = "progress_fallback"
         else:
             state = "moving"
+            trigger = "default_motion"
     else:
         state = mode or "generic"
+        trigger = "explicit_mode" if mode else "default"
     current_phase = phase or (
         "navigation" if profile == "wheelchair" else
         "return" if state == "return" else
         "handover" if state in ("handover", "hold") else
         "approach")
-    return {
+    result = {
         "task_mode": mode or ("handover" if profile == "arm" else "navigation"),
         "task_state": state,
         "phase": current_phase,
         "current_phase": current_phase,
         "progress": float(progress),
-        "state_transition": str((context or {}).get(
+        "state_transition": str(context.get(
             "state_transition",
             "{}->{}".format(mode or "task", state))),
-        "timestamp": float((context or {}).get("timestamp", time.time())),
+        "timestamp": float(context.get("timestamp", time.time())),
     }
+    result.update(build_task_context(
+        profile, state, trigger, progress=progress,
+        dist_to_goal=context.get("dist_to_goal", None),
+        risk_ahead=context.get("risk_ahead", None),
+        near_narrow_passage=context.get("near_narrow_passage", False),
+        near_critical_point=context.get("near_critical_point", False),
+        interaction_target=context.get("interaction_target", None)))
+    return result
+
+
+def infer_task_state(profile, task_mode=None, phase=None, progress=0.0,
+                     context=None, config=None):
+    """Backward-compatible task-state entry point."""
+    return infer_task_context(
+        profile, task_mode=task_mode, phase=phase, progress=progress,
+        context=context, config=config)
 
 
 def evaluate_task_cost_breakdown(corridor, profile, start=None, goal=None,

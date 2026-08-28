@@ -9,6 +9,11 @@
   <arg name="max_runtime_s" default="180.0"/>
   <arg name="command_hold_s" default="0.6"/>
   <arg name="mpc_solve_deadline_s" default="0.6"/>
+  <arg name="task_semantics_arriving_radius" default="0.80"/>
+  <arg name="task_semantics_avoiding_risk_threshold" default="1.6"/>
+  <arg name="task_semantics_min_hold_s" default="1.0"/>
+  <arg name="social_field_task_aware_enabled" default="true"/>
+  <arg name="social_field_direction_model" default="continuous"/>
   <arg name="no_progress_timeout_s" default="45.0"/>
   <arg name="no_progress_epsilon" default="0.02"/>
   <arg name="no_progress_replan_time" default="5.0"/>
@@ -127,6 +132,11 @@
     <param name="max_runtime_s" value="$(arg max_runtime_s)"/>
     <param name="command_hold_s" value="$(arg command_hold_s)"/>
     <param name="mpc_solve_deadline_s" value="$(arg mpc_solve_deadline_s)"/>
+    <param name="task_semantics/arriving_radius" value="$(arg task_semantics_arriving_radius)"/>
+    <param name="task_semantics/avoiding_risk_threshold" value="$(arg task_semantics_avoiding_risk_threshold)"/>
+    <param name="task_semantics/task_state_min_hold_s" value="$(arg task_semantics_min_hold_s)"/>
+    <param name="social_field/task_aware_enabled" value="$(arg social_field_task_aware_enabled)"/>
+    <param name="social_field/direction_model" value="$(arg social_field_direction_model)"/>
     <param name="no_progress_timeout_s" value="$(arg no_progress_timeout_s)"/>
     <param name="no_progress_epsilon" value="$(arg no_progress_epsilon)"/>
     <param name="no_progress_replan_time" value="$(arg no_progress_replan_time)"/>

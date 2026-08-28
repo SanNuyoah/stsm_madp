@@ -23,6 +23,7 @@ from stsm_madp.manifold_constraint import (
     distance_to_manifold_boundary,
 )
 from stsm_madp.manifold_constraint_evaluator import ManifoldConstraintEvaluator
+from stsm_madp.manifold import SafetyManifold
 from stsm_madp.mpc import ArmMPC, WheelchairMPC, run_mpc_tracking
 from stsm_madp.mpc import build_mpc_constraint_inputs
 from stsm_madp.mpc import audit_reference_safety
@@ -32,6 +33,7 @@ from stsm_madp.mpc import wheelchair_nonholonomic_execution_profile
 from stsm_madp.safety_evaluator import SafetyEvaluator
 from stsm_madp.social_field import (
     HumanState, SemanticAnchor, SocialField, SocialFieldParams)
+from stsm_madp.task_semantics import infer_task_context
 from stsm_madp.topology import TopologicalCorridorPlanner
 from stsm_madp.topology_refinement import _limit_refinement_points
 from stsm_madp.topology_candidate_generator import (
@@ -132,6 +134,86 @@ def test_social_field_batch_matches_scalar_risk_exactly():
     batched = field.phi_s_batch(points, velocities)
 
     assert np.allclose(batched, scalar, rtol=1e-12, atol=1e-12)
+
+
+def test_wheelchair_task_context_prefers_events_over_progress_fallback():
+    cfg = {"wheelchair": {"arriving_radius": 0.8,
+                           "avoiding_risk_threshold": 1.6,
+                           "progress_fallback_enabled": True}}
+    assert infer_task_context(
+        "wheelchair", progress=0.95,
+        context={"dist_to_goal": 0.3}, config=cfg)["task_state"] == "arriving"
+    avoiding = infer_task_context(
+        "wheelchair", progress=0.9,
+        context={"risk_ahead": 2.0, "dist_to_goal": 0.3}, config=cfg)
+    assert avoiding["task_state"] == "avoiding"
+    assert avoiding["state_trigger"] == "social_risk_ahead"
+    passing = infer_task_context(
+        "wheelchair", progress=0.2,
+        context={"near_narrow_passage": True}, config=cfg)
+    assert passing["task_state"] == "passing"
+    assert passing["state_trigger"] == "narrow_passage"
+    fallback = infer_task_context("wheelchair", progress=0.55, config=cfg)
+    assert fallback["task_state"] == "passing"
+    assert fallback["state_trigger"] == "progress_fallback"
+
+
+def _task_aware_test_field():
+    field = SocialField(SocialFieldParams(
+        lam_prox=1.2, lam_close=1.0, lam_dir=0.5, lam_body=0.0,
+        lam_env=0.0, direction_model="continuous", task_aware_enabled=True))
+    field.set_scene([HumanState(
+        pos=[0.0, 0.0, 0.0], heading=0.0, posture="sitting")], [])
+    return field
+
+
+def test_task_context_changes_social_field_and_can_roll_back_to_base_weights():
+    field = _task_aware_test_field()
+    point = np.array([0.45, 0.10, 0.0])
+    field.set_task_context({"task_state": "moving"})
+    moving_risk = field.phi_s(point)
+    moving_weights = field.get_effective_weights()
+    field.set_task_context({"task_state": "passing"})
+    passing_risk = field.phi_s(point)
+    assert passing_risk != moving_risk
+    assert field.get_effective_weights()["lam_prox"] > moving_weights["lam_prox"]
+
+    field.params.task_aware_enabled = False
+    field.set_task_context({"task_state": "avoiding"})
+    assert field.get_effective_weights() == {
+        "lam_prox": 1.2, "lam_close": 1.0, "lam_dir": 0.5,
+        "lam_body": 0.0, "lam_env": 0.0}
+
+
+def test_continuous_direction_is_finite_ordered_and_matches_batch():
+    field = _task_aware_test_field()
+    angles = np.deg2rad(np.array([0., 30., 60., 90., 120., 150., 180.]))
+    points = np.column_stack((np.cos(angles), np.sin(angles),
+                              np.zeros(len(angles))))
+    values = np.array([field.phi_dir(point, field.humans[0]) for point in points])
+    assert np.all(np.isfinite(values))
+    assert values[0] > values[3] > values[-1]
+    assert np.all(np.diff(values) < 0.0)
+    assert np.allclose(field.phi_s_batch(points),
+                       [field.phi_s(point) for point in points])
+
+
+def test_task_context_changes_safety_manifold_value_and_margin():
+    field = _task_aware_test_field()
+    manifold = SafetyManifold(field, rho=1.0, lam_s=1.0)
+    point = np.array([0.45, 0.10, 0.0])
+    goal = np.array([1.0, 0.0, 0.0])
+    field.set_task_context({"task_state": "moving"})
+    moving_phi = field.phi_s(point)
+    moving_psi = manifold.psi(point, goal)
+    moving_margin = manifold.rho - moving_phi
+    field.set_task_context({"task_state": "avoiding"})
+    avoiding_phi = field.phi_s(point)
+    avoiding_psi = manifold.psi(point, goal)
+    avoiding_margin = manifold.rho - avoiding_phi
+    assert avoiding_phi > moving_phi
+    assert avoiding_psi > moving_psi
+    assert avoiding_margin < moving_margin
 
 
 def test_topology_uses_runtime_manifold_mode_instead_of_hard_default():
