@@ -137,7 +137,7 @@ class HandoverNode:
         self.adp_model = rospy.get_param(
             "~adp_model",
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
-                                         "config", "adp_critic.yaml")))
+                                         "config", "adp_critic_arm_calibrated.yaml")))
         self.lambda_adp = float(rospy.get_param("~lambda_adp", 0.005))
         self.lambda_adp_path = float(rospy.get_param(
             "~lambda_adp_path", self.lambda_adp))
@@ -2643,6 +2643,10 @@ class HandoverNode:
                 float(self.mpc.last_dq_delta_norm),
                 float(self.mpc.last_reject_forbidden_count),
                 float(self.mpc.last_reject_interest_phi_count),
+                1.0 if self.adp_learning is not None and
+                self.adp_learning.config.get("enabled", False) else 0.0,
+                1.0 if self.adp_influence_enabled else 0.0,
+                float(self.lambda_adp_arm if self.adp_influence_enabled else 0.0),
             ]))
             rospy.loginfo_throttle(
                 5.0,

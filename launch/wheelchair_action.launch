@@ -65,7 +65,7 @@
   <arg name="footprint_gate_min_scale" default="0.20"/>
   <arg name="footprint_forbidden_stop_enabled" default="true"/>
   <arg name="adp_enabled" default="true"/>
-  <arg name="adp_model" default="$(find stsm_madp)/config/adp_critic.yaml"/>
+  <arg name="adp_model" default="$(find stsm_madp)/config/adp_critic_wheelchair_calibrated.yaml"/>
   <arg name="lambda_adp" default="0.005"/>
   <arg name="lambda_adp_corridor" default="0.05"/>
   <arg name="lambda_adp_terminal" default="0.0015"/>

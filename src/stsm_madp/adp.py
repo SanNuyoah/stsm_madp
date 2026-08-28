@@ -469,8 +469,10 @@ class ADPTransitionLearner(object):
             failure_penalty=failure_penalty,
             risk_scale=self.config.get("risk_scale", 2.0),
             weights=self.config.get("stage_cost_weights"))
-        value_t = float(self.critic.predict(self.previous_features))
-        value_next = float(self.critic.predict(current))
+        value_t_detail = self.critic.predict_detail(self.previous_features)
+        value_next_detail = self.critic.predict_detail(current)
+        value_t = float(value_t_detail["raw"])
+        value_next = float(value_next_detail["raw"])
         features_t = dict(self.previous_features)
         detail = self.critic.update_td_detail(
             self.previous_features, cost, current,
@@ -487,6 +489,10 @@ class ADPTransitionLearner(object):
             "features_next": current,
             "value_t": value_t,
             "value_next": value_next,
+            "value_t_clipped": float(value_t_detail["clipped"]),
+            "value_next_clipped": float(value_next_detail["clipped"]),
+            "bootstrap_value": (
+                0.0 if terminal else float(self.critic.gamma * value_next)),
         })
         record.update(detail)
         if detail.get("updated", False):
@@ -505,6 +511,33 @@ class ADPTransitionLearner(object):
     def diagnostics(self, max_records=200):
         errors = np.asarray(self.td_errors, float)
         theta_changed = bool(not np.allclose(self.theta_initial, self.critic.theta))
+        updated = [record for record in self.records
+                   if record.get("updated", False)]
+        def stats(name):
+            values = np.asarray([_as_float(record.get(name))
+                                 for record in updated], float)
+            if not len(values):
+                return {"mean": 0.0, "std": 0.0, "p50": 0.0,
+                        "p95": 0.0, "max": 0.0, "min": 0.0}
+            return {
+                "mean": float(np.mean(values)), "std": float(np.std(values)),
+                "p50": float(np.percentile(values, 50)),
+                "p95": float(np.percentile(values, 95)),
+                "max": float(np.max(values)), "min": float(np.min(values)),
+            }
+        raw_errors = np.asarray([
+            _as_float(record.get("raw_td_error")) for record in updated], float)
+        terminal_stats = {}
+        for name, predicate in (("success", lambda row: bool(row.get("success"))),
+                                ("failure", lambda row: not bool(row.get("success")))):
+            values = np.asarray([
+                _as_float(row.get("raw_td_error")) for row in updated
+                if row.get("terminal", False) and predicate(row)], float)
+            terminal_stats[name] = {
+                "count": int(len(values)),
+                "raw_td_error_mean": float(np.mean(values)) if len(values) else 0.0,
+                "raw_td_error_max_abs": float(np.max(np.abs(values))) if len(values) else 0.0,
+            }
         return {
             "robot": self.robot,
             "learning_enabled": bool(self.config.get("enabled", True)),
@@ -516,6 +549,19 @@ class ADPTransitionLearner(object):
             "td_error_mean": float(np.mean(errors)) if len(errors) else 0.0,
             "td_error_abs_mean": float(np.mean(np.abs(errors))) if len(errors) else 0.0,
             "td_error_max_abs": float(np.max(np.abs(errors))) if len(errors) else 0.0,
+            "td_clip_count": int(np.sum(np.abs(raw_errors) >= abs(_as_float(
+                self.config.get("td_error_clip"), 5.0)))) if len(raw_errors) else 0,
+            "td_clip_ratio": float(np.mean(np.abs(raw_errors) >= abs(_as_float(
+                self.config.get("td_error_clip"), 5.0)))) if len(raw_errors) else 0.0,
+            "td_scale_audit": {
+                "value_t": stats("value_t"),
+                "stage_cost": stats("stage_cost"),
+                "bootstrap_value": stats("bootstrap_value"),
+                "td_target": stats("target"),
+                "raw_td_error": stats("raw_td_error"),
+                "clipped_td_error": stats("td_error"),
+                "terminal": terminal_stats,
+            },
             "theta_delta_norm_total": float(self.theta_delta_norm_total),
             "theta_changed": theta_changed,
             "critic_version": str(self.critic.critic_version),
@@ -528,6 +574,75 @@ def save_and_verify_critic(critic, path):
     critic.save_yaml(path)
     reloaded = ADPCritic.load_yaml(path)
     return bool(np.allclose(critic.theta, reloaded.theta))
+
+
+def adp_role_from_runtime(adp_enabled, learning_enabled,
+                          decision_influence_enabled,
+                          effective_lambda=0.0,
+                          ranking_contribution=False,
+                          control_contribution=False):
+    """Classify ADP from explicit runtime state, never generic DLS deltas."""
+    if not bool(adp_enabled) or not bool(learning_enabled):
+        return "inactive"
+    if (not bool(decision_influence_enabled) or
+            abs(_as_float(effective_lambda)) <= 1e-12):
+        return "shadow_learning"
+    if bool(ranking_contribution) and bool(control_contribution):
+        return "ranking_and_control_modifier"
+    if bool(ranking_contribution):
+        return "ranking_modifier"
+    if bool(control_contribution):
+        return "control_modifier"
+    return "evaluation_only"
+
+
+def fit_critic_from_transition_records(records, template_critic,
+                                       gamma=None, ridge=1e-4):
+    """Fit a fresh critic to measured online costs-to-go, split at terminals."""
+    episodes = []
+    current = []
+    for record in records or []:
+        if not record.get("updated", False):
+            continue
+        features = record.get("features_t")
+        if not isinstance(features, dict):
+            continue
+        cost = _as_float(record.get("stage_cost"))
+        current.append((dict(features), cost))
+        if bool(record.get("terminal", False)):
+            episodes.append(current)
+            current = []
+    if current:
+        episodes.append(current)
+    if not episodes:
+        raise ValueError("no valid transition records")
+    feature_names = list(template_critic.feature_names)
+    x_all = []
+    target_all = []
+    gamma = float(template_critic.gamma if gamma is None else gamma)
+    for episode in episodes:
+        costs = [item[1] for item in episode]
+        returns = discounted_returns(costs, gamma=gamma)
+        for (features, _cost), value in zip(episode, returns):
+            x_all.append([features.get(name, 0.0) for name in feature_names])
+            target_all.append(float(value))
+    critic = ADPCritic(
+        feature_names=feature_names, gamma=gamma,
+        clip_value=template_critic.clip_value,
+        cost_weights=template_critic.cost_weights,
+        critic_version=str(template_critic.critic_version) + "_calibrated",
+        learning_config=template_critic.learning_config)
+    targets = np.asarray(target_all, float)
+    loss = critic.fit_lstsq(np.asarray(x_all, float), targets, ridge=ridge)
+    return critic, {
+        "sample_count": int(len(targets)),
+        "episode_count": int(len(episodes)),
+        "fit_loss": float(loss),
+        "target_min": float(np.min(targets)),
+        "target_mean": float(np.mean(targets)),
+        "target_p95": float(np.percentile(targets, 95)),
+        "target_max": float(np.max(targets)),
+    }
 
 
 def discounted_returns(costs, gamma=0.97, clip_value=None):

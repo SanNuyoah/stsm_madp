@@ -252,7 +252,7 @@ class WheelchairNode:
         self.adp_model = rospy.get_param(
             "~adp_model",
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
-                                         "config", "adp_critic.yaml")))
+                                         "config", "adp_critic_wheelchair_calibrated.yaml")))
         self.lambda_adp = float(rospy.get_param("~lambda_adp", 0.005))
         self.lambda_adp_corridor = float(rospy.get_param(
             "~lambda_adp_corridor", self.lambda_adp))
@@ -5784,7 +5784,7 @@ class WheelchairNode:
     def _publish_adp_mpc_info(self, corridor):
         corridor = corridor or self.selected_corridor
         if corridor is None:
-            vals = [0.0] * 21
+            vals = [0.0] * 24
         else:
             vals = [
                 float(corridor.base_cost),
@@ -5808,6 +5808,10 @@ class WheelchairNode:
                 float(self.mpc.last_final_approach_used),
                 float(self.mpc.last_reject_forbidden_count),
                 float(self.mpc.last_reject_interest_phi_count),
+                1.0 if self.adp_learning is not None and
+                self.adp_learning.config.get("enabled", False) else 0.0,
+                1.0 if self.adp_influence_enabled else 0.0,
+                float(self.lambda_adp if self.adp_influence_enabled else 0.0),
             ]
         self.adp_mpc_info_pub.publish(Float64MultiArray(data=vals))
 

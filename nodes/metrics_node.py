@@ -9,6 +9,11 @@ import rospy
 from std_msgs.msg import Bool, Float64, Float64MultiArray, Int32, String
 from geometry_msgs.msg import PointStamped
 
+PACKAGE_SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+if PACKAGE_SRC not in sys.path:
+    sys.path.insert(0, PACKAGE_SRC)
+from stsm_madp.adp import adp_role_from_runtime
+
 class MetricsNode:
     def __init__(self):
         rospy.init_node("stsm_metrics")
@@ -380,6 +385,9 @@ class MetricsNode:
             "final_approach_used": "",
             "mpc_reject_forbidden_count": "",
             "mpc_reject_interest_phi_count": "",
+            "adp_learning_enabled": "",
+            "adp_decision_influence_enabled": "",
+            "adp_effective_lambda": "",
         }
         self.path_adp_info = {
             "path_adp_mean": "",
@@ -705,6 +713,8 @@ class MetricsNode:
             "final_approach_used",
             "mpc_reject_forbidden_count",
             "mpc_reject_interest_phi_count",
+            "adp_learning_enabled", "adp_decision_influence_enabled",
+            "adp_effective_lambda",
         ]
         for key, value in zip(keys, list(msg.data)):
             self.latest_adp_mpc_info[key] = float(value)
@@ -738,6 +748,8 @@ class MetricsNode:
             "v_des_raw_norm", "v_des_adp_norm", "v_des_delta_norm",
             "dq_nominal_norm", "dq_adp_norm", "dq_delta_norm",
             "mpc_reject_forbidden_count", "mpc_reject_interest_phi_count",
+            "adp_learning_enabled", "adp_decision_influence_enabled",
+            "adp_effective_lambda",
         ]
         for key, value in zip(keys, list(msg.data)):
             self.path_adp_info[key] = float(value)
@@ -1450,26 +1462,28 @@ class MetricsNode:
             failure_stage = "none"
             if not self.stop_reason:
                 self.stop_reason = "none"
-        adp_role = "disabled"
-        if float(base.get("adp_enabled") or 0.0) > 0.5:
-            affects_ranking = bool(
-                float(self.latest_adp_mpc_info.get(
-                    "corridor_rank_changed_count") or 0.0) > 0.5)
-            affects_control = bool(
-                float(self.latest_adp_mpc_info.get(
-                    "terminal_adp_cost") or 0.0) != 0.0)
-            if self.target == "arm" and (
-                    float(self.path_adp_info.get("arm_dls_adp_used") or 0.0) > 0.5 or
-                    float(self.path_adp_info.get("v_des_delta_norm") or 0.0) > 1e-9):
-                affects_control = True
-            if affects_ranking and affects_control:
-                adp_role = "ranking_and_control_modifier"
-            elif affects_ranking:
-                adp_role = "ranking_modifier"
-            elif affects_control:
-                adp_role = "control_modifier"
-            else:
-                adp_role = "evaluation_only"
+        adp_info = (self.path_adp_info if self.target == "arm"
+                    else self.latest_adp_mpc_info)
+        adp_enabled = float(base.get("adp_enabled") or 0.0) > 0.5
+        learning_enabled = float(adp_info.get(
+            "adp_learning_enabled", adp_enabled) or 0.0) > 0.5
+        influence_enabled = float(adp_info.get(
+            "adp_decision_influence_enabled", 0.0) or 0.0) > 0.5
+        effective_lambda = float(adp_info.get("adp_effective_lambda", 0.0) or 0.0)
+        affects_ranking = bool(
+            influence_enabled and effective_lambda != 0.0 and
+            float(self.latest_adp_mpc_info.get(
+                "corridor_rank_changed_count") or 0.0) > 0.5)
+        affects_control = bool(
+            influence_enabled and effective_lambda != 0.0 and (
+                float(self.latest_adp_mpc_info.get("terminal_adp_cost") or 0.0) != 0.0 or
+                float(self.path_adp_info.get("arm_adp_grad_norm") or 0.0) > 1e-9 or
+                float(self.path_adp_info.get("arm_adp_soft_cost") or 0.0) != 0.0))
+        adp_role = adp_role_from_runtime(
+            adp_enabled, learning_enabled, influence_enabled,
+            effective_lambda=effective_lambda,
+            ranking_contribution=affects_ranking,
+            control_contribution=affects_control)
         adp_affects_candidate_ranking = int(
             adp_role in ("ranking_modifier", "ranking_and_control_modifier"))
         adp_affects_control = int(

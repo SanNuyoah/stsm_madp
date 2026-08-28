@@ -1,0 +1,105 @@
+clip_value: 200.0
+cost_weights:
+  w_corr: 0.5
+  w_exceed: 3.0
+  w_ip: 0.6
+  w_phi: 1.0
+  w_prog: 0.4
+  w_stop: 20.0
+  w_u: 0.05
+critic_version: linear_adp_v1_calibrated
+feature_names:
+- bias
+- phi_total
+- phi_prox
+- phi_close
+- phi_body
+- phi_env
+- risk_exceed
+- gate_slow
+- gate_stop
+- d_goal
+- progress
+- speed
+- ip_phi_max
+- ip_phi_mean
+- d_corridor
+- phase_norm
+gamma: 0.95
+learning:
+  alpha: 0.001
+  decision_influence_enabled: false
+  enabled: true
+  failure_terminal_penalty: 3.0
+  lambda_adp: 0.0
+  min_transition_dt: 0.1
+  risk_scale: 2.0
+  save_every_n_transitions: 50
+  save_updated_critic: true
+  td_error_clip: 5.0
+  theta_delta_norm_max: 0.05
+mean:
+- 0.0
+- 0.05301799188820594
+- 9.935034584025696e-05
+- 0.0
+- 0.0
+- 0.05287165346053347
+- 0.0
+- 0.0
+- 0.0
+- 2.024030579469928
+- 0.008540331815555365
+- 0.2297806718702092
+- 0.3064146507045502
+- 0.09805886909940291
+- 0.033108418672334036
+- 0.0
+metadata:
+  calibrated_at: 2026-08-28T20:53:13+0800
+  calibration_method: real_online_transition_cost_to_go
+  calibration_robot: wheelchair
+  calibration_sources:
+  - D:\AAA\stsm_madp\results\runs\20260828_R007\wheelchair\stsm\adp_learning_diagnostics.json
+  episode_count: 1
+  fit_loss: 0.007145050079860266
+  sample_count: 116
+  seed_critic_target_mismatch: true
+  target_max: 3.1260951615214725
+  target_mean: 2.4166864120076452
+  target_min: 1.333421433242986
+  target_p95: 3.0051200984537845
+std:
+- 1.0
+- 0.02969772870016672
+- 0.00011546639617394954
+- 1.0
+- 1.0
+- 0.029580980511263417
+- 1.0
+- 1.0
+- 1.0
+- 0.32340049704702317
+- 0.015085735465182423
+- 0.06882955037372451
+- 0.1170484970507841
+- 0.04221938594492395
+- 0.036994063074917316
+- 1.0
+theta:
+- 2.4166843286590853
+- -0.04900763417460692
+- -0.03833640081323907
+- 0.0
+- 0.0
+- -0.03514075635959649
+- 0.0
+- 0.0
+- 0.0
+- -0.6323714896952991
+- -0.017860312689565044
+- -0.00027301881457675596
+- 0.1648206129443156
+- -0.14017915207541326
+- -0.03888896719131708
+- 0.0

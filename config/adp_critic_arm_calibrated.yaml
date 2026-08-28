@@ -1,0 +1,105 @@
+clip_value: 200.0
+cost_weights:
+  w_corr: 0.5
+  w_exceed: 3.0
+  w_ip: 0.6
+  w_phi: 1.0
+  w_prog: 0.4
+  w_stop: 20.0
+  w_u: 0.05
+critic_version: linear_adp_v1_calibrated
+feature_names:
+- bias
+- phi_total
+- phi_prox
+- phi_close
+- phi_body
+- phi_env
+- risk_exceed
+- gate_slow
+- gate_stop
+- d_goal
+- progress
+- speed
+- ip_phi_max
+- ip_phi_mean
+- d_corridor
+- phase_norm
+gamma: 0.95
+learning:
+  alpha: 0.001
+  decision_influence_enabled: false
+  enabled: true
+  failure_terminal_penalty: 3.0
+  lambda_adp: 0.0
+  min_transition_dt: 0.1
+  risk_scale: 2.0
+  save_every_n_transitions: 50
+  save_updated_critic: true
+  td_error_clip: 5.0
+  theta_delta_norm_max: 0.05
+mean:
+- 0.0
+- 2.4755694751840878
+- 0.7644533735011668
+- 0.0
+- 0.7460846378962829
+- 0.5980938445060774
+- 0.0
+- 0.0
+- 0.0
+- 0.2608326218672315
+- 0.0009087187450131619
+- 0.05390441039654478
+- 2.493019470816015
+- 1.8253996777532628
+- 0.0
+- 0.5287356321839082
+metadata:
+  calibrated_at: 2026-08-28T20:53:13+0800
+  calibration_method: real_online_transition_cost_to_go
+  calibration_robot: arm
+  calibration_sources:
+  - D:\AAA\stsm_madp\results\runs\20260828_R007\arm\stsm\adp_learning_diagnostics.json
+  episode_count: 1
+  fit_loss: 0.10389054370896912
+  sample_count: 174
+  seed_critic_target_mismatch: true
+  target_max: 26.495157490671147
+  target_mean: 22.391572120743515
+  target_min: 0.3044427275517541
+  target_p95: 26.470346782147722
+std:
+- 1.0
+- 0.1966892280933777
+- 0.02262796440280537
+- 1.0
+- 0.18494243210442204
+- 0.05993664299728845
+- 1.0
+- 1.0
+- 1.0
+- 0.3094016135924854
+- 0.000545805240880958
+- 0.028932776286745898
+- 0.18789130184853098
+- 0.10924770533846849
+- 1.0
+- 0.3034569835044616
+theta:
+- 22.39155925203108
+- 9.738482827304454
+- -12.219232433419961
+- 0.0
+- 9.578877327593416
+- 9.228551651903482
+- 0.0
+- 0.0
+- 0.0
+- -0.48876051237496426
+- -0.010640394632387024
+- 0.01675102053167629
+- 10.575669080292695
+- -13.247152443736704
+- 0.0
+- -0.4104947252544105

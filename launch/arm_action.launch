@@ -14,7 +14,7 @@
   <arg name="topology_lambda_tracking" default="0.20"/>
   <arg name="topology_lambda_saddle_value" default="0.30"/>
   <arg name="adp_enabled" default="true"/>
-  <arg name="adp_model" default="$(find stsm_madp)/config/adp_critic.yaml"/>
+  <arg name="adp_model" default="$(find stsm_madp)/config/adp_critic_arm_calibrated.yaml"/>
   <arg name="lambda_adp" default="0.005"/>
   <arg name="lambda_adp_path" default="$(arg lambda_adp)"/>
   <arg name="lambda_adp_arm" default="0.008"/>

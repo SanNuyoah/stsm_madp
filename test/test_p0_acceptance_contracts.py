@@ -35,7 +35,8 @@ from stsm_madp.safety_evaluator import SafetyEvaluator
 from stsm_madp.social_field import (
     HumanState, SemanticAnchor, SocialField, SocialFieldParams)
 from stsm_madp.adp import (
-    ADPCritic, ADPTransitionLearner, save_and_verify_critic)
+    ADPCritic, ADPTransitionLearner, adp_role_from_runtime,
+    fit_critic_from_transition_records, save_and_verify_critic)
 from stsm_madp.task_semantics import infer_task_context
 from stsm_madp.topology import TopologicalCorridorPlanner
 from stsm_madp.topology_refinement import _limit_refinement_points
@@ -1471,3 +1472,34 @@ def test_adp_shadow_learning_skips_nonfinite_and_honors_disable_flag():
     learner.observe({"bias": 1.0}, 1.0, terminal=True)
     assert np.allclose(critic.theta, [1.0])
     assert not learner.diagnostics()["decision_influence_enabled"]
+
+
+def test_adp_role_uses_explicit_learning_and_influence_signals():
+    assert adp_role_from_runtime(True, True, False, effective_lambda=0.0) == (
+        "shadow_learning")
+    assert adp_role_from_runtime(True, True, True, effective_lambda=0.0,
+                                 ranking_contribution=True) == "shadow_learning"
+    assert adp_role_from_runtime(True, True, True, effective_lambda=0.02,
+                                 control_contribution=False) == "evaluation_only"
+    assert adp_role_from_runtime(True, True, True, effective_lambda=0.02,
+                                 control_contribution=True) == "control_modifier"
+    assert adp_role_from_runtime(True, False, True, effective_lambda=0.02) == (
+        "inactive")
+
+
+def test_adp_calibration_fits_real_transition_cost_to_go_targets():
+    template = ADPCritic(feature_names=["bias", "phi_total"], theta=[7.0, 2.0],
+                         mean=[0.0, 0.0], std=[1.0, 1.0], gamma=0.5)
+    records = [
+        {"updated": True, "features_t": {"bias": 1.0, "phi_total": 0.0},
+         "stage_cost": 1.0, "terminal": False},
+        {"updated": True, "features_t": {"bias": 1.0, "phi_total": 1.0},
+         "stage_cost": 2.0, "terminal": True},
+    ]
+    critic, summary = fit_critic_from_transition_records(records, template)
+
+    assert summary["sample_count"] == 2
+    assert summary["episode_count"] == 1
+    assert np.isclose(summary["target_max"], 2.0)
+    assert np.isfinite(critic.theta).all()
+    assert critic.critic_version.endswith("_calibrated")
