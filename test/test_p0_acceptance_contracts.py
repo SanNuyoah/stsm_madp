@@ -45,6 +45,7 @@ from stsm_madp.topology_refinement import _limit_refinement_points
 from stsm_madp.topology_candidate_generator import (
     TopologyDrivenCandidateGenerator, candidate_topology_identity,
     rank_feasible_candidates)
+from stsm_madp.topology_diagnostics_writer import _candidate_ranking_rows
 from stsm_madp.topology_constraint import build_topology_constraint
 from stsm_madp.corridor import (
     CorridorContractError, require_corridor_contract,
@@ -86,6 +87,64 @@ def test_adp_ranking_lambda_zero_preserves_zero_contribution():
     terms, _meta = adp_ranking_adjustments(
         [1.0, 4.0], metadata={}, lambda_adp=0.0)
     assert [item["adp_cost"] for item in terms] == [0.0, 0.0]
+
+
+def test_adp_ranking_can_softly_reorder_two_legal_candidates():
+    terms, _meta = adp_ranking_adjustments(
+        [26.0, 18.0],
+        metadata={"target_mean": 22.0, "target_p95": 26.0},
+        lambda_adp=0.02)
+    candidates = []
+    for candidate_id, base_total_cost, term in (
+            ("candidate_a", 1.00, terms[0]),
+            ("candidate_b", 1.03, terms[1])):
+        candidate = {
+            "candidate_id": candidate_id,
+            "base_total_cost": base_total_cost,
+            "candidate_status": "safe",
+            "hard_violation": False,
+        }
+        candidate.update(term)
+        candidates.append(candidate)
+    for candidate in candidates:
+        candidate["total_cost_with_adp"] = (
+            candidate["base_total_cost"] + candidate["adp_cost"])
+
+    ranked = sorted(candidates, key=lambda item: item["total_cost_with_adp"])
+    assert ranked[0]["candidate_id"] == "candidate_b"
+    assert ranked[0]["adp_cost"] < ranked[1]["adp_cost"]
+
+
+def test_final_candidate_ranking_keeps_adp_fields_when_writer_enriches_rows():
+    final_rows = [
+        {"candidate_id": "arm_c0001", "candidate_status": "safe",
+         "candidate_filter_class": "safe", "base_total_cost": 1.00,
+         "adp_value_raw": 26.0, "adp_value_normalized": 1.0,
+         "effective_lambda_adp": 0.02, "adp_cost": 0.02,
+         "total_cost_with_adp": 1.02, "total_cost": 1.02,
+         "rank_before_adp": 1, "rank_after_adp": 1,
+         "adp_changed_rank": False,
+         "ranking_theta_source": "run_start_snapshot", "selected": True},
+        {"candidate_id": "arm_c0002", "candidate_status": "safe",
+         "candidate_filter_class": "safe", "base_total_cost": 1.03,
+         "adp_value_raw": 18.0, "adp_value_normalized": -1.0,
+         "effective_lambda_adp": 0.02, "adp_cost": -0.02,
+         "total_cost_with_adp": 1.01, "total_cost": 1.01,
+         "rank_before_adp": 2, "rank_after_adp": 2,
+         "adp_changed_rank": False,
+         "ranking_theta_source": "run_start_snapshot", "selected": False},
+    ]
+    rows = _candidate_ranking_rows(
+        {"final_candidate_ranking": final_rows,
+         "selected_corridor_id": "arm_c0001"}, {}, [])
+
+    assert [row["candidate_id"] for row in rows] == ["arm_c0001", "arm_c0002"]
+    for row in rows:
+        assert row["ranking_record_stage"] == "final_legal"
+        assert row["ranking_theta_source"] == "run_start_snapshot"
+        assert "adp_value_raw" in row
+        assert "adp_cost" in row
+        assert "total_cost_with_adp" in row
 
 
 def test_adp_ranking_snapshot_does_not_change_when_live_critic_learns():

@@ -152,8 +152,12 @@ def _path_smoothness(points):
 
 def _candidate_ranking_rows(debug, candidate_report, filter_report,
                             morse_routes=None, morse_route_evaluation=None):
+    # A final ranking is the canonical set of execution-legal candidates.  Do
+    # not mix it with earlier generator/filter records from another stage.
+    final_ranking = list(debug.get("final_candidate_ranking") or [])
+    has_final_ranking = bool(final_ranking)
     primary_candidates = list(
-        debug.get("final_candidate_ranking") or
+        final_ranking or
         debug.get("candidate_corridors") or
         debug.get("candidate_after_filter") or
         debug.get("candidate_after_top_k") or
@@ -163,10 +167,12 @@ def _candidate_ranking_rows(debug, candidate_report, filter_report,
         candidate_report.get("arm_route_ranking", []) or [])
     candidates = []
     seen_candidates = set()
-    for source in (
-            primary_candidates,
+    sources = [primary_candidates]
+    if not has_final_ranking:
+        sources.extend((
             candidate_report.get("candidate_filter_report", []) or [],
-            filter_report or []):
+            filter_report or []))
+    for source in sources:
         for item in source:
             if not isinstance(item, dict):
                 continue
@@ -239,10 +245,12 @@ def _candidate_ranking_rows(debug, candidate_report, filter_report,
         task_candidate_cost = weighted_task_candidate_cost(
             risk_cost, length_cost, task_cost, task_weight)
         total_cost = _float_any(
-            merged, ("candidate_cost", "total_cost", "total_score"),
+            merged,
+            (("total_cost_with_adp", "total_cost", "total_score",
+              "candidate_cost") if has_final_ranking else
+             ("candidate_cost", "total_cost", "total_score")),
             risk_cost + length_cost + smoothness_cost + task_cost +
-            feasibility_cost +
-            0.3 * normalized_recovery_cost)
+            feasibility_cost + 0.3 * normalized_recovery_cost)
         selected = bool(merged.get("selected", False)) or (
             bool(selected_id) and cid == selected_id)
         filter_class = str(merged.get(
@@ -266,8 +274,11 @@ def _candidate_ranking_rows(debug, candidate_report, filter_report,
             "task_specific_cost": float(task_specific_cost),
             "candidate_cost": float(total_cost),
         })
-        rows.append({
-            "rank": 0,
+        # Keep the final ranking record whole, then enrich it with the shared
+        # diagnostics.  Rebuilding a fresh generic record loses ADP evidence.
+        row = dict(merged)
+        row.update({
+            "rank": int(merged.get("rank_after_adp", merged.get("rank", 0)) or 0),
             "candidate_id": cid,
             "risk_cost": float(risk_cost),
             "length_cost": float(length_cost),
@@ -309,6 +320,21 @@ def _candidate_ranking_rows(debug, candidate_report, filter_report,
             "candidate_filter_class": filter_class,
             "failure_reason": merged.get("failure_reason", ""),
         })
+        if has_final_ranking:
+            row["ranking_record_stage"] = "final_legal"
+            row.setdefault("base_total_cost", float(total_cost))
+            row.setdefault("total_cost_with_adp", float(total_cost))
+            row.setdefault("rank_before_adp", int(row["rank"]))
+            row.setdefault("rank_after_adp", int(row["rank"]))
+        rows.append(row)
+    if has_final_ranking:
+        rows.sort(key=lambda row: (
+            int(row.get("rank_after_adp", row.get("rank", 0)) or 0),
+            float(row.get("total_cost_with_adp", row.get("total_cost", 0.0)) or 0.0),
+            row["candidate_id"]))
+        for rank, row in enumerate(rows, start=1):
+            row["rank"] = int(row.get("rank_after_adp", rank) or rank)
+        return rows
     max_raw_recovery = max(
         [float(row.get("raw_recovery_cost", 0.0) or 0.0) for row in rows] or
         [0.0])
