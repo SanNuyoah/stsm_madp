@@ -36,6 +36,7 @@ from stsm_madp.social_field import (
     HumanState, SemanticAnchor, SocialField, SocialFieldParams)
 from stsm_madp.adp import (
     ADPCritic, ADPTransitionLearner, adp_role_from_runtime,
+    adp_ranking_adjustments, clone_critic,
     fit_critic_from_transition_records, save_and_verify_critic)
 from stsm_madp.decision_trace import trace_from_debug
 from stsm_madp.task_semantics import infer_task_context
@@ -67,6 +68,39 @@ class CountingZeroField(ZeroField):
     def phi_s(self, point, velocity=None):
         self.phi_calls += 1
         return 0.0
+
+
+def test_adp_ranking_adjustment_is_bounded_and_uses_calibration_scale():
+    terms, meta = adp_ranking_adjustments(
+        [20.0, 22.0, 50.0],
+        metadata={"target_mean": 22.0, "target_p95": 26.0},
+        lambda_adp=0.02, normalization="robust", norm_clip=10.0,
+        contribution_clip=0.10)
+    assert meta["source"] == "metadata_target_mean_p95"
+    assert terms[0]["adp_cost"] < 0.0
+    assert terms[-1]["adp_cost"] == 0.10
+    assert all(abs(item["adp_cost"]) <= 0.10 for item in terms)
+
+
+def test_adp_ranking_lambda_zero_preserves_zero_contribution():
+    terms, _meta = adp_ranking_adjustments(
+        [1.0, 4.0], metadata={}, lambda_adp=0.0)
+    assert [item["adp_cost"] for item in terms] == [0.0, 0.0]
+
+
+def test_adp_ranking_snapshot_does_not_change_when_live_critic_learns():
+    live = ADPCritic(theta=np.ones(16), metadata={"target_mean": 2.0,
+                                                    "target_p95": 3.0})
+    snapshot = clone_critic(live)
+    live.theta[0] = 99.0
+    assert snapshot.theta[0] == 1.0
+    assert snapshot.fingerprint() != live.fingerprint()
+
+
+def test_adp_ranking_role_has_no_control_contribution():
+    assert adp_role_from_runtime(
+        True, True, True, effective_lambda=0.02,
+        ranking_contribution=True, control_contribution=False) == "ranking_modifier"
 
 
 def test_manifold_boundary_distance_handles_segments_and_degenerate_points():

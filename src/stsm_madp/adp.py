@@ -39,6 +39,8 @@ DEFAULT_COST_WEIGHTS = {
 DEFAULT_LEARNING_CONFIG = {
     "enabled": True,
     "decision_influence_enabled": False,
+    "ranking_influence_enabled": False,
+    "mpc_influence_enabled": False,
     "alpha": 0.001,
     "td_error_clip": 5.0,
     "theta_delta_norm_max": 0.05,
@@ -48,6 +50,9 @@ DEFAULT_LEARNING_CONFIG = {
     "lambda_adp": 0.0,
     "risk_scale": 2.0,
     "failure_terminal_penalty": 3.0,
+    "adp_value_normalization": "robust",
+    "adp_norm_clip": 3.0,
+    "adp_contribution_clip": 0.10,
 }
 
 DEFAULT_TRANSITION_COST_WEIGHTS = {
@@ -234,6 +239,61 @@ class ADPCritic(object):
             critic_version=data.get("critic_version", "linear_adp_v1"),
             metadata=data.get("metadata", {}),
             learning_config=data.get("learning", {}))
+
+
+def clone_critic(critic):
+    """Freeze a critic for decision-time ranking while learning continues live."""
+    if critic is None:
+        return None
+    return ADPCritic(
+        feature_names=list(critic.feature_names), theta=np.asarray(critic.theta, float).copy(),
+        mean=np.asarray(critic.mean, float).copy(),
+        std=np.asarray(critic.std, float).copy(), gamma=critic.gamma,
+        clip_value=critic.clip_value, cost_weights=dict(critic.cost_weights),
+        critic_version=critic.critic_version, metadata=dict(critic.metadata),
+        learning_config=dict(critic.learning_config))
+
+
+def adp_ranking_adjustments(raw_values, metadata=None, lambda_adp=0.0,
+                            normalization="robust", norm_clip=3.0,
+                            contribution_clip=0.10):
+    """Return bounded ranking terms for calibrated cost-to-go values.
+
+    The calibrated target mean/p95 establishes the default scale.  A robust
+    candidate-pool scale is used only when that calibration metadata is absent.
+    """
+    values = np.asarray(list(raw_values or []), float)
+    if values.size == 0:
+        return [], {"source": "empty", "center": 0.0, "scale": 1.0}
+    values = np.where(np.isfinite(values), values, 0.0)
+    metadata = dict(metadata or {})
+    center = _as_float(metadata.get("target_mean"), np.nan)
+    p95 = _as_float(metadata.get("target_p95"), np.nan)
+    scale = abs(p95 - center) if np.isfinite(center) and np.isfinite(p95) else 0.0
+    source = "metadata_target_mean_p95"
+    if not np.isfinite(center) or scale < 1e-6:
+        center = float(np.median(values))
+        mad = float(np.median(np.abs(values - center)))
+        spread = float(np.percentile(values, 95) - center)
+        scale = max(1.4826 * mad, abs(spread), 1e-6)
+        source = "candidate_pool_robust_fallback"
+    if str(normalization).strip().lower() not in ("robust", "calibrated"):
+        center, scale, source = 0.0, 1.0, "identity"
+    limit = max(abs(_as_float(norm_clip, 3.0)), 0.0)
+    contribution_limit = max(abs(_as_float(contribution_clip, 0.10)), 0.0)
+    lam = _as_float(lambda_adp)
+    normalized = (values - center) / max(scale, 1e-6)
+    if limit > 0.0:
+        normalized = np.clip(normalized, -limit, limit)
+    contributions = lam * normalized
+    if contribution_limit > 0.0:
+        contributions = np.clip(contributions, -contribution_limit,
+                                contribution_limit)
+    return [
+        {"adp_value_raw": float(raw), "adp_value_normalized": float(norm),
+         "effective_lambda_adp": float(lam), "adp_cost": float(cost)}
+        for raw, norm, cost in zip(values, normalized, contributions)
+    ], {"source": source, "center": float(center), "scale": float(scale)}
 
 
 class ADPFeatureBuilder(object):

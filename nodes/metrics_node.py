@@ -388,6 +388,8 @@ class MetricsNode:
             "adp_learning_enabled": "",
             "adp_decision_influence_enabled": "",
             "adp_effective_lambda": "",
+            "adp_ranking_influence_enabled": "",
+            "adp_mpc_influence_enabled": "",
         }
         self.path_adp_info = {
             "path_adp_mean": "",
@@ -714,7 +716,8 @@ class MetricsNode:
             "mpc_reject_forbidden_count",
             "mpc_reject_interest_phi_count",
             "adp_learning_enabled", "adp_decision_influence_enabled",
-            "adp_effective_lambda",
+            "adp_effective_lambda", "adp_ranking_influence_enabled",
+            "adp_mpc_influence_enabled",
         ]
         for key, value in zip(keys, list(msg.data)):
             self.latest_adp_mpc_info[key] = float(value)
@@ -749,7 +752,8 @@ class MetricsNode:
             "dq_nominal_norm", "dq_adp_norm", "dq_delta_norm",
             "mpc_reject_forbidden_count", "mpc_reject_interest_phi_count",
             "adp_learning_enabled", "adp_decision_influence_enabled",
-            "adp_effective_lambda",
+            "adp_effective_lambda", "adp_ranking_influence_enabled",
+            "adp_mpc_influence_enabled",
         ]
         for key, value in zip(keys, list(msg.data)):
             self.path_adp_info[key] = float(value)
@@ -1470,12 +1474,14 @@ class MetricsNode:
         influence_enabled = float(adp_info.get(
             "adp_decision_influence_enabled", 0.0) or 0.0) > 0.5
         effective_lambda = float(adp_info.get("adp_effective_lambda", 0.0) or 0.0)
+        ranking_enabled = float(adp_info.get(
+            "adp_ranking_influence_enabled", 0.0) or 0.0) > 0.5
+        mpc_enabled = float(adp_info.get(
+            "adp_mpc_influence_enabled", 0.0) or 0.0) > 0.5
         affects_ranking = bool(
-            influence_enabled and effective_lambda != 0.0 and
-            float(self.latest_adp_mpc_info.get(
-                "corridor_rank_changed_count") or 0.0) > 0.5)
+            influence_enabled and ranking_enabled and effective_lambda != 0.0)
         affects_control = bool(
-            influence_enabled and effective_lambda != 0.0 and (
+            influence_enabled and mpc_enabled and effective_lambda != 0.0 and (
                 float(self.latest_adp_mpc_info.get("terminal_adp_cost") or 0.0) != 0.0 or
                 float(self.path_adp_info.get("arm_adp_grad_norm") or 0.0) > 1e-9 or
                 float(self.path_adp_info.get("arm_adp_soft_cost") or 0.0) != 0.0))

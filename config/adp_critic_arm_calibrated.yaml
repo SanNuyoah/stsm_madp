@@ -28,10 +28,15 @@ feature_names:
 gamma: 0.95
 learning:
   alpha: 0.001
-  decision_influence_enabled: false
+  decision_influence_enabled: true
+  ranking_influence_enabled: true
+  mpc_influence_enabled: false
+  adp_value_normalization: robust
+  adp_norm_clip: 3.0
+  adp_contribution_clip: 0.10
   enabled: true
   failure_terminal_penalty: 3.0
-  lambda_adp: 0.0
+  lambda_adp: 0.02
   min_transition_dt: 0.1
   risk_scale: 2.0
   save_every_n_transitions: 50

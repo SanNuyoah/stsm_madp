@@ -83,6 +83,11 @@ def init_trace(robot="", variant=""):
         "adp_role": "disabled",
         "adp_affects_candidate_ranking": 0,
         "adp_affects_control": 0,
+        "adp_decision_influence_enabled": 0,
+        "adp_ranking_influence_enabled": 0,
+        "adp_mpc_influence_enabled": 0,
+        "mpc_adp_enabled": 0,
+        "adp_effective_lambda": 0.0,
         "final_path_source": "",
         "execution_status": "",
         "failure_stage": "",
@@ -348,6 +353,16 @@ def trace_from_debug(debug, metrics=None, robot="", variant="stsm"):
         role,
         affects_candidate_ranking=affects_ranking,
         affects_control=affects_control)
+    trace["adp_decision_influence_enabled"] = int(influence_enabled)
+    trace["adp_ranking_influence_enabled"] = int(_num(
+        metrics.get("adp_ranking_influence_enabled",
+                    debug.get("adp_ranking_influence_enabled", 0)), 0))
+    trace["adp_mpc_influence_enabled"] = int(_num(
+        metrics.get("adp_mpc_influence_enabled",
+                    debug.get("adp_mpc_influence_enabled", 0)), 0))
+    trace["mpc_adp_enabled"] = int(_num(
+        metrics.get("mpc_adp_enabled", trace["adp_mpc_influence_enabled"]), 0))
+    trace["adp_effective_lambda"] = float(effective_lambda)
     trace["final_path_source"] = debug.get("final_path_source") or (
         "Morse->Candidate->Ranking->Refinement->MPC"
         if trace["mpc_reference_source"] == "refined_waypoints"

@@ -66,6 +66,13 @@
   <arg name="footprint_forbidden_stop_enabled" default="true"/>
   <arg name="adp_enabled" default="true"/>
   <arg name="adp_model" default="$(find stsm_madp)/config/adp_critic_wheelchair_calibrated.yaml"/>
+  <arg name="adp_decision_influence_enabled" default="true"/>
+  <arg name="adp_ranking_influence_enabled" default="true"/>
+  <arg name="adp_mpc_influence_enabled" default="false"/>
+  <arg name="adp_ranking_lambda" default="0.02"/>
+  <arg name="adp_value_normalization" default="robust"/>
+  <arg name="adp_norm_clip" default="3.0"/>
+  <arg name="adp_contribution_clip" default="0.10"/>
   <arg name="lambda_adp" default="0.005"/>
   <arg name="lambda_adp_corridor" default="0.05"/>
   <arg name="lambda_adp_terminal" default="0.0015"/>
@@ -188,6 +195,13 @@
     <param name="interest_points/forbidden_stop_enabled" value="$(arg footprint_forbidden_stop_enabled)"/>
     <param name="adp_enabled" value="$(arg adp_enabled)"/>
     <param name="adp_model" value="$(arg adp_model)"/>
+    <param name="adp/decision_influence_enabled" value="$(arg adp_decision_influence_enabled)"/>
+    <param name="adp/ranking_influence_enabled" value="$(arg adp_ranking_influence_enabled)"/>
+    <param name="adp/mpc_influence_enabled" value="$(arg adp_mpc_influence_enabled)"/>
+    <param name="adp/lambda_adp" value="$(arg adp_ranking_lambda)"/>
+    <param name="adp/adp_value_normalization" value="$(arg adp_value_normalization)"/>
+    <param name="adp/adp_norm_clip" value="$(arg adp_norm_clip)"/>
+    <param name="adp/adp_contribution_clip" value="$(arg adp_contribution_clip)"/>
     <param name="lambda_adp" value="$(arg lambda_adp)"/>
     <param name="lambda_adp_corridor" value="$(arg lambda_adp_corridor)"/>
     <param name="lambda_adp_terminal" value="$(arg lambda_adp_terminal)"/>

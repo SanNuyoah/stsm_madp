@@ -30,6 +30,7 @@ from stsm_madp.topology_constraint import write_topology_constraint
 from stsm_madp.safety_gate import SafetyGate, SafetyGateResult
 from stsm_madp.adp import (
     ADPCritic, ADPFeatureBuilder, ADPTransitionLearner,
+    adp_ranking_adjustments, adp_role_from_runtime, clone_critic,
     save_and_verify_critic)
 from stsm_madp.topology import topology_param_or_auto, topology_profile_defaults
 from stsm_madp.topology_refinement import (
@@ -156,8 +157,12 @@ class HandoverNode:
         self.adp_min_scale = float(rospy.get_param("~adp_min_scale", 0.35))
         self.adp_debug = bool(rospy.get_param("~adp_debug", False))
         self.adp_critic = None
+        self.adp_ranking_critic = None
         self.adp_features = ADPFeatureBuilder()
         self.adp_influence_enabled = False
+        self.adp_decision_influence_enabled = False
+        self.adp_ranking_influence_enabled = False
+        self.adp_mpc_influence_enabled = False
         self.adp_learning = None
         self._adp_prev_ee = None
         self.last_adp_value = 0.0
@@ -409,7 +414,10 @@ class HandoverNode:
 
     def _configure_adp_learning(self):
         config = dict(self.adp_critic.learning_config or {})
-        for key in ("enabled", "decision_influence_enabled", "alpha",
+        for key in ("enabled", "decision_influence_enabled",
+                    "ranking_influence_enabled", "mpc_influence_enabled",
+                    "adp_value_normalization", "adp_norm_clip",
+                    "adp_contribution_clip", "alpha",
                     "td_error_clip", "theta_delta_norm_max",
                     "min_transition_dt", "save_updated_critic",
                     "save_every_n_transitions", "risk_scale",
@@ -417,14 +425,25 @@ class HandoverNode:
             param = "~adp/" + key
             if rospy.has_param(param):
                 config[key] = rospy.get_param(param)
-        self.adp_influence_enabled = bool(
+        self.adp_decision_influence_enabled = bool(
             self.adp_enabled and config.get("decision_influence_enabled", False))
+        self.adp_ranking_influence_enabled = bool(
+            self.adp_decision_influence_enabled and
+            config.get("ranking_influence_enabled", False))
+        self.adp_mpc_influence_enabled = bool(
+            self.adp_decision_influence_enabled and
+            config.get("mpc_influence_enabled", False))
+        # Keep pre-existing path/MPC ADP hooks disabled in ranking-only Phase 2.
+        self.adp_influence_enabled = self.adp_mpc_influence_enabled
         config["enabled"] = bool(self.adp_enabled and config.get("enabled", True))
+        self.adp_ranking_critic = clone_critic(self.adp_critic)
         self.adp_learning = ADPTransitionLearner(
             self.adp_critic, config=config, robot="arm")
         rospy.loginfo(
-            "[handover][adp] learning=%s decision_influence=%s",
-            bool(config["enabled"]), bool(self.adp_influence_enabled))
+            "[handover][adp] learning=%s ranking=%s mpc=%s snapshot=%s",
+            bool(config["enabled"]), self.adp_ranking_influence_enabled,
+            self.adp_mpc_influence_enabled,
+            bool(self.adp_ranking_critic is not None))
 
     def _adp_learning_features(self, ee, gate=None, interest_eval=None,
                                control=None):
@@ -1409,9 +1428,13 @@ class HandoverNode:
                 dbg["mpc_reference_source"] = str(
                     getattr(corr, "final_reference_source", "refined_waypoints"))
                 dbg["final_path_source"] = "Morse->Candidate->Ranking->Refinement->MPC"
-                dbg["adp_role"] = (
-                    "control_modifier" if self.adp_influence_enabled else
-                    ("shadow_learning" if self.adp_enabled else "disabled"))
+                dbg["adp_role"] = adp_role_from_runtime(
+                    self.adp_enabled, bool(self.adp_learning and self.adp_learning.config.get("enabled", False)),
+                    self.adp_decision_influence_enabled,
+                    effective_lambda=(self.adp_learning.config.get("lambda_adp", 0.0)
+                                      if self.adp_learning else 0.0),
+                    ranking_contribution=self.adp_ranking_influence_enabled,
+                    control_contribution=False)
                 for item in dbg.get("candidate_corridors", []):
                     if str(item.get("corridor_id", "")) == selected_id:
                         item["selected"] = True
@@ -1518,8 +1541,13 @@ class HandoverNode:
             else "selected_candidate_waypoints"))
         dbg["mpc_reference_source"] = reference_source
         dbg["final_path_source"] = "Morse->Candidate->Ranking->Refinement->MPC"
-        dbg["adp_role"] = "control_modifier" if self.adp_influence_enabled else (
-            "shadow_learning" if self.adp_enabled else "disabled")
+        dbg["adp_role"] = adp_role_from_runtime(
+            self.adp_enabled, bool(self.adp_learning and self.adp_learning.config.get("enabled", False)),
+            self.adp_decision_influence_enabled,
+            effective_lambda=(self.adp_learning.config.get("lambda_adp", 0.0)
+                              if self.adp_learning else 0.0),
+            ranking_contribution=self.adp_ranking_influence_enabled,
+            control_contribution=False)
         for item in dbg.get("candidate_corridors", []):
             selected = str(item.get("corridor_id", "")) == execution_id
             item["selected"] = bool(selected)
@@ -2260,9 +2288,13 @@ class HandoverNode:
                 if int(getattr(selected, "refinement_used", 0)) == 1
                 else "selected_candidate_waypoints"))
             dbg["final_path_source"] = "Morse->Candidate->Ranking->Refinement->MPC"
-            dbg["adp_role"] = (
-                    "control_modifier" if self.adp_influence_enabled else
-                    ("shadow_learning" if self.adp_enabled else "disabled"))
+            dbg["adp_role"] = adp_role_from_runtime(
+                self.adp_enabled, bool(self.adp_learning and self.adp_learning.config.get("enabled", False)),
+                self.adp_decision_influence_enabled,
+                effective_lambda=(self.adp_learning.config.get("lambda_adp", 0.0)
+                                  if self.adp_learning else 0.0),
+                ranking_contribution=self.adp_ranking_influence_enabled,
+                control_contribution=False)
             for item in dbg.get("candidate_corridors", []):
                 cid = str(item.get("corridor_id", item.get("label", "")))
                 match = cid == selected_id
@@ -2280,8 +2312,20 @@ class HandoverNode:
                                 "risk_cost", "risk_norm", "length_cost",
                                 "length_norm", "smooth_cost", "smooth_norm",
                                 "task_cost", "task_norm", "execution_cost",
-                                "execution_norm", "total_score", "total_cost"):
+                                "execution_norm", "base_cost", "total_score", "total_cost",
+                                "adp_value_raw", "adp_value_normalized",
+                                "effective_lambda_adp", "adp_cost", "rank_base",
+                                "rank_total", "rank_before_adp", "rank_after_adp"):
                             item[key] = float(getattr(c, key, item.get(key, 0.0)))
+                        item["total_cost_with_adp"] = float(getattr(c, "total_cost", 0.0))
+                        item["adp_changed_rank"] = bool(getattr(c, "adp_changed_rank", False))
+                        item["ranking_theta_source"] = str(getattr(
+                            c, "adp_ranking_theta_source", ""))
+                        item["adp_role"] = dbg["adp_role"]
+                        item["adp_affects_candidate_ranking"] = int(
+                            self.adp_ranking_influence_enabled)
+                        item["adp_affects_control"] = 0
+                        item["mpc_adp_enabled"] = int(self.adp_mpc_influence_enabled)
                         item["refinement_used"] = int(getattr(c, "refinement_used", 0))
                         item["refined_path_length"] = float(getattr(
                             c, "refined_path_length", getattr(c, "path_length", 0.0)))
@@ -2354,6 +2398,56 @@ class HandoverNode:
             c.total_score = float(score)
             c.total_cost = float(score)
             c.cost = float(score)
+            c.base_cost = float(score)
+        def candidate_id(corr):
+            return str(getattr(corr, "corridor_id", getattr(corr, "label", "")))
+        corridors.sort(key=lambda c: (float(getattr(c, "base_cost", 0.0)), candidate_id(c)))
+        for rank, corr in enumerate(corridors, start=1):
+            corr.rank_base = int(rank)
+        snapshot = self.adp_ranking_critic
+        raw_values = []
+        if snapshot is not None:
+            ee = self._ee_pos()
+            target = self.handover
+            for corr in corridors:
+                features = self.adp_features.build_arm(
+                    ee, target, self.field,
+                    gate_info={"state": "RANKING", "stop": False,
+                               "rho_warn": self.gate.rho_warn},
+                    phase=self.phase)
+                try:
+                    _unused, d_corridor = corr.project(ee)
+                    features["d_corridor"] = float(d_corridor)
+                except Exception:
+                    pass
+                raw_values.append(snapshot.predict_detail(features)["raw"])
+        adjustments, norm_meta = adp_ranking_adjustments(
+            raw_values, metadata=(snapshot.metadata if snapshot else {}),
+            lambda_adp=(self.adp_learning.config.get("lambda_adp", 0.0)
+                        if self.adp_ranking_influence_enabled and self.adp_learning
+                        else 0.0),
+            normalization=(self.adp_learning.config.get("adp_value_normalization", "robust")
+                           if self.adp_learning else "robust"),
+            norm_clip=(self.adp_learning.config.get("adp_norm_clip", 3.0)
+                       if self.adp_learning else 3.0),
+            contribution_clip=(self.adp_learning.config.get("adp_contribution_clip", 0.10)
+                               if self.adp_learning else 0.10))
+        for corr, item in zip(corridors, adjustments):
+            corr.adp_value_raw = float(item["adp_value_raw"])
+            corr.adp_value_normalized = float(item["adp_value_normalized"])
+            corr.effective_lambda_adp = float(item["effective_lambda_adp"])
+            corr.adp_cost = float(item["adp_cost"])
+            corr.total_cost = float(corr.base_cost + corr.adp_cost)
+            corr.total_score = float(corr.total_cost)
+            corr.cost = float(corr.total_cost)
+            corr.adp_ranking_theta_source = "run_start_snapshot"
+            corr.adp_normalization = dict(norm_meta)
+        corridors.sort(key=lambda c: (float(getattr(c, "total_score", 0.0)), candidate_id(c)))
+        for rank, corr in enumerate(corridors, start=1):
+            corr.rank_total = int(rank)
+            corr.rank_before_adp = int(getattr(corr, "rank_base", rank))
+            corr.rank_after_adp = int(rank)
+            corr.adp_changed_rank = bool(corr.rank_before_adp != corr.rank_after_adp)
 
     def _publish_topology_info(self, used_topology, fallback_used):
         dbg = getattr(self.manifold, "last_topology_debug", {}) or {}
@@ -2645,8 +2739,11 @@ class HandoverNode:
                 float(self.mpc.last_reject_interest_phi_count),
                 1.0 if self.adp_learning is not None and
                 self.adp_learning.config.get("enabled", False) else 0.0,
-                1.0 if self.adp_influence_enabled else 0.0,
-                float(self.lambda_adp_arm if self.adp_influence_enabled else 0.0),
+                1.0 if self.adp_decision_influence_enabled else 0.0,
+                float(self.adp_learning.config.get("lambda_adp", 0.0)
+                      if self.adp_learning and self.adp_ranking_influence_enabled else 0.0),
+                1.0 if self.adp_ranking_influence_enabled else 0.0,
+                1.0 if self.adp_mpc_influence_enabled else 0.0,
             ]))
             rospy.loginfo_throttle(
                 5.0,
@@ -3269,17 +3366,32 @@ class HandoverNode:
     def _runtime_metrics_for_trace(self):
         corr = self.execution_corridor
         affects_control = bool(
-            self.adp_influence_enabled and (
+            self.adp_mpc_influence_enabled and (
                 float(getattr(self.mpc, "last_dls_adp_used", 0.0)) > 0.5 or
                 float(getattr(self.mpc, "last_v_des_delta_norm", 0.0)) > 1e-9))
+        affects_ranking = bool(self.adp_ranking_influence_enabled and corr is not None)
         return {
             "target": "arm",
             "variant": "stsm" if not self.baseline else "baseline",
             "topology_fallback_used": 0,
             "adp_enabled": 1 if self.adp_enabled else 0,
-            "adp_role": "control_modifier" if affects_control else (
-                "shadow_learning" if self.adp_enabled else "disabled"),
-            "corridor_rank_changed_count": 0,
+            "adp_decision_influence_enabled": int(self.adp_decision_influence_enabled),
+            "adp_ranking_influence_enabled": int(self.adp_ranking_influence_enabled),
+            "adp_mpc_influence_enabled": int(self.adp_mpc_influence_enabled),
+            "mpc_adp_enabled": int(self.adp_mpc_influence_enabled),
+            "adp_effective_lambda": float(self.adp_learning.config.get("lambda_adp", 0.0)
+                                              if self.adp_learning and self.adp_ranking_influence_enabled else 0.0),
+            "adp_role": adp_role_from_runtime(
+                self.adp_enabled, bool(self.adp_learning and self.adp_learning.config.get("enabled", False)),
+                self.adp_decision_influence_enabled,
+                effective_lambda=(self.adp_learning.config.get("lambda_adp", 0.0)
+                                  if self.adp_learning else 0.0),
+                ranking_contribution=affects_ranking,
+                control_contribution=affects_control),
+            "adp_affects_candidate_ranking": int(affects_ranking),
+            "adp_affects_control": int(affects_control),
+            "corridor_rank_changed_count": int(bool(
+                corr is not None and getattr(corr, "adp_changed_rank", False))),
             "arm_dls_adp_used": 1 if affects_control else 0,
             "v_des_delta_norm": float(getattr(self.mpc, "last_v_des_delta_norm", 0.0)),
             "selected_refinement_used": int(getattr(corr, "refinement_used", 0)) if corr is not None else 0,

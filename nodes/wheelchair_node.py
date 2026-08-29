@@ -32,6 +32,7 @@ from stsm_madp.topology_constraint import (
 from stsm_madp.safety_gate import SafetyGate, SafetyGateResult
 from stsm_madp.adp import (
     ADPCritic, ADPFeatureBuilder, ADPTransitionLearner,
+    adp_ranking_adjustments, adp_role_from_runtime, clone_critic,
     save_and_verify_critic)
 from stsm_madp.topology import topology_param_or_auto, topology_profile_defaults
 from stsm_madp.topology_candidate_generator import (
@@ -265,8 +266,12 @@ class WheelchairNode:
         self.adp_min_scale = float(rospy.get_param("~adp_min_scale", 0.35))
         self.adp_debug = bool(rospy.get_param("~adp_debug", False))
         self.adp_critic = None
+        self.adp_ranking_critic = None
         self.adp_features = ADPFeatureBuilder()
         self.adp_influence_enabled = False
+        self.adp_decision_influence_enabled = False
+        self.adp_ranking_influence_enabled = False
+        self.adp_mpc_influence_enabled = False
         self.adp_learning = None
         self._adp_prev_pose = None
         self.last_adp_value = 0.0
@@ -628,7 +633,10 @@ class WheelchairNode:
 
     def _configure_adp_learning(self):
         config = dict(self.adp_critic.learning_config or {})
-        for key in ("enabled", "decision_influence_enabled", "alpha",
+        for key in ("enabled", "decision_influence_enabled",
+                    "ranking_influence_enabled", "mpc_influence_enabled",
+                    "adp_value_normalization", "adp_norm_clip",
+                    "adp_contribution_clip", "alpha",
                     "td_error_clip", "theta_delta_norm_max",
                     "min_transition_dt", "save_updated_critic",
                     "save_every_n_transitions", "risk_scale",
@@ -636,14 +644,25 @@ class WheelchairNode:
             param = "~adp/" + key
             if rospy.has_param(param):
                 config[key] = rospy.get_param(param)
-        self.adp_influence_enabled = bool(
+        self.adp_decision_influence_enabled = bool(
             self.adp_enabled and config.get("decision_influence_enabled", False))
+        self.adp_ranking_influence_enabled = bool(
+            self.adp_decision_influence_enabled and
+            config.get("ranking_influence_enabled", False))
+        self.adp_mpc_influence_enabled = bool(
+            self.adp_decision_influence_enabled and
+            config.get("mpc_influence_enabled", False))
+        # Existing MPC and generator hooks remain isolated from Phase 2 ranking.
+        self.adp_influence_enabled = self.adp_mpc_influence_enabled
         config["enabled"] = bool(self.adp_enabled and config.get("enabled", True))
+        self.adp_ranking_critic = clone_critic(self.adp_critic)
         self.adp_learning = ADPTransitionLearner(
             self.adp_critic, config=config, robot="wheelchair")
         rospy.loginfo(
-            "[wc][adp] learning=%s decision_influence=%s",
-            bool(config["enabled"]), bool(self.adp_influence_enabled))
+            "[wc][adp] learning=%s ranking=%s mpc=%s snapshot=%s",
+            bool(config["enabled"]), self.adp_ranking_influence_enabled,
+            self.adp_mpc_influence_enabled,
+            bool(self.adp_ranking_critic is not None))
 
     def _adp_learning_features(self, gate=None, interest_eval=None,
                                corridor=None, control=None):
@@ -3165,6 +3184,26 @@ class WheelchairNode:
                 "execution_norm": float(getattr(corr, "execution_norm", 0.0)),
                 "topology_value": float(getattr(corr, "topology_value", 0.0)),
                 "topology_diversity": float(getattr(corr, "topology_diversity", 0.0)),
+                "base_total_cost": float(getattr(corr, "base_cost", 0.0)),
+                "adp_value_raw": float(getattr(corr, "adp_value_raw", 0.0)),
+                "adp_value_normalized": float(getattr(corr, "adp_value_normalized", 0.0)),
+                "effective_lambda_adp": float(getattr(corr, "effective_lambda_adp", 0.0)),
+                "adp_cost": float(getattr(corr, "adp_cost", 0.0)),
+                "total_cost_with_adp": float(getattr(corr, "total_cost", getattr(corr, "cost", 0.0))),
+                "rank_before_adp": int(getattr(corr, "rank_before_adp", getattr(corr, "rank_base", rank))),
+                "rank_after_adp": int(getattr(corr, "rank_after_adp", getattr(corr, "rank_total", rank))),
+                "adp_changed_rank": bool(getattr(corr, "adp_changed_rank", False)),
+                "ranking_theta_source": str(getattr(corr, "adp_ranking_theta_source", "")),
+                "adp_role": adp_role_from_runtime(
+                    self.adp_enabled, bool(self.adp_learning and self.adp_learning.config.get("enabled", False)),
+                    self.adp_decision_influence_enabled,
+                    effective_lambda=(self.adp_learning.config.get("lambda_adp", 0.0)
+                                      if self.adp_learning else 0.0),
+                    ranking_contribution=self.adp_ranking_influence_enabled,
+                    control_contribution=False),
+                "adp_affects_candidate_ranking": int(self.adp_ranking_influence_enabled),
+                "adp_affects_control": 0,
+                "mpc_adp_enabled": int(self.adp_mpc_influence_enabled),
                 "total_score": float(getattr(corr, "total_score", getattr(corr, "cost", 0.0))),
                 "total_cost": float(getattr(corr, "total_cost", getattr(corr, "cost", 0.0))),
                 "path_length": float(getattr(corr, "path_length", 0.0)),
@@ -3281,11 +3320,13 @@ class WheelchairNode:
         if not dbg["mpc_reference_source"]:
             dbg["mpc_reference_source"] = "refined"
         dbg["final_path_source"] = "Morse->Candidate->Ranking->Refinement->MPC"
-        dbg["adp_role"] = (
-            "ranking_modifier"
-            if any(float(getattr(c, "rank_base", 0)) != float(getattr(c, "rank_total", 0))
-                   for c in list(corrs or []))
-            else ("shadow_learning" if self.adp_enabled else "disabled"))
+        dbg["adp_role"] = adp_role_from_runtime(
+            self.adp_enabled, bool(self.adp_learning and self.adp_learning.config.get("enabled", False)),
+            self.adp_decision_influence_enabled,
+            effective_lambda=(self.adp_learning.config.get("lambda_adp", 0.0)
+                              if self.adp_learning else 0.0),
+            ranking_contribution=self.adp_ranking_influence_enabled,
+            control_contribution=False)
         if selected is not None:
             dbg["selected_corridor_label"] = selected_id
             dbg["selected_corridor_id"] = selected_id
@@ -3530,9 +3571,52 @@ class WheelchairNode:
             })
             corr.candidate_cost = float(score)
             corr.candidate_cost_breakdown = breakdown
-        rescored.sort(key=lambda c: float(getattr(c, "cost", 0.0)))
-        for rank, corr in enumerate(rescored):
+        def candidate_id(corr):
+            return str(getattr(corr, "corridor_id", getattr(corr, "label", "")))
+        rescored.sort(key=lambda c: (float(getattr(c, "cost", 0.0)), candidate_id(c)))
+        for rank, corr in enumerate(rescored, start=1):
+            corr.rank_base = int(rank)
+        snapshot = self.adp_ranking_critic
+        raw_values = []
+        if snapshot is not None:
+            for corr in rescored:
+                features = self.adp_features.build_wheelchair(
+                    self.state, self.goal, self.field,
+                    gate_info={"state": "RANKING", "stop": False,
+                               "rho_warn": self.gate.rho_warn},
+                    corridor=corr, u=self.u_prev)
+                raw_values.append(snapshot.predict_detail(features)["raw"])
+        adjustments, norm_meta = adp_ranking_adjustments(
+            raw_values, metadata=(snapshot.metadata if snapshot else {}),
+            lambda_adp=(self.adp_learning.config.get("lambda_adp", 0.0)
+                        if self.adp_ranking_influence_enabled and self.adp_learning
+                        else 0.0),
+            normalization=(self.adp_learning.config.get("adp_value_normalization", "robust")
+                           if self.adp_learning else "robust"),
+            norm_clip=(self.adp_learning.config.get("adp_norm_clip", 3.0)
+                       if self.adp_learning else 3.0),
+            contribution_clip=(self.adp_learning.config.get("adp_contribution_clip", 0.10)
+                               if self.adp_learning else 0.10))
+        for corr, item in zip(rescored, adjustments):
+            corr.adp_value_raw = float(item["adp_value_raw"])
+            corr.adp_value_normalized = float(item["adp_value_normalized"])
+            corr.effective_lambda_adp = float(item["effective_lambda_adp"])
+            corr.adp_cost = float(item["adp_cost"])
+            corr.total_cost = float(corr.base_cost + corr.adp_cost)
+            corr.total_score = float(corr.total_cost)
+            corr.cost = float(corr.total_cost)
+            corr.adp_ranking_theta_source = "run_start_snapshot"
+            corr.adp_normalization = dict(norm_meta)
+            breakdown = dict(getattr(corr, "candidate_cost_breakdown", {}) or {})
+            breakdown.update(dict(item, total_cost_with_adp=float(corr.total_cost),
+                                  ranking_theta_source="run_start_snapshot"))
+            corr.candidate_cost_breakdown = breakdown
+        rescored.sort(key=lambda c: (float(getattr(c, "cost", 0.0)), candidate_id(c)))
+        for rank, corr in enumerate(rescored, start=1):
             corr.rank_total = int(rank)
+            corr.rank_before_adp = int(getattr(corr, "rank_base", rank))
+            corr.rank_after_adp = int(rank)
+            corr.adp_changed_rank = bool(corr.rank_before_adp != corr.rank_after_adp)
         return rescored
 
     def _polyline_samples(self, points, samples_per_segment=16):
@@ -5050,32 +5134,36 @@ class WheelchairNode:
 
     def _runtime_metrics_for_trace(self):
         corr = self.selected_corridor
-        affects_ranking = bool(
-            corr is not None and
-            float(getattr(corr, "rank_base", 0)) !=
-            float(getattr(corr, "rank_total", 0)))
+        affects_ranking = bool(self.adp_ranking_influence_enabled and corr is not None)
         affects_control = bool(
-            self.adp_influence_enabled and self.mpc_use_adp_terminal and
+            self.adp_mpc_influence_enabled and self.mpc_use_adp_terminal and
             float(getattr(self.mpc, "last_terminal_adp_cost", 0.0)) != 0.0)
-        if affects_ranking and affects_control:
-            adp_role = "ranking_and_control_modifier"
-        elif affects_ranking:
-            adp_role = "ranking_modifier"
-        elif affects_control:
-            adp_role = "control_modifier"
-        else:
-            adp_role = "shadow_learning" if self.adp_enabled else "disabled"
+        adp_role = adp_role_from_runtime(
+            self.adp_enabled, bool(self.adp_learning and self.adp_learning.config.get("enabled", False)),
+            self.adp_decision_influence_enabled,
+            effective_lambda=(self.adp_learning.config.get("lambda_adp", 0.0)
+                              if self.adp_learning else 0.0),
+            ranking_contribution=affects_ranking,
+            control_contribution=affects_control)
         return {
             "target": "wheelchair",
             "variant": "stsm" if not self.baseline else "baseline",
             "topology_fallback_used": 0,
             "adp_enabled": 1 if self.adp_enabled else 0,
+            "adp_decision_influence_enabled": int(self.adp_decision_influence_enabled),
+            "adp_ranking_influence_enabled": int(self.adp_ranking_influence_enabled),
+            "adp_mpc_influence_enabled": int(self.adp_mpc_influence_enabled),
+            "mpc_adp_enabled": int(self.adp_mpc_influence_enabled),
+            "adp_effective_lambda": float(self.adp_learning.config.get("lambda_adp", 0.0)
+                                              if self.adp_learning and self.adp_ranking_influence_enabled else 0.0),
             "adp_role": adp_role,
             "adp_affects_candidate_ranking": int(affects_ranking),
             "adp_affects_control": int(affects_control),
             "terminal_adp_cost": float(getattr(
                 self.mpc, "last_terminal_adp_cost", 0.0)),
-            "corridor_rank_changed_count": 1 if affects_ranking else 0,
+            "corridor_rank_changed_count": int(any(
+                bool(getattr(item, "adp_changed_rank", False))
+                for item in list(self.runtime_topology_candidate_pool or []))),
             "selected_refinement_used": int(getattr(corr, "refinement_used", 0)) if corr is not None else 0,
             "pre_refinement_clearance": float(getattr(
                 corr, "pre_refinement_clearance", 0.0)) if corr is not None else 0.0,
@@ -5205,15 +5293,36 @@ class WheelchairNode:
             ranking_rows.append({
                 "rank": 0,
                 "candidate_id": cid,
+                "base_total_cost": float(row.get("base_total_cost", row.get("base_cost", 0.0)) or 0.0),
+                "adp_value_raw": float(row.get("adp_value_raw", 0.0) or 0.0),
+                "adp_value_normalized": float(row.get("adp_value_normalized", 0.0) or 0.0),
+                "effective_lambda_adp": float(row.get("effective_lambda_adp", 0.0) or 0.0),
+                "adp_cost": float(row.get("adp_cost", 0.0) or 0.0),
+                "total_cost_with_adp": float(row.get("total_cost_with_adp", row.get("total_cost", 0.0)) or 0.0),
+                "rank_before_adp": int(row.get("rank_before_adp", 0) or 0),
+                "rank_after_adp": int(row.get("rank_after_adp", 0) or 0),
+                "adp_changed_rank": bool(row.get("adp_changed_rank", False)),
+                "ranking_theta_source": str(row.get("ranking_theta_source", "")),
+                "adp_role": adp_role_from_runtime(
+                    self.adp_enabled, bool(self.adp_learning and self.adp_learning.config.get("enabled", False)),
+                    self.adp_decision_influence_enabled,
+                    effective_lambda=(self.adp_learning.config.get("lambda_adp", 0.0)
+                                      if self.adp_learning else 0.0),
+                    ranking_contribution=self.adp_ranking_influence_enabled,
+                    control_contribution=False),
+                "adp_affects_candidate_ranking": int(self.adp_ranking_influence_enabled),
+                "adp_affects_control": 0,
+                "mpc_adp_enabled": int(self.adp_mpc_influence_enabled),
                 "risk_cost": risk_cost,
                 "length_cost": length_cost,
                 "smoothness_cost": smoothness_cost,
                 "task_cost": task_cost,
                 "feasibility_cost": feasibility_cost,
                 "task_candidate_cost": float(task_candidate_cost),
-                "total_cost": float(
+                "total_cost": float(row.get(
+                    "total_cost_with_adp", row.get("total_cost",
                     risk_cost + length_cost + smoothness_cost + task_cost +
-                    feasibility_cost),
+                    feasibility_cost)) or 0.0),
                 "selected": bool(row.get("selected", False)),
                 "task_mode": str(self.task_mode),
                 "task_state": str(row.get("task_state", "")),
@@ -5784,7 +5893,7 @@ class WheelchairNode:
     def _publish_adp_mpc_info(self, corridor):
         corridor = corridor or self.selected_corridor
         if corridor is None:
-            vals = [0.0] * 24
+            vals = [0.0] * 26
         else:
             vals = [
                 float(corridor.base_cost),
@@ -5810,8 +5919,11 @@ class WheelchairNode:
                 float(self.mpc.last_reject_interest_phi_count),
                 1.0 if self.adp_learning is not None and
                 self.adp_learning.config.get("enabled", False) else 0.0,
-                1.0 if self.adp_influence_enabled else 0.0,
-                float(self.lambda_adp if self.adp_influence_enabled else 0.0),
+                1.0 if self.adp_decision_influence_enabled else 0.0,
+                float(self.adp_learning.config.get("lambda_adp", 0.0)
+                      if self.adp_learning and self.adp_ranking_influence_enabled else 0.0),
+                1.0 if self.adp_ranking_influence_enabled else 0.0,
+                1.0 if self.adp_mpc_influence_enabled else 0.0,
             ]
         self.adp_mpc_info_pub.publish(Float64MultiArray(data=vals))
 
