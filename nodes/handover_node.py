@@ -2317,6 +2317,8 @@ class HandoverNode:
                     "rank_after_adp": int(getattr(c, "rank_after_adp", 0)),
                     "adp_changed_rank": bool(getattr(c, "adp_changed_rank", False)),
                     "ranking_theta_source": str(getattr(c, "adp_ranking_theta_source", "")),
+                    "adp_ranking_audit": dict(getattr(
+                        c, "adp_ranking_audit", {}) or {}),
                     "adp_role": dbg["adp_role"],
                     "adp_affects_candidate_ranking": int(
                         self.adp_ranking_influence_enabled and self.adp_learning is not None and
@@ -2405,6 +2407,7 @@ class HandoverNode:
             corr.rank_base = int(rank)
         snapshot = self.adp_ranking_critic
         raw_values = []
+        ranking_audits = []
         if snapshot is not None:
             ee = self._ee_pos()
             target = self.handover
@@ -2419,7 +2422,41 @@ class HandoverNode:
                     features["d_corridor"] = float(d_corridor)
                 except Exception:
                     pass
-                raw_values.append(snapshot.predict_detail(features)["raw"])
+                normalized = snapshot.featurize(features)
+                prediction = snapshot.predict_detail(features)
+                feature_vector = []
+                for name, normalized_value, theta in zip(
+                        snapshot.feature_names, normalized, snapshot.theta):
+                    raw_value = float(features.get(
+                        name, 1.0 if name == "bias" else 0.0))
+                    feature_vector.append({
+                        "feature_name": str(name),
+                        "raw_value": raw_value,
+                        "normalized_value": float(normalized_value),
+                        "theta": float(theta),
+                        "weighted_value": float(theta * normalized_value),
+                    })
+                candidate_context = {}
+                for name in (
+                        "path_length", "risk_cost", "min_clearance",
+                        "clearance", "task_cost", "execution_cost",
+                        "motion_cost", "max_turn_angle", "max_curvature",
+                        "topology_value", "topology_diversity"):
+                    value = getattr(corr, name, None)
+                    try:
+                        candidate_context[name] = float(value)
+                    except (TypeError, ValueError):
+                        candidate_context[name] = None
+                ranking_audits.append({
+                    "candidate_id": candidate_id(corr),
+                    "feature_vector": feature_vector,
+                    "candidate_context": candidate_context,
+                    "candidate_specific_critic_features": ["d_corridor"],
+                    "prediction_raw": float(prediction["raw"]),
+                    "prediction_clipped": float(prediction["clipped"]),
+                    "prediction_clip_hit": bool(prediction["clip_hit"]),
+                })
+                raw_values.append(float(prediction["raw"]))
         adjustments, norm_meta = adp_ranking_adjustments(
             raw_values, metadata=(snapshot.metadata if snapshot else {}),
             lambda_adp=(self.adp_learning.config.get("lambda_adp", 0.0)
@@ -2431,7 +2468,20 @@ class HandoverNode:
                        if self.adp_learning else 3.0),
             contribution_clip=(self.adp_learning.config.get("adp_contribution_clip", 0.10)
                                if self.adp_learning else 0.10))
-        for corr, item in zip(corridors, adjustments):
+        norm_clip = (self.adp_learning.config.get("adp_norm_clip", 3.0)
+                     if self.adp_learning else 3.0)
+        for corr, item, audit in zip(corridors, adjustments, ranking_audits):
+            normalized_before_clip = (
+                (float(item["adp_value_raw"]) - float(norm_meta["center"])) /
+                max(float(norm_meta["scale"]), 1e-6))
+            audit["ranking_normalization"] = {
+                "source": str(norm_meta.get("source", "")),
+                "center": float(norm_meta["center"]),
+                "scale": float(norm_meta["scale"]),
+                "normalized_before_clip": float(normalized_before_clip),
+                "normalized_after_clip": float(item["adp_value_normalized"]),
+                "norm_clip": float(norm_clip),
+            }
             corr.adp_value_raw = float(item["adp_value_raw"])
             corr.adp_value_normalized = float(item["adp_value_normalized"])
             corr.effective_lambda_adp = float(item["effective_lambda_adp"])
@@ -2441,6 +2491,7 @@ class HandoverNode:
             corr.cost = float(corr.total_cost)
             corr.adp_ranking_theta_source = "run_start_snapshot"
             corr.adp_normalization = dict(norm_meta)
+            corr.adp_ranking_audit = dict(audit)
         corridors.sort(key=lambda c: (float(getattr(c, "total_score", 0.0)), candidate_id(c)))
         for rank, corr in enumerate(corridors, start=1):
             corr.rank_total = int(rank)
