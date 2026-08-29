@@ -3201,7 +3201,9 @@ class WheelchairNode:
                                       if self.adp_learning else 0.0),
                     ranking_contribution=self.adp_ranking_influence_enabled,
                     control_contribution=False),
-                "adp_affects_candidate_ranking": int(self.adp_ranking_influence_enabled),
+                "adp_affects_candidate_ranking": int(
+                    self.adp_ranking_influence_enabled and self.adp_learning is not None and
+                    abs(float(self.adp_learning.config.get("lambda_adp", 0.0))) > 1e-12),
                 "adp_affects_control": 0,
                 "mpc_adp_enabled": int(self.adp_mpc_influence_enabled),
                 "total_score": float(getattr(corr, "total_score", getattr(corr, "cost", 0.0))),
@@ -5310,7 +5312,9 @@ class WheelchairNode:
                                       if self.adp_learning else 0.0),
                     ranking_contribution=self.adp_ranking_influence_enabled,
                     control_contribution=False),
-                "adp_affects_candidate_ranking": int(self.adp_ranking_influence_enabled),
+                "adp_affects_candidate_ranking": int(
+                    self.adp_ranking_influence_enabled and self.adp_learning is not None and
+                    abs(float(self.adp_learning.config.get("lambda_adp", 0.0))) > 1e-12),
                 "adp_affects_control": 0,
                 "mpc_adp_enabled": int(self.adp_mpc_influence_enabled),
                 "risk_cost": risk_cost,

@@ -153,6 +153,7 @@ def _path_smoothness(points):
 def _candidate_ranking_rows(debug, candidate_report, filter_report,
                             morse_routes=None, morse_route_evaluation=None):
     primary_candidates = list(
+        debug.get("final_candidate_ranking") or
         debug.get("candidate_corridors") or
         debug.get("candidate_after_filter") or
         debug.get("candidate_after_top_k") or

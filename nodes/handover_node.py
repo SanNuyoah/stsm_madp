@@ -2318,7 +2318,9 @@ class HandoverNode:
                     "adp_changed_rank": bool(getattr(c, "adp_changed_rank", False)),
                     "ranking_theta_source": str(getattr(c, "adp_ranking_theta_source", "")),
                     "adp_role": dbg["adp_role"],
-                    "adp_affects_candidate_ranking": int(self.adp_ranking_influence_enabled),
+                    "adp_affects_candidate_ranking": int(
+                        self.adp_ranking_influence_enabled and self.adp_learning is not None and
+                        abs(float(self.adp_learning.config.get("lambda_adp", 0.0))) > 1e-12),
                     "adp_affects_control": 0,
                     "mpc_adp_enabled": int(self.adp_mpc_influence_enabled),
                     "refinement_used": int(getattr(c, "refinement_used", 0)),
@@ -2331,6 +2333,7 @@ class HandoverNode:
                         c, "refined_waypoints", getattr(c, "waypoints", [])), float).tolist(),
                 })
             dbg["candidate_corridors"] = final_rows
+            dbg["final_candidate_ranking"] = list(final_rows)
             dbg["candidate_after_filter"] = list(final_rows)
             dbg["candidate_after_top_k"] = list(final_rows)
             self.manifold.last_topology_debug = dbg
