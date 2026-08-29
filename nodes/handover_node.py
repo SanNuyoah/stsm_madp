@@ -417,7 +417,7 @@ class HandoverNode:
         for key in ("enabled", "decision_influence_enabled",
                     "ranking_influence_enabled", "mpc_influence_enabled",
                     "adp_value_normalization", "adp_norm_clip",
-                    "adp_contribution_clip", "alpha",
+                    "adp_contribution_clip", "lambda_adp", "alpha",
                     "td_error_clip", "theta_delta_norm_max",
                     "min_transition_dt", "save_updated_critic",
                     "save_every_n_transitions", "risk_scale",
@@ -2295,48 +2295,44 @@ class HandoverNode:
                                   if self.adp_learning else 0.0),
                 ranking_contribution=self.adp_ranking_influence_enabled,
                 control_contribution=False)
-            for item in dbg.get("candidate_corridors", []):
-                cid = str(item.get("corridor_id", item.get("label", "")))
-                match = cid == selected_id
-                item["selected"] = bool(match)
-                item["execution_corridor_id"] = selected_id if match else ""
-                for c in executable:
-                    if cid == str(getattr(c, "corridor_id", getattr(c, "label", ""))):
-                        item["rank"] = int(getattr(c, "rank", 0))
-                        item["topology_route_class"] = str(getattr(
-                            c, "topology_route_class",
-                            getattr(c, "topology_class", "")))
-                        item["task_semantic_class"] = str(getattr(
-                            c, "task_semantic_class", ""))
-                        for key in (
-                                "risk_cost", "risk_norm", "length_cost",
-                                "length_norm", "smooth_cost", "smooth_norm",
-                                "task_cost", "task_norm", "execution_cost",
-                                "execution_norm", "base_cost", "total_score", "total_cost",
-                                "adp_value_raw", "adp_value_normalized",
-                                "effective_lambda_adp", "adp_cost", "rank_base",
-                                "rank_total", "rank_before_adp", "rank_after_adp"):
-                            item[key] = float(getattr(c, key, item.get(key, 0.0)))
-                        item["total_cost_with_adp"] = float(getattr(c, "total_cost", 0.0))
-                        item["adp_changed_rank"] = bool(getattr(c, "adp_changed_rank", False))
-                        item["ranking_theta_source"] = str(getattr(
-                            c, "adp_ranking_theta_source", ""))
-                        item["adp_role"] = dbg["adp_role"]
-                        item["adp_affects_candidate_ranking"] = int(
-                            self.adp_ranking_influence_enabled)
-                        item["adp_affects_control"] = 0
-                        item["mpc_adp_enabled"] = int(self.adp_mpc_influence_enabled)
-                        item["refinement_used"] = int(getattr(c, "refinement_used", 0))
-                        item["refined_path_length"] = float(getattr(
-                            c, "refined_path_length", getattr(c, "path_length", 0.0)))
-                        item["raw_topology_waypoints"] = np.asarray(getattr(
-                            c, "raw_topology_waypoints",
-                            getattr(c, "topology_ordered_waypoints", [])),
-                            float).tolist()
-                        item["refined_waypoints"] = np.asarray(getattr(
-                            c, "refined_waypoints", getattr(c, "waypoints", [])),
-                            float).tolist()
-                        break
+            final_rows = []
+            for c in executable:
+                cid = str(getattr(c, "corridor_id", getattr(c, "label", "")))
+                final_rows.append({
+                    "candidate_id": cid, "corridor_id": cid,
+                    "label": str(getattr(c, "label", cid)),
+                    "candidate_status": "safe", "candidate_filter_class": "safe",
+                    "selected": cid == selected_id,
+                    "execution_corridor_id": selected_id if cid == selected_id else "",
+                    "rank": int(getattr(c, "rank_total", getattr(c, "rank", 0))),
+                    "base_total_cost": float(getattr(c, "base_cost", 0.0)),
+                    "adp_value_raw": float(getattr(c, "adp_value_raw", 0.0)),
+                    "adp_value_normalized": float(getattr(c, "adp_value_normalized", 0.0)),
+                    "effective_lambda_adp": float(getattr(c, "effective_lambda_adp", 0.0)),
+                    "adp_cost": float(getattr(c, "adp_cost", 0.0)),
+                    "total_cost_with_adp": float(getattr(c, "total_cost", 0.0)),
+                    "total_cost": float(getattr(c, "total_cost", 0.0)),
+                    "total_score": float(getattr(c, "total_score", 0.0)),
+                    "rank_before_adp": int(getattr(c, "rank_before_adp", 0)),
+                    "rank_after_adp": int(getattr(c, "rank_after_adp", 0)),
+                    "adp_changed_rank": bool(getattr(c, "adp_changed_rank", False)),
+                    "ranking_theta_source": str(getattr(c, "adp_ranking_theta_source", "")),
+                    "adp_role": dbg["adp_role"],
+                    "adp_affects_candidate_ranking": int(self.adp_ranking_influence_enabled),
+                    "adp_affects_control": 0,
+                    "mpc_adp_enabled": int(self.adp_mpc_influence_enabled),
+                    "refinement_used": int(getattr(c, "refinement_used", 0)),
+                    "refined_path_length": float(getattr(
+                        c, "refined_path_length", getattr(c, "path_length", 0.0))),
+                    "raw_topology_waypoints": np.asarray(getattr(
+                        c, "raw_topology_waypoints",
+                        getattr(c, "topology_ordered_waypoints", [])), float).tolist(),
+                    "refined_waypoints": np.asarray(getattr(
+                        c, "refined_waypoints", getattr(c, "waypoints", [])), float).tolist(),
+                })
+            dbg["candidate_corridors"] = final_rows
+            dbg["candidate_after_filter"] = list(final_rows)
+            dbg["candidate_after_top_k"] = list(final_rows)
             self.manifold.last_topology_debug = dbg
             self._write_failed_topology_diagnostics("success")
             rospy.loginfo(

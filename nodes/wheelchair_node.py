@@ -636,7 +636,7 @@ class WheelchairNode:
         for key in ("enabled", "decision_influence_enabled",
                     "ranking_influence_enabled", "mpc_influence_enabled",
                     "adp_value_normalization", "adp_norm_clip",
-                    "adp_contribution_clip", "alpha",
+                    "adp_contribution_clip", "lambda_adp", "alpha",
                     "td_error_clip", "theta_delta_norm_max",
                     "min_transition_dt", "save_updated_critic",
                     "save_every_n_transitions", "risk_scale",
