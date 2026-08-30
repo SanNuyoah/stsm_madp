@@ -1584,12 +1584,30 @@ def test_adp_stability_audit_keeps_td_rule_and_attributes_task_state():
                         "candidate_path_length": False})
     learner.observe({"bias": 1.0, "candidate_path_length": 10.0}, 1.0,
                     task_state="handover", control_effort=10.0, task_penalty=10.0,
-                    feature_missing={"candidate_path_length": True})
+                    feature_missing={"candidate_path_length": False})
     diag = learner.diagnostics()
     assert diag["task_state_breakdown"]["handover"]["count"] == 1
     assert diag["td_clip_count"] == 1
-    assert diag["feature_stats"]["candidate_path_length"]["missing_count"] == 1
+    assert diag["feature_stats"]["candidate_path_length"]["missing_count"] == 0
     assert diag["feature_stats"]["candidate_path_length"]["normalized"]["max"] == 0.1
+
+
+def test_candidate_conditioned_learner_skips_missing_candidate_context():
+    critic = ADPCritic(
+        feature_names=["bias", "candidate_path_length"], theta=[0.0, 0.0],
+        mean=[0.0, 0.0], std=[1.0, 1.0])
+    learner = ADPTransitionLearner(critic, config={"min_transition_dt": 0.0})
+    missing = learner.observe(
+        {"bias": 1.0, "candidate_path_length": 0.0}, 0.0,
+        task_state="approach", feature_missing={"candidate_path_length": True})
+    seeded = learner.observe(
+        {"bias": 1.0, "candidate_path_length": 1.0}, 1.0,
+        task_state="align", feature_missing={"candidate_path_length": False})
+    assert missing["reason"] == "candidate_context_unavailable"
+    assert not missing["candidate_context_available"]
+    assert seeded["status"] == "seed"
+    cross = learner.diagnostics()["phase_candidate_context_cross_stats"]
+    assert cross["approach|candidate_context_missing"]["skipped_count"] == 1
 
 
 def test_adp_promotion_gate_blocks_unstable_critic_without_replacing_seed():

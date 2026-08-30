@@ -66,12 +66,12 @@ mean:
 - 0.5366998335048895
 - 0.04341883075049034
 - 0.0
-- 2.8441873278770564
-- 4.332279136362188
-- 0.0
-- 0.0
+- 2.8469890326363307
+- 0.3023981748790503
+- 1.7362664141999025
+- 0.10000000000000003
 - 0.7284610432288827
-- 0.5352708506460384
+- 2.7040293093205965
 metadata:
   calibrated_at: 2026-08-30T11:14:57+0800
   calibration_method: real_online_transition_cost_to_go
@@ -93,47 +93,51 @@ metadata:
     candidate_task_cost: 0
   candidate_feature_normalization:
     candidate_execution_cost:
-      mean: 0.5352708506460384
-      p5: 0.5321043790903929
-      p95: 0.5421903444423323
-      sample_count: 6
-      source: legal_candidate_feature_distribution
-      std: 0.006002882378149801
+      mean: 2.7040293093205965
+      p5: 2.6938682408875114
+      p95: 2.7141903777536815
+      sample_count: 2
+      source: runtime_selected_candidate_context
+      std: 0.015064593673958581
     candidate_min_clearance:
-      mean: 0.0
-      p5: 0.0
-      p95: 0.0
-      sample_count: 6
-      source: legal_candidate_feature_distribution
+      mean: 0.10000000000000003
+      p5: 0.10000000000000003
+      p95: 0.10000000000000003
+      sample_count: 2
+      source: runtime_selected_candidate_context
       std: 1.0
     candidate_path_length:
-      mean: 2.8441873278770564
-      p5: 2.8335703002815347
-      p95: 2.8640617444949847
-      sample_count: 6
-      source: legal_candidate_feature_distribution
-      std: 0.011864687982263913
+      mean: 2.8469890326363307
+      p5: 2.842329226341756
+      p95: 2.851648838930906
+      sample_count: 2
+      source: runtime_selected_candidate_context
+      std: 0.00690853416541894
     candidate_risk_max:
-      mean: 0.0
-      p5: 0.0
-      p95: 0.0
-      sample_count: 6
-      source: legal_candidate_feature_distribution
+      mean: 1.7362664141999025
+      p5: 1.7362664141999025
+      p95: 1.7362664141999025
+      sample_count: 2
+      source: runtime_selected_candidate_context
       std: 1.0
     candidate_risk_mean:
-      mean: 4.332279136362188
-      p5: 4.329580319994152
-      p95: 4.335619931819624
-      sample_count: 6
-      source: legal_candidate_feature_distribution
-      std: 0.003928854483151239
+      mean: 0.3023981748790503
+      p5: 0.3023787290692484
+      p95: 0.30241762068885225
+      sample_count: 2
+      source: runtime_selected_candidate_context
+      std: 2.8829962641848455e-05
     candidate_task_cost:
       mean: 0.7284610432288827
       p5: 0.7284610432288827
       p95: 0.7284610432288827
-      sample_count: 6
-      source: legal_candidate_feature_distribution
+      sample_count: 2
+      source: runtime_selected_candidate_context
       std: 1.0
+  candidate_feature_normalization_recalibrated_at: 2026-08-30T15:56:35+0800
+  candidate_feature_normalization_sources:
+  - results\runs\20260830_R004\wheelchair\stsm\candidate_corridors.json
+  - results\runs\20260830_R005\wheelchair\stsm\candidate_corridors.json
   episode_count: 6
   excluded_sources: []
   feature_count: 22
@@ -185,12 +189,12 @@ std:
 - 0.4483570186459447
 - 0.03557357721598169
 - 1.0
-- 0.011864687982263913
-- 0.003928854483151239
+- 0.00690853416541894
+- 2.8829962641848455e-05
 - 1.0
 - 1.0
 - 1.0
-- 0.006002882378149801
+- 0.015064593673958581
 theta:
 - 4.448460459933783
 - 38.32933770211384

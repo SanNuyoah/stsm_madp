@@ -654,10 +654,30 @@ class ADPTransitionLearner(object):
             "feature_missing": sorted([str(name) for name in
                                         (feature_missing or {}).keys()
                                         if bool((feature_missing or {})[name])]),
+            "td_clipped": False,
+            "value_outlier": False,
         }
+        candidate_context_names = [name for name in CANDIDATE_FEATURE_NAMES
+                                   if name in self.critic.feature_names]
+        record["candidate_context_available"] = bool(
+            not candidate_context_names or not any(
+                name in record["feature_missing"]
+                for name in candidate_context_names))
         if not bool(self.config.get("enabled", True)):
             record["status"] = "learning_disabled"
             self.records.append(record)
+            return record
+        if not record["candidate_context_available"]:
+            # A candidate-conditioned critic must not learn from synthetic
+            # zero placeholders before the selected corridor is available.
+            self.skipped_transition_count += 1
+            self.skip_reasons["candidate_context_unavailable"] = (
+                self.skip_reasons.get("candidate_context_unavailable", 0) + 1)
+            record.update({"status": "skipped",
+                           "reason": "candidate_context_unavailable"})
+            self.records.append(record)
+            self.previous_features = None
+            self.previous_time = None
             return record
         raw_nonfinite = _nonfinite_feature_names(current)
         if raw_nonfinite:
@@ -745,6 +765,9 @@ class ADPTransitionLearner(object):
             "value_outlier": value_outlier,
         })
         record.update(detail)
+        record["td_clipped"] = bool(abs(_as_float(
+            detail.get("raw_td_error"))) >= abs(_as_float(
+                self.config.get("td_error_clip"), 5.0)))
         if detail.get("updated", False):
             self.update_count += 1
             self.theta_delta_norm_total += float(detail.get("theta_delta_norm", 0.0))
@@ -817,6 +840,32 @@ class ADPTransitionLearner(object):
                 "terminal_count": int(sum(bool(row.get("terminal")) for row in rows)),
                 "value_outlier_count": int(sum(bool(row.get("value_outlier")) for row in rows)),
             }
+        context_cross_stats = {}
+        for row in self.records:
+            state = str(row.get("task_state") or "unknown")
+            available = bool(row.get("candidate_context_available", False))
+            key = "%s|candidate_context_%s" % (
+                state, "available" if available else "missing")
+            bucket = context_cross_stats.setdefault(key, {
+                "phase": state,
+                "candidate_context_available": available,
+                "record_count": 0,
+                "update_count": 0,
+                "skipped_count": 0,
+                "td_clipped_count": 0,
+                "value_outlier_count": 0,
+            })
+            bucket["record_count"] += 1
+            bucket["update_count"] += int(bool(row.get("updated", False)))
+            bucket["skipped_count"] += int(row.get("status") == "skipped")
+            bucket["td_clipped_count"] += int(bool(row.get("td_clipped", False)))
+            bucket["value_outlier_count"] += int(bool(row.get("value_outlier", False)))
+        for bucket in context_cross_stats.values():
+            updates = bucket["update_count"]
+            bucket["td_clip_ratio"] = (float(bucket["td_clipped_count"]) / updates
+                                       if updates else 0.0)
+            bucket["value_outlier_ratio"] = (
+                float(bucket["value_outlier_count"]) / updates if updates else 0.0)
         feature_stats = {}
         for index, name in enumerate(self.critic.feature_names):
             raw = np.asarray([_as_float(row.get("features_t", {}).get(name))
@@ -852,6 +901,7 @@ class ADPTransitionLearner(object):
                 "terminal": terminal_stats,
             },
             "task_state_breakdown": state_stats,
+            "phase_candidate_context_cross_stats": context_cross_stats,
             "feature_stats": feature_stats,
             "skipped_by_reason": dict(self.skip_reasons),
             "value_outlier_count": int(self.value_outlier_count),
