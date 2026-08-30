@@ -33,7 +33,8 @@ from stsm_madp.safety_gate import SafetyGate, SafetyGateResult
 from stsm_madp.adp import (
     ADPCritic, ADPFeatureBuilder, ADPTransitionLearner,
     adp_ranking_adjustments, adp_role_from_runtime, clone_critic,
-    candidate_feature_values, require_feature_schema, save_and_verify_critic)
+    candidate_feature_values, require_feature_schema, save_and_verify_critic,
+    validate_critic_runtime_identity, evaluate_promotion_gate, apply_critic_lineage)
 from stsm_madp.topology import topology_param_or_auto, topology_profile_defaults
 from stsm_madp.topology_candidate_generator import (
     recover_candidate_corridor_feasibility)
@@ -254,6 +255,10 @@ class WheelchairNode:
             "~adp_model",
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
                                          "config", "adp_critic_wheelchair_candidate_conditioned.yaml")))
+        self.adp_expected_critic_path = rospy.get_param("~adp/expected_critic_path", "")
+        self.adp_expected_critic_version = rospy.get_param("~adp/expected_critic_version", "")
+        self.adp_expected_theta_hash = rospy.get_param("~adp/expected_theta_hash", "")
+        self.adp_runtime_identity = {}
         self.lambda_adp = float(rospy.get_param("~lambda_adp", 0.005))
         self.lambda_adp_corridor = float(rospy.get_param(
             "~lambda_adp_corridor", self.lambda_adp))
@@ -275,6 +280,7 @@ class WheelchairNode:
         self.adp_learning = None
         self._adp_prev_pose = None
         self._adp_active_candidate_features = {}
+        self._adp_active_candidate_missing = {}
         self.last_adp_value = 0.0
         self.selected_corridor = None
         self.execution_corridor = None
@@ -619,6 +625,13 @@ class WheelchairNode:
         try:
             self.adp_critic = ADPCritic.load_yaml(self.adp_model)
             require_feature_schema(self.adp_critic)
+            self.adp_runtime_identity = validate_critic_runtime_identity(
+                self.adp_critic, self.adp_model, self.adp_expected_critic_path,
+                self.adp_expected_critic_version, self.adp_expected_theta_hash,
+                robot_type="wheelchair")
+            if not self.adp_runtime_identity["validated"]:
+                raise RuntimeError("adp_critic_identity_invalid:%s" % ",".join(
+                    self.adp_runtime_identity["validation_reasons"]))
             self.adp_features = ADPFeatureBuilder(self.adp_critic.feature_names)
             self._configure_adp_learning()
             self.adp_status_pub.publish(String(
@@ -626,6 +639,9 @@ class WheelchairNode:
             rospy.loginfo("[wc][adp] loaded %s (%s)",
                           self.adp_model, self.adp_critic.critic_version)
         except Exception as exc:
+            if (self.adp_expected_critic_path or self.adp_expected_critic_version or
+                    self.adp_expected_theta_hash):
+                raise RuntimeError("formal_adp_seed_validation_failed:%s" % exc)
             self.adp_enabled = False
             self.adp_critic = None
             self.adp_status_pub.publish(String(
@@ -642,7 +658,10 @@ class WheelchairNode:
                     "td_error_clip", "theta_delta_norm_max",
                     "min_transition_dt", "save_updated_critic",
                     "save_every_n_transitions", "risk_scale",
-                    "failure_terminal_penalty"):
+                    "failure_terminal_penalty", "value_outlier_z",
+                    "promotion_td_clip_ratio_max", "promotion_td_error_abs_mean_max",
+                    "promotion_theta_delta_norm_total_max",
+                    "promotion_value_outlier_ratio_max", "promotion_auto_promote"):
             param = "~adp/" + key
             if rospy.has_param(param):
                 config[key] = rospy.get_param(param)
@@ -756,7 +775,8 @@ class WheelchairNode:
             control_effort=float(np.linalg.norm(self.u_prev)),
             tube_violation=tube_violation,
             terminal=terminal, success=bool(self.task_completed),
-            failure_reason=self.stop_reason)
+            failure_reason=self.stop_reason,
+            feature_missing=self._adp_active_candidate_missing)
         self._adp_prev_pose = np.asarray(self.state, float).copy()
 
     def _write_adp_learning_diagnostics(self):
@@ -771,6 +791,7 @@ class WheelchairNode:
             os.makedirs(base)
         payload = self.adp_learning.diagnostics()
         payload["critic_source"] = self.adp_model
+        payload["adp_runtime_identity"] = dict(self.adp_runtime_identity)
         payload["critic_saved"] = False
         payload["critic_reload_verified"] = False
         if (payload["learning_enabled"] and
@@ -783,6 +804,40 @@ class WheelchairNode:
                 payload["updated_critic_path"] = updated
             except Exception as exc:
                 payload["critic_save_error"] = str(exc)
+        promotion = evaluate_promotion_gate(
+            payload, self.adp_critic, self.adp_model, robot_type="wheelchair",
+            # Wheelchair P0 completion alone is not an ADP promotion veto.
+            execution_regression=False,
+            hard_safety_regression=bool(self.stop_triggered and
+                                        "safety" in str(self.stop_reason).lower()),
+            reload_verified=payload["critic_reload_verified"])
+        promotion["updated_critic_path"] = payload.get("updated_critic_path", "")
+        promotion["adp_cross_run_seed_source"] = self.adp_model
+        if payload.get("critic_saved"):
+            promotion["updated_identity"] = apply_critic_lineage(
+                self.adp_critic, self.adp_runtime_identity, "wheelchair", base,
+                payload, promotion)
+            payload["critic_reload_verified"] = save_and_verify_critic(
+                self.adp_critic, payload["updated_critic_path"])
+            promotion["reload_verified"] = payload["critic_reload_verified"]
+        promotion["promoted_critic_path"] = ""
+        if (promotion["promotion_passed"] and bool(
+                self.adp_learning.config.get("promotion_auto_promote", False))):
+            promoted = os.path.join(base, "adp_critic_promoted.yaml")
+            promotion["promoted_reload_verified"] = save_and_verify_critic(
+                self.adp_critic, promoted)
+            if promotion["promoted_reload_verified"]:
+                promotion["promoted_critic_path"] = promoted
+        payload.update({
+            "adp_learning_stable": bool(promotion["promotion_passed"]),
+            "adp_promotion_candidate": bool(promotion["promotion_candidate"]),
+            "adp_promotion_passed": bool(promotion["promotion_passed"]),
+            "adp_cross_run_seed_source": self.adp_model,
+            "adp_parent_critic_id": promotion["identity"]["parent_critic_id"],
+            "adp_critic_generation": promotion["identity"]["critic_generation"],
+        })
+        with open(os.path.join(base, "adp_promotion_diagnostics.json"), "w") as handle:
+            json.dump(promotion, handle, indent=2, sort_keys=True)
         path = os.path.join(base, "adp_learning_diagnostics.json")
         with open(path, "w") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
@@ -1753,6 +1808,7 @@ class WheelchairNode:
         self.execution_corridor = selected
         self._adp_active_candidate_features = dict(getattr(
             selected, "adp_candidate_features", {}) or {})
+        _, self._adp_active_candidate_missing = self._adp_candidate_features(selected)
         self._sync_selected_corridor_geometry(self.selected_corridor)
         self._sync_runtime_topology_debug(corrs, selected)
         self.last_valid_topology_debug = copy.deepcopy(

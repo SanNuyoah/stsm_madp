@@ -1,6 +1,7 @@
 import os
 import sys
 import hashlib
+import datetime
 sys.dont_write_bytecode = True
 
 import numpy as np
@@ -65,6 +66,13 @@ DEFAULT_LEARNING_CONFIG = {
     "adp_value_normalization": "robust",
     "adp_norm_clip": 3.0,
     "adp_contribution_clip": 0.10,
+    # These only govern audit/promotion; they do not change the TD update.
+    "value_outlier_z": 8.0,
+    "promotion_td_clip_ratio_max": 0.15,
+    "promotion_td_error_abs_mean_max": 2.0,
+    "promotion_theta_delta_norm_total_max": 10.0,
+    "promotion_value_outlier_ratio_max": 0.05,
+    "promotion_auto_promote": False,
 }
 
 DEFAULT_TRANSITION_COST_WEIGHTS = {
@@ -87,6 +95,17 @@ def _as_float(value, default=0.0):
         return value
     except (TypeError, ValueError):
         return float(default)
+
+
+def _nonfinite_feature_names(values):
+    names = []
+    for name, value in dict(values or {}).items():
+        try:
+            if not np.isfinite(float(value)):
+                names.append(str(name))
+        except (TypeError, ValueError):
+            names.append(str(name))
+    return sorted(names)
 
 
 def _safe_std(std):
@@ -133,6 +152,50 @@ def require_feature_schema(critic, expected_version=FEATURE_SCHEMA_VERSION,
             "critic_feature_schema_mismatch: expected {} / {} features, got {} / {}".format(
                 expected_version, len(expected_feature_names), version, len(names)))
     return True
+
+
+def critic_theta_hash(critic):
+    """Stable identity for a critic's actual parameters, not its file path."""
+    theta = np.asarray(critic.theta, dtype=np.float64)
+    return hashlib.sha256(theta.tobytes()).hexdigest()
+
+
+def critic_runtime_identity(critic, source_path="", robot_type=""):
+    metadata = dict(getattr(critic, "metadata", {}) or {})
+    theta_hash = critic_theta_hash(critic)
+    return {
+        "source_path": os.path.realpath(source_path) if source_path else "",
+        "critic_id": str(metadata.get("critic_id") or
+                         "critic-" + theta_hash[:12]),
+        "parent_critic_id": str(metadata.get("parent_critic_id") or ""),
+        "critic_version": str(critic.critic_version),
+        "feature_schema_version": str(metadata.get("feature_schema_version", "")),
+        "robot_type": str(metadata.get("robot_type") or robot_type or ""),
+        "critic_generation": int(_as_float(metadata.get("critic_generation"), 0)),
+        "theta_hash": theta_hash,
+    }
+
+
+def validate_critic_runtime_identity(critic, source_path="", expected_path="",
+                                     expected_version="", expected_theta_hash="",
+                                     robot_type=""):
+    """Make a formal run invalid when the requested seed was not loaded."""
+    identity = critic_runtime_identity(critic, source_path, robot_type)
+    expected_path = str(expected_path or "")
+    expected_version = str(expected_version or "")
+    expected_theta_hash = str(expected_theta_hash or "")
+    reasons = []
+    if expected_path and identity["source_path"] != os.path.realpath(expected_path):
+        reasons.append("expected_critic_path_mismatch")
+    if expected_version and identity["critic_version"] != expected_version:
+        reasons.append("expected_critic_version_mismatch")
+    if expected_theta_hash and identity["theta_hash"] != expected_theta_hash:
+        reasons.append("expected_theta_hash_mismatch")
+    identity.update({"expected_path": expected_path,
+                     "expected_critic_version": expected_version,
+                     "expected_theta_hash": expected_theta_hash,
+                     "validated": not reasons, "validation_reasons": reasons})
+    return identity
 
 
 def recenter_critic_feature_normalization(critic, feature_stats):
@@ -227,12 +290,15 @@ class ADPCritic(object):
             if clip > 0.0:
                 delta = float(np.clip(delta, -clip, clip))
         theta_delta = float(alpha) * delta * x_t
-        theta_delta_norm = float(np.linalg.norm(theta_delta))
+        theta_delta_norm_raw = float(np.linalg.norm(theta_delta))
+        theta_delta_norm = theta_delta_norm_raw
+        theta_delta_rescaled = False
         if theta_delta_norm_max is not None:
             max_norm = abs(float(theta_delta_norm_max))
             if max_norm > 0.0 and theta_delta_norm > max_norm:
                 theta_delta *= max_norm / theta_delta_norm
                 theta_delta_norm = max_norm
+                theta_delta_rescaled = True
         candidate = theta_before + theta_delta
         if not np.all(np.isfinite(candidate)):
             self.theta = theta_before
@@ -245,6 +311,8 @@ class ADPCritic(object):
             "target": float(target),
             "prediction": float(pred),
             "theta_delta_norm": float(theta_delta_norm),
+            "theta_delta_norm_raw": float(theta_delta_norm_raw),
+            "theta_delta_rescaled": bool(theta_delta_rescaled),
             "terminal": bool(terminal),
         }
 
@@ -566,10 +634,13 @@ class ADPTransitionLearner(object):
         self.td_errors = []
         self.theta_delta_norm_total = 0.0
         self.theta_initial = np.asarray(critic.theta, float).copy()
+        self.skip_reasons = {}
+        self.value_outlier_count = 0
 
     def observe(self, features, timestamp, task_state="", corridor_id="",
                 control_effort=0.0, task_penalty=0.0, tube_violation=0.0,
-                terminal=False, success=False, failure_reason=""):
+                terminal=False, success=False, failure_reason="",
+                feature_missing=None):
         current = dict(features or {})
         now = _as_float(timestamp)
         record = {
@@ -580,14 +651,28 @@ class ADPTransitionLearner(object):
             "terminal": bool(terminal),
             "success": bool(success),
             "failure_reason": str(failure_reason or ""),
+            "feature_missing": sorted([str(name) for name in
+                                        (feature_missing or {}).keys()
+                                        if bool((feature_missing or {})[name])]),
         }
         if not bool(self.config.get("enabled", True)):
             record["status"] = "learning_disabled"
             self.records.append(record)
             return record
+        raw_nonfinite = _nonfinite_feature_names(current)
+        if raw_nonfinite:
+            self.skipped_transition_count += 1
+            self.skip_reasons["nonfinite_features"] = self.skip_reasons.get(
+                "nonfinite_features", 0) + 1
+            record.update({"status": "skipped", "reason": "nonfinite_features",
+                           "nonfinite_feature_names": raw_nonfinite})
+            self.records.append(record)
+            return record
         x = self.critic.featurize(current)
         if not np.all(np.isfinite(x)):
             self.skipped_transition_count += 1
+            self.skip_reasons["nonfinite_features"] = self.skip_reasons.get(
+                "nonfinite_features", 0) + 1
             record.update({"status": "skipped", "reason": "nonfinite_features"})
             self.records.append(record)
             return record
@@ -601,6 +686,8 @@ class ADPTransitionLearner(object):
         min_dt = max(0.0, _as_float(self.config.get("min_transition_dt"), 0.1))
         if not terminal and dt < min_dt:
             self.skipped_transition_count += 1
+            self.skip_reasons["min_transition_dt"] = self.skip_reasons.get(
+                "min_transition_dt", 0) + 1
             record.update({"status": "skipped", "reason": "min_transition_dt", "dt": dt})
             self.records.append(record)
             return record
@@ -618,6 +705,19 @@ class ADPTransitionLearner(object):
         value_next_detail = self.critic.predict_detail(current)
         value_t = float(value_t_detail["raw"])
         value_next = float(value_next_detail["raw"])
+        metadata = dict(getattr(self.critic, "metadata", {}) or {})
+        value_center = _as_float(metadata.get(
+            "value_center", metadata.get("target_mean")), 0.0)
+        value_scale = abs(_as_float(metadata.get(
+            "value_scale", metadata.get("ranking_value_scale")), 0.0))
+        if value_scale <= 1e-6:
+            value_scale = abs(_as_float(metadata.get("target_p95"), value_center) -
+                              value_center)
+        value_scale = max(value_scale, 1e-6)
+        value_z_max = max(abs(value_t - value_center),
+                          abs(value_next - value_center)) / value_scale
+        value_outlier = bool(value_z_max > max(
+            _as_float(self.config.get("value_outlier_z"), 8.0), 0.0))
         features_t = dict(self.previous_features)
         detail = self.critic.update_td_detail(
             self.previous_features, cost, current,
@@ -638,15 +738,22 @@ class ADPTransitionLearner(object):
             "value_next_clipped": float(value_next_detail["clipped"]),
             "bootstrap_value": (
                 0.0 if terminal else float(self.critic.gamma * value_next)),
+            "value_reference_center": float(value_center),
+            "value_reference_scale": float(value_scale),
+            "value_z_max": float(value_z_max),
+            "value_outlier": value_outlier,
         })
         record.update(detail)
         if detail.get("updated", False):
             self.update_count += 1
             self.theta_delta_norm_total += float(detail.get("theta_delta_norm", 0.0))
             self.td_errors.append(float(detail.get("td_error", 0.0)))
+            self.value_outlier_count += int(value_outlier)
             record["status"] = "updated"
         else:
             self.skipped_transition_count += 1
+            reason = str(detail.get("reason", "update_rejected"))
+            self.skip_reasons[reason] = self.skip_reasons.get(reason, 0) + 1
             record["status"] = "skipped"
         self.records.append(record)
         self.previous_features = None if terminal else current
@@ -663,13 +770,22 @@ class ADPTransitionLearner(object):
                                  for record in updated], float)
             if not len(values):
                 return {"mean": 0.0, "std": 0.0, "p50": 0.0,
-                        "p95": 0.0, "max": 0.0, "min": 0.0}
+                        "p90": 0.0, "p95": 0.0, "p99": 0.0,
+                        "max": 0.0, "min": 0.0}
             return {
                 "mean": float(np.mean(values)), "std": float(np.std(values)),
                 "p50": float(np.percentile(values, 50)),
+                "p90": float(np.percentile(values, 90)),
                 "p95": float(np.percentile(values, 95)),
+                "p99": float(np.percentile(values, 99)),
                 "max": float(np.max(values)), "min": float(np.min(values)),
             }
+        def stats_from_values(values):
+            values = np.asarray(values, float)
+            if not len(values):
+                return {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0}
+            return {"mean": float(np.mean(values)), "std": float(np.std(values)),
+                    "min": float(np.min(values)), "max": float(np.max(values))}
         raw_errors = np.asarray([
             _as_float(record.get("raw_td_error")) for record in updated], float)
         terminal_stats = {}
@@ -682,6 +798,33 @@ class ADPTransitionLearner(object):
                 "count": int(len(values)),
                 "raw_td_error_mean": float(np.mean(values)) if len(values) else 0.0,
                 "raw_td_error_max_abs": float(np.max(np.abs(values))) if len(values) else 0.0,
+            }
+        by_task_state = {}
+        for row in updated:
+            state = str(row.get("task_state") or "unknown")
+            bucket = by_task_state.setdefault(state, [])
+            bucket.append(row)
+        state_stats = {}
+        clip_limit = abs(_as_float(self.config.get("td_error_clip"), 5.0))
+        for state, rows in by_task_state.items():
+            raw = np.asarray([_as_float(row.get("raw_td_error")) for row in rows], float)
+            state_stats[state] = {
+                "count": int(len(rows)),
+                "td_clip_count": int(np.sum(np.abs(raw) >= clip_limit)),
+                "td_clip_ratio": float(np.mean(np.abs(raw) >= clip_limit)),
+                "raw_td_error_abs_mean": float(np.mean(np.abs(raw))),
+                "terminal_count": int(sum(bool(row.get("terminal")) for row in rows)),
+                "value_outlier_count": int(sum(bool(row.get("value_outlier")) for row in rows)),
+            }
+        feature_stats = {}
+        for index, name in enumerate(self.critic.feature_names):
+            raw = np.asarray([_as_float(row.get("features_t", {}).get(name))
+                              for row in updated], float)
+            norm = (raw - self.critic.mean[index]) / self.critic.std[index]
+            feature_stats[name] = {
+                "raw": stats_from_values(raw), "normalized": stats_from_values(norm),
+                "missing_count": int(sum(name in row.get("feature_missing", [])
+                                         for row in self.records)),
             }
         return {
             "robot": self.robot,
@@ -707,6 +850,14 @@ class ADPTransitionLearner(object):
                 "clipped_td_error": stats("td_error"),
                 "terminal": terminal_stats,
             },
+            "task_state_breakdown": state_stats,
+            "feature_stats": feature_stats,
+            "skipped_by_reason": dict(self.skip_reasons),
+            "value_outlier_count": int(self.value_outlier_count),
+            "value_outlier_ratio": (float(self.value_outlier_count) / len(updated)
+                                    if updated else 0.0),
+            "theta_delta_rescale_count": int(sum(
+                bool(row.get("theta_delta_rescaled")) for row in updated)),
             "theta_delta_norm_total": float(self.theta_delta_norm_total),
             "theta_changed": theta_changed,
             "critic_version": str(self.critic.critic_version),
@@ -718,7 +869,79 @@ class ADPTransitionLearner(object):
 def save_and_verify_critic(critic, path):
     critic.save_yaml(path)
     reloaded = ADPCritic.load_yaml(path)
-    return bool(np.allclose(critic.theta, reloaded.theta))
+    return bool(np.allclose(critic.theta, reloaded.theta) and
+                critic_theta_hash(critic) == critic_theta_hash(reloaded))
+
+
+def evaluate_promotion_gate(learner_diagnostics, critic, source_path="",
+                            robot_type="", execution_regression=False,
+                            hard_safety_regression=False,
+                            reload_verified=False):
+    """Return an AND-gate decision; this function never overwrites a seed."""
+    diag = dict(learner_diagnostics or {})
+    config = dict(getattr(critic, "learning_config", {}) or {})
+    identity = critic_runtime_identity(critic, source_path, robot_type)
+    reasons = []
+    if not np.all(np.isfinite(critic.theta)):
+        reasons.append("nonfinite_theta")
+    if not bool(reload_verified):
+        reasons.append("save_reload_verification_failed")
+    checks = (
+        ("td_clip_ratio_high", _as_float(diag.get("td_clip_ratio")) >=
+         _as_float(config.get("promotion_td_clip_ratio_max"), 0.15)),
+        ("td_error_abs_mean_high", _as_float(diag.get("td_error_abs_mean")) >
+         _as_float(config.get("promotion_td_error_abs_mean_max"), 2.0)),
+        ("theta_delta_norm_total_high", _as_float(diag.get("theta_delta_norm_total")) >
+         _as_float(config.get("promotion_theta_delta_norm_total_max"), 10.0)),
+        ("value_outlier_ratio_high", _as_float(diag.get("value_outlier_ratio")) >
+         _as_float(config.get("promotion_value_outlier_ratio_max"), 0.05)),
+        ("execution_regression", bool(execution_regression)),
+        ("hard_safety_regression", bool(hard_safety_regression)),
+    )
+    reasons.extend(name for name, failed in checks if failed)
+    return {
+        "source_critic_path": str(source_path or ""),
+        "updated_critic_path": "",
+        "promotion_candidate": bool(diag.get("update_count", 0) > 0),
+        "promotion_passed": not reasons and bool(diag.get("update_count", 0) > 0),
+        "promotion_reasons": reasons,
+        "execution_regression": bool(execution_regression),
+        "hard_safety_regression": bool(hard_safety_regression),
+        "reload_verified": bool(reload_verified),
+        "metrics": {
+            "td_clip_ratio": _as_float(diag.get("td_clip_ratio")),
+            "td_error_abs_mean": _as_float(diag.get("td_error_abs_mean")),
+            "theta_delta_norm_total": _as_float(diag.get("theta_delta_norm_total")),
+            "value_outlier_ratio": _as_float(diag.get("value_outlier_ratio")),
+        },
+        "identity": identity,
+    }
+
+
+def apply_critic_lineage(critic, parent_identity, robot_type, created_from_run,
+                         learner_diagnostics, promotion):
+    """Attach immutable provenance to a result-local updated critic file."""
+    parent = dict(parent_identity or {})
+    metadata = dict(getattr(critic, "metadata", {}) or {})
+    metadata.update({
+        "critic_id": "critic-" + critic_theta_hash(critic)[:12],
+        "parent_critic_id": str(parent.get("critic_id") or ""),
+        "robot_type": str(robot_type),
+        "feature_schema_version": str(metadata.get(
+            "feature_schema_version", FEATURE_SCHEMA_VERSION)),
+        "created_from_run": str(created_from_run or ""),
+        "training_update_samples": int(_as_float(
+            (learner_diagnostics or {}).get("update_count"), 0)),
+        "promotion_status": ("promoted" if promotion.get("promotion_passed")
+                             else "promotion_rejected"),
+        "promotion_metrics": dict(promotion.get("metrics", {})),
+        "theta_hash": critic_theta_hash(critic),
+        "created_at": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+    })
+    metadata["critic_generation"] = int(_as_float(
+        parent.get("critic_generation"), 0)) + 1
+    critic.metadata = metadata
+    return critic_runtime_identity(critic, robot_type=robot_type)
 
 
 def adp_role_from_runtime(adp_enabled, learning_enabled,

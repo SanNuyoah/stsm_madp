@@ -87,6 +87,16 @@ adp_contribution_clip="${ADP_CONTRIBUTION_CLIP:-0.10}"
 adp_model_override="${ADP_MODEL:-}"
 arm_adp_model="${ADP_ARM_MODEL:-${pkg_dir}/config/adp_critic_arm_candidate_conditioned.yaml}"
 wheelchair_adp_model="${ADP_WHEELCHAIR_MODEL:-${pkg_dir}/config/adp_critic_wheelchair_candidate_conditioned.yaml}"
+
+adp_critic_identity() {
+  PYTHONPATH="${pkg_dir}/src${PYTHONPATH:+:${PYTHONPATH}}" python - "$1" <<'PY'
+from __future__ import print_function
+import sys
+from stsm_madp.adp import ADPCritic, critic_theta_hash
+critic = ADPCritic.load_yaml(sys.argv[1])
+print("%s %s" % (critic.critic_version, critic_theta_hash(critic)))
+PY
+}
 lambda_adp="${LAMBDA_ADP:-0.005}"
 lambda_adp_corridor="${LAMBDA_ADP_CORRIDOR:-0.05}"
 lambda_adp_terminal="${LAMBDA_ADP_TERMINAL:-0.0015}"
@@ -1103,6 +1113,8 @@ run_one() {
   local baseline_type="direct"
   local run_adp_enabled="${adp_enabled}"
   local run_adp_model
+  local adp_expected_critic_version
+  local adp_expected_theta_hash
   local variant="$mode"
   local metrics_target="$target"
   local metrics_csv
@@ -1163,6 +1175,14 @@ run_one() {
 
   if [ -n "${adp_model_override}" ]; then
     run_adp_model="${adp_model_override}"
+  fi
+  if [ "${run_adp_enabled}" = "true" ]; then
+    read -r adp_expected_critic_version adp_expected_theta_hash <<EOF
+$(adp_critic_identity "${run_adp_model}")
+EOF
+  else
+    adp_expected_critic_version=""
+    adp_expected_theta_hash=""
   fi
 
   run_dir="${run_root}/${target}/${variant}"
@@ -1255,6 +1275,9 @@ run_one() {
       footprint_forbidden_stop_enabled:="${wc_footprint_forbidden_stop_enabled}" \
       adp_enabled:="${run_adp_enabled}" \
       adp_model:="${run_adp_model}" \
+      adp_expected_critic_path:="${run_adp_model}" \
+      adp_expected_critic_version:="${adp_expected_critic_version}" \
+      adp_expected_theta_hash:="${adp_expected_theta_hash}" \
       adp_decision_influence_enabled:="${adp_decision_influence_enabled}" \
       adp_ranking_influence_enabled:="${adp_ranking_influence_enabled}" \
       adp_mpc_influence_enabled:="${adp_mpc_influence_enabled}" \
@@ -1285,6 +1308,9 @@ run_one() {
       arm_interest_gate_min_scale:="${arm_interest_gate_min_scale}" \
       adp_enabled:="${run_adp_enabled}" \
       adp_model:="${run_adp_model}" \
+      adp_expected_critic_path:="${run_adp_model}" \
+      adp_expected_critic_version:="${adp_expected_critic_version}" \
+      adp_expected_theta_hash:="${adp_expected_theta_hash}" \
       adp_decision_influence_enabled:="${adp_decision_influence_enabled}" \
       adp_ranking_influence_enabled:="${adp_ranking_influence_enabled}" \
       adp_mpc_influence_enabled:="${adp_mpc_influence_enabled}" \

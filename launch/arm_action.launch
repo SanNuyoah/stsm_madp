@@ -15,6 +15,9 @@
   <arg name="topology_lambda_saddle_value" default="0.30"/>
   <arg name="adp_enabled" default="true"/>
   <arg name="adp_model" default="$(find stsm_madp)/config/adp_critic_arm_candidate_conditioned.yaml"/>
+  <arg name="adp_expected_critic_path" default=""/>
+  <arg name="adp_expected_critic_version" default=""/>
+  <arg name="adp_expected_theta_hash" default=""/>
   <arg name="adp_decision_influence_enabled" default="true"/>
   <arg name="adp_ranking_influence_enabled" default="true"/>
   <arg name="adp_mpc_influence_enabled" default="false"/>
@@ -59,6 +62,9 @@
     <param name="scene/topology/lambda_saddle_value" value="$(arg topology_lambda_saddle_value)"/>
     <param name="adp_enabled" value="$(arg adp_enabled)"/>
     <param name="adp_model" value="$(arg adp_model)"/>
+    <param name="adp/expected_critic_path" value="$(arg adp_expected_critic_path)"/>
+    <param name="adp/expected_critic_version" value="$(arg adp_expected_critic_version)"/>
+    <param name="adp/expected_theta_hash" value="$(arg adp_expected_theta_hash)"/>
     <param name="adp/decision_influence_enabled" value="$(arg adp_decision_influence_enabled)"/>
     <param name="adp/ranking_influence_enabled" value="$(arg adp_ranking_influence_enabled)"/>
     <param name="adp/mpc_influence_enabled" value="$(arg adp_mpc_influence_enabled)"/>

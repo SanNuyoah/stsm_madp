@@ -39,7 +39,8 @@ from stsm_madp.adp import (
     adp_ranking_adjustments, clone_critic,
     candidate_feature_values, fit_critic_from_transition_records,
     recenter_critic_feature_normalization, require_feature_schema,
-    save_and_verify_critic)
+    save_and_verify_critic, critic_theta_hash, evaluate_promotion_gate,
+    validate_critic_runtime_identity)
 from stsm_madp.decision_trace import trace_from_debug
 from stsm_madp.task_semantics import infer_task_context
 from stsm_madp.topology import TopologicalCorridorPlanner
@@ -1568,6 +1569,50 @@ def test_adp_shadow_learning_skips_nonfinite_and_honors_disable_flag():
     learner.observe({"bias": 1.0}, 1.0, terminal=True)
     assert np.allclose(critic.theta, [1.0])
     assert not learner.diagnostics()["decision_influence_enabled"]
+
+
+def test_adp_stability_audit_keeps_td_rule_and_attributes_task_state():
+    critic = ADPCritic(
+        feature_names=["bias", "candidate_path_length"], theta=[0.0, 0.0],
+        mean=[0.0, 0.0], std=[1.0, 1.0],
+        metadata={"target_mean": 0.0, "target_p95": 1.0})
+    learner = ADPTransitionLearner(critic, config={
+        "alpha": 1.0, "td_error_clip": 0.5, "theta_delta_norm_max": 0.05,
+        "min_transition_dt": 0.0, "value_outlier_z": 2.0})
+    learner.observe({"bias": 1.0, "candidate_path_length": 0.1}, 0.0,
+                    task_state="approach", feature_missing={
+                        "candidate_path_length": False})
+    learner.observe({"bias": 1.0, "candidate_path_length": 10.0}, 1.0,
+                    task_state="handover", control_effort=10.0, task_penalty=10.0,
+                    feature_missing={"candidate_path_length": True})
+    diag = learner.diagnostics()
+    assert diag["task_state_breakdown"]["handover"]["count"] == 1
+    assert diag["td_clip_count"] == 1
+    assert diag["feature_stats"]["candidate_path_length"]["missing_count"] == 1
+    assert diag["feature_stats"]["candidate_path_length"]["normalized"]["max"] == 0.1
+
+
+def test_adp_promotion_gate_blocks_unstable_critic_without_replacing_seed():
+    critic = ADPCritic(feature_names=["bias"], theta=[1.0], mean=[0.0],
+                        std=[1.0])
+    result = evaluate_promotion_gate({
+        "update_count": 3, "td_clip_ratio": 0.20, "td_error_abs_mean": 3.0,
+        "theta_delta_norm_total": 0.1, "value_outlier_ratio": 0.0},
+        critic, "seed.yaml", robot_type="arm", reload_verified=True)
+    assert result["promotion_candidate"]
+    assert not result["promotion_passed"]
+    assert "td_clip_ratio_high" in result["promotion_reasons"]
+    assert "td_error_abs_mean_high" in result["promotion_reasons"]
+    assert result["identity"]["theta_hash"] == critic_theta_hash(critic)
+
+
+def test_adp_runtime_identity_rejects_wrong_expected_seed_hash():
+    critic = ADPCritic(feature_names=["bias"], theta=[1.0], mean=[0.0],
+                        std=[1.0], critic_version="test_v1")
+    identity = validate_critic_runtime_identity(
+        critic, "seed.yaml", "seed.yaml", "test_v1", "not-the-hash", "arm")
+    assert not identity["validated"]
+    assert identity["validation_reasons"] == ["expected_theta_hash_mismatch"]
 
 
 def test_adp_role_uses_explicit_learning_and_influence_signals():
