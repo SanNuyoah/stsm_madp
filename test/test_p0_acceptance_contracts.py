@@ -1479,6 +1479,11 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "runtime_replan_connectability.json" in wheelchair_source
     assert "runtime_replan_connector_turn_limit" in wheelchair_source
     assert "runtime_replan_goal_progress_insufficient" in wheelchair_source
+    assert "def _make_runtime_safe_connector(" in wheelchair_source
+    assert "runtime_replan_no_safe_join_point" in wheelchair_source
+    assert "connector_search_expansions" in wheelchair_source
+    assert "join_idx_selected" in wheelchair_source
+    assert "_runtime_replan_connector_safety(" in wheelchair_source
     assert "critical_point_sequence_invalid" in wheelchair_source
     assert "def _runtime_recovery(" in wheelchair_source
     assert wheelchair_source.count("_runtime_recovery(") == 6

@@ -2100,6 +2100,16 @@ class WheelchairNode:
                 "connectability_status", "not_runtime_replan")),
             "connectability_safety": dict(data.get(
                 "connectability_safety", {}) or {}),
+            "join_points_tested": int(data.get("join_points_tested", 0)),
+            "join_idx_selected": data.get("join_idx_selected", None),
+            "connector_search_used": bool(data.get(
+                "connector_search_used", False)),
+            "connector_search_expansions": int(data.get(
+                "connector_search_expansions", 0)),
+            "connector_min_clearance": data.get(
+                "connector_min_clearance", None),
+            "connector_manifold_violation_count": int(data.get(
+                "connector_manifold_violation_count", 0)),
         }
 
     def _finalize_runtime_replan_connectability(self, corridor, attempt,
@@ -2142,6 +2152,27 @@ class WheelchairNode:
         max_turn = float(path_curvature_metrics(points).get("max_turn", 0.0))
         if not np.isfinite(max_turn) or max_turn > turn_limit + 1e-9:
             return False, "runtime_replan_connector_turn_limit", progress, {}
+        safety, footprint_reason = self._runtime_replan_connector_safety(
+            corridor, points)
+        if not bool(safety.get("valid", False)):
+            if int(safety.get("manifold_violation_count", 0) or 0) > 0:
+                return False, "runtime_replan_connector_manifold_or_clearance", progress, safety
+            return False, "runtime_replan_connector_tube", progress, safety
+        if footprint_reason:
+            return False, "runtime_replan_connector_" + str(footprint_reason), progress, safety
+        return True, "", progress, safety
+
+    def _runtime_replan_connector_safety(self, corridor, points):
+        """Evaluate a prospective connector prefix against its own tube.
+
+        This deliberately uses the same evaluator and clearance contract as
+        the final runtime audit.  Calling it while expanding the bounded local
+        connector search makes clearance/manifold infeasibility a generation
+        constraint, rather than discovering it only after a bridge is chosen.
+        """
+        points = self._as_corridor_points(points)
+        if len(points) < 1:
+            return {"valid": False}, "reference_empty"
         # A connector deliberately departs from the old centerline before it
         # rejoins the route.  Audit it against its own prospective execution
         # tube; the later topology contract still verifies critical ordering.
@@ -2164,14 +2195,10 @@ class WheelchairNode:
             corridor_constraint=dict(constraint.get("corridor_constraint", {}) or {}),
             risk_field=self.field)
         safety = evaluator.evaluate_trajectory(points)
-        if not bool(safety.get("valid", False)):
-            if int(safety.get("manifold_violation_count", 0) or 0) > 0:
-                return False, "runtime_replan_connector_manifold_or_clearance", progress, safety
-            return False, "runtime_replan_connector_tube", progress, safety
         footprint_ok, footprint_reason = self._footprint_path_checker(points)
         if not footprint_ok:
-            return False, "runtime_replan_connector_" + str(footprint_reason), progress, safety
-        return True, "", progress, safety
+            return safety, footprint_reason
+        return safety, ""
 
     def _runtime_replan_connector_length(self, raw, connected):
         from stsm_madp.deform import path_length
@@ -2212,6 +2239,12 @@ class WheelchairNode:
             "final_reject_reason": "",
             "connectability_status": "audit_pending",
             "connectability_safety": {},
+            "join_points_tested": 0,
+            "join_idx_selected": None,
+            "connector_search_used": False,
+            "connector_search_expansions": 0,
+            "connector_min_clearance": None,
+            "connector_manifold_violation_count": 0,
         }
         direct_ok, direct_reason, direct_progress, direct_safety = (
             self._runtime_replan_path_status(corridor, raw))
@@ -2221,9 +2254,11 @@ class WheelchairNode:
             data["connectability_status"] = "direct_connectable"
             corridor.runtime_replan_connectability = data
             return True, ""
-        connector = self._make_heading_progress_prefix(raw, corridor)
+        connector = self._make_runtime_safe_connector(raw, corridor)
+        search = dict(getattr(corridor, "runtime_replan_connector_search", {}) or {})
+        data.update(search)
         if connector is None or len(connector) < 2:
-            data["final_reject_reason"] = direct_reason or "runtime_replan_connector_unavailable"
+            data["final_reject_reason"] = "runtime_replan_no_safe_join_point"
             data["connectability_status"] = "connector_unavailable"
             corridor.runtime_replan_connectability = data
             return False, data["final_reject_reason"]
@@ -2308,6 +2343,108 @@ class WheelchairNode:
             pts[idx, :dim] += pull * (
                 1.0 - radius / max(float(dist), 1e-9))
         return pts
+
+    def _make_runtime_safe_connector(self, reference, corridor):
+        """Find a bounded, forward-only safe prefix to an early topology join.
+
+        This is intentionally a local connector, not a second global planner:
+        it rolls out a small diff-drive action set and can only terminate at a
+        point on the already selected topology corridor.  Every rollout prefix
+        is hard-pruned by the existing clearance/manifold and footprint checks.
+        """
+        search = {
+            "connector_search_used": True,
+            "connector_search_expansions": 0,
+            "join_points_tested": 0,
+            "join_idx_selected": None,
+            "connector_min_clearance": None,
+            "connector_manifold_violation_count": 0,
+        }
+        corridor.runtime_replan_connector_search = search
+        if self.state is None or self.goal is None:
+            return None
+        ref = self._as_corridor_points(reference)
+        if len(ref) < 2:
+            return None
+        start = np.asarray(self.state[:2], float)
+        goal = np.asarray(self.goal[:2], float)
+        d0 = float(np.linalg.norm(start - goal))
+        if d0 <= 1e-6:
+            return None
+        # At 0.10 m steps this covers at most 1.5 m and retains the selected
+        # corridor's early topology sequence.  It is a bounded reconnect, not
+        # a replacement route search.
+        step = max(0.06, min(0.10, 4.0 * float(self.topology_min_segment_length)))
+        max_depth = 15
+        beam_width = 12
+        join_distance = max(0.12, 1.5 * step)
+        max_join_index = min(len(ref) - 1, 15)
+        join_indices = list(range(1, max_join_index + 1))
+        turn_actions = (-0.16, 0.0, 0.16)
+        start_yaw = float(self.state[2])
+        frontier = [(start, start_yaw, [start.copy()], 0.0)]
+        last_safety = {}
+
+        for join_idx in join_indices:
+            search["join_points_tested"] += 1
+            join = np.asarray(ref[join_idx, :2], float)
+            states = list(frontier)
+            for _depth in range(max_depth):
+                next_states = []
+                completed = []
+                for xy, yaw, path, length in states:
+                    for yaw_delta in turn_actions:
+                        next_yaw = float(yaw + yaw_delta)
+                        next_xy = xy + step * np.array(
+                            [np.cos(next_yaw), np.sin(next_yaw)], float)
+                        # Runtime recovery may tolerate a tiny numerical rise,
+                        # but cannot deliberately move away from the goal.
+                        if float(np.linalg.norm(next_xy - goal)) > d0 + 0.03:
+                            continue
+                        next_path = path + [next_xy]
+                        search["connector_search_expansions"] += 1
+                        safety, footprint_reason = (
+                            self._runtime_replan_connector_safety(
+                                corridor, np.asarray(next_path, float)))
+                        last_safety = dict(safety or {})
+                        if (not bool(safety.get("valid", False)) or
+                                footprint_reason):
+                            continue
+                        next_length = float(length + step)
+                        if float(np.linalg.norm(next_xy - join)) <= join_distance:
+                            merged = np.vstack([
+                                np.asarray(next_path, float), ref[join_idx:],
+                            ])
+                            ok, _reason, _progress, merged_safety = (
+                                self._runtime_replan_path_status(corridor, merged))
+                            if ok:
+                                completed.append((next_length, merged, merged_safety))
+                            continue
+                        if next_length + step <= 1.50 + 1e-9:
+                            next_states.append((next_xy, next_yaw, next_path, next_length))
+                if completed:
+                    _length, candidate, candidate_safety = min(
+                        completed, key=lambda item: item[0])
+                    search["join_idx_selected"] = int(join_idx)
+                    search["connector_min_clearance"] = float(
+                        candidate_safety.get("min_clearance", 0.0))
+                    search["connector_manifold_violation_count"] = int(
+                        candidate_safety.get("manifold_violation_count", 0) or 0)
+                    corridor.runtime_replan_connector_search = search
+                    return np.asarray(candidate, float)
+                if not next_states:
+                    break
+                next_states.sort(key=lambda item: (
+                    float(np.linalg.norm(item[0] - join)), item[3]))
+                states = next_states[:beam_width]
+            # A later join starts from the same bounded local rollout space;
+            # this avoids treating an unsafe early join as a terminal failure.
+
+        search["connector_min_clearance"] = last_safety.get("min_clearance", None)
+        search["connector_manifold_violation_count"] = int(
+            last_safety.get("manifold_violation_count", 0) or 0)
+        corridor.runtime_replan_connector_search = search
+        return None
 
     def _make_heading_progress_prefix(self, reference, corridor):
         """Build a short launch segment aligned with the current diff-drive pose."""
