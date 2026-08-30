@@ -4962,6 +4962,7 @@ class WheelchairMPC:
         self.last_sequence_progress = 0.0
         self.last_heading_improvement = 0.0
         self.last_alignment_translation = 0.0
+        self.last_timing = {}
 
     def solve(self, state, ref_points, field, corridor=None, u_prev=None,
               critic=None, feature_builder=None, lambda_adp_terminal=0.0,
@@ -4981,6 +4982,7 @@ class WheelchairMPC:
         self.last_sequence_progress = 0.0
         self.last_heading_improvement = 0.0
         self.last_alignment_translation = 0.0
+        self.last_timing = {}
 
         if ref.size == 0:
             self.last_solver_status = "safe_stop: empty_ref"
@@ -5059,9 +5061,22 @@ class WheelchairMPC:
         return unique
 
     def _sampled_predictive_solve(self, x0, ref, field, corridor, u_prev,
-                                  critic, feature_builder,
-                                  lambda_adp_terminal, goal, gate_info,
-                                  interest_risk, interest_constraints=None):
+                                   critic, feature_builder,
+                                   lambda_adp_terminal, goal, gate_info,
+                                   interest_risk, interest_constraints=None):
+        solve_t0 = time.time()
+        timing = {
+            "t_reference_s": 0.0,
+            "t_rollout_s": 0.0,
+            "t_safety_eval_s": 0.0,
+            "t_search_s": 0.0,
+            "t_post_s": 0.0,
+        }
+
+        def finish_timing():
+            timing["solve_wall_s"] = max(0.0, time.time() - solve_t0)
+            self.last_timing = dict(timing)
+
         has_adp_terminal = (
             lambda_adp_terminal > 0.0 and
             critic is not None and feature_builder is not None)
@@ -5128,6 +5143,8 @@ class WheelchairMPC:
             "states": [],
             "parts": dict(empty_parts),
         }]
+        timing["t_reference_s"] = max(0.0, time.time() - solve_t0)
+        rollout_t0 = time.time()
         for k in range(horizon):
             expanded = []
             for item in beam:
@@ -5161,6 +5178,7 @@ class WheelchairMPC:
                     parts = dict(item["parts"])
                     hard_violation = False
                     step_soft_cost = 0.0
+                    safety_t0 = time.time()
                     manifold_state = manifold_state_cache.get(position_key)
                     if manifold_state is None:
                         manifold_state = manifold_evaluator.evaluate_state(
@@ -5185,6 +5203,8 @@ class WheelchairMPC:
                             step_soft_cost += 10.0 * float(
                                 manifold_violation ** 2)
                     if hard_violation:
+                        timing["t_safety_eval_s"] += max(
+                            0.0, time.time() - safety_t0)
                         continue
                     if interest_enabled:
                         cached_interest = interest_state_cache.get(state_key)
@@ -5205,10 +5225,14 @@ class WheelchairMPC:
                             self.last_reject_forbidden_count += 1
                             if not self.first_predicted_forbidden_reason:
                                 self.first_predicted_forbidden_reason = reason
+                            timing["t_safety_eval_s"] += max(
+                                0.0, time.time() - safety_t0)
                             continue
                         if float(summary.get("phi_max", 0.0)) > interest_rho:
                             violation_counts["interest_point"] += 1
                             self.last_reject_interest_phi_count += 1
+                            timing["t_safety_eval_s"] += max(
+                                0.0, time.time() - safety_t0)
                             continue
                     r = ref[min(k, ref.shape[0] - 1)]
                     track = self.lam_track * float(
@@ -5232,8 +5256,12 @@ class WheelchairMPC:
                             0.0, float(d) - float(corridor.radius))
                         if tube_violation > 1e-9 and tube_mode == "hard":
                             violation_counts["trajectory_tube"] += 1
+                            timing["t_safety_eval_s"] += max(
+                                0.0, time.time() - safety_t0)
                             continue
                         tube = self.lam_tube * float(tube_violation ** 2)
+                    timing["t_safety_eval_s"] += max(
+                        0.0, time.time() - safety_t0)
                     control = self.lam_u * float(np.dot(u, u))
                     smooth = self.lam_du * float(np.sum((u - previous) ** 2))
                     parts["tracking"] += track
@@ -5251,12 +5279,19 @@ class WheelchairMPC:
                         "parts": parts,
                     })
             if not expanded:
+                timing["t_rollout_s"] += max(0.0, time.time() - rollout_t0)
                 self.last_solver_status = "safe_stop: no_feasible_sequence"
                 self.last_constraint_violation = violation_counts
+                finish_timing()
                 return 0.0, 0.0
+            search_t0 = time.time()
             expanded.sort(key=lambda value: value["cost"])
             beam = expanded[:self.beam_width]
+            timing["t_search_s"] += max(0.0, time.time() - search_t0)
 
+        timing["t_rollout_s"] += max(0.0, time.time() - rollout_t0)
+
+        post_t0 = time.time()
         records = []
         for item in beam:
             x = np.asarray(item["state"], float)
@@ -5454,6 +5489,8 @@ class WheelchairMPC:
                 "best_first_speed": float(max(
                     [item[8]["controls"][0][0] for item in records] or [0.0])),
             }
+            timing["t_post_s"] = max(0.0, time.time() - post_t0)
+            finish_timing()
             return 0.0, 0.0
         best = min(valid, key=lambda value: value[0])
         (best_cost, progress, heading_improvement, _distN,
@@ -5516,6 +5553,8 @@ class WheelchairMPC:
             self.last_solver_status = "predictive_beam_adp_terminal"
         else:
             self.last_solver_status = "predictive_beam"
+        timing["t_post_s"] = max(0.0, time.time() - post_t0)
+        finish_timing()
         return float(best_u[0]), float(best_u[1])
 
     def _pure_pursuit_u(self, x0, ref, field, u_prev):

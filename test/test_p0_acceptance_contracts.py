@@ -1387,6 +1387,23 @@ def test_wheelchair_beam_reuses_identical_state_safety_evaluations():
     assert field.phi_calls < 500
 
 
+def test_wheelchair_predictive_mpc_reports_phase_timing():
+    mpc = WheelchairMPC(horizon=4, dt=0.2, a_max=0.5, beam_width=4)
+
+    mpc.solve(
+        [0.0, 0.0, 0.0],
+        [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0]],
+        ZeroField(), goal=[1.0, 0.0], predictive=True)
+
+    timing = mpc.last_timing
+    for field in (
+            "t_reference_s", "t_rollout_s", "t_safety_eval_s",
+            "t_search_s", "t_post_s", "solve_wall_s"):
+        assert field in timing
+        assert timing[field] >= 0.0
+    assert timing["solve_wall_s"] >= timing["t_rollout_s"]
+
+
 def test_recovered_diagnostics_preserve_roslog_selected_corridor():
     with tempfile.TemporaryDirectory() as tmp:
         with open(os.path.join(tmp, "metrics.csv"), "w") as handle:
@@ -1423,6 +1440,9 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "copy.deepcopy(\n                    self.last_valid_topology_debug)" in wheelchair_source
     assert "rospy.Timer" in wheelchair_source
     assert "_command_keepalive_cb" in wheelchair_source
+    assert "watchdog_command_age_s" in wheelchair_source
+    assert "zero_command_duty_ratio" in wheelchair_source
+    assert "mpc_phase_timing" in wheelchair_source
     assert "def _runtime_recovery(" in wheelchair_source
     assert wheelchair_source.count("_runtime_recovery(") == 6
     assert wheelchair_source.count("new_corridor = self._plan_corridor()") == 1

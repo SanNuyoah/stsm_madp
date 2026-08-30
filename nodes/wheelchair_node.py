@@ -240,9 +240,15 @@ class WheelchairNode:
             "~command_keepalive_enabled", True))
         self.command_keepalive_publish_count = 0
         self.stale_command_stop_count = 0
+        self.last_watchdog_command_age_s = 0.0
+        self.last_watchdog_zero_stop = False
+        self.command_activity_start_wall = None
+        self.watchdog_zero_since_wall = None
+        self.watchdog_zero_duration_s = 0.0
         self.mpc_solve_deadline_s = float(rospy.get_param(
             "~mpc_solve_deadline_s", 0.6))
         self.mpc_solve_wall_history = []
+        self.mpc_timing_history = []
         self.control_update_interval_history = []
         self.mpc_solve_overrun_count = 0
         self._last_control_update_wall = None
@@ -5053,7 +5059,16 @@ class WheelchairNode:
             "final_approach_heading_weight": float(runtime_last.get(
                 "final_approach_heading_weight", 0.0)),
             "stale_command_stop_count": int(self.stale_command_stop_count),
+            "watchdog_zero_command_duty_ratio": float(
+                self._watchdog_zero_duty_ratio()),
+            "watchdog_last_command_age_s": float(
+                self.last_watchdog_command_age_s),
             "mpc_solve_overrun_count": int(self.mpc_solve_overrun_count),
+            "mpc_solve_overrun_ratio": float(
+                float(self.mpc_solve_overrun_count) /
+                float(len(self.mpc_solve_wall_history))
+                if self.mpc_solve_wall_history else 0.0),
+            "mpc_phase_timing": self._mpc_timing_summary(),
             "solve_wall_mean_s": float(np.mean(
                 self.mpc_solve_wall_history))
             if self.mpc_solve_wall_history else 0.0,
@@ -6191,12 +6206,46 @@ class WheelchairNode:
     def _set_command_keepalive(self, v, w, active=True):
         tw = Twist()
         if active:
+            now_wall = time.time()
+            if self.command_activity_start_wall is None:
+                self.command_activity_start_wall = now_wall
+            if self.watchdog_zero_since_wall is not None:
+                self.watchdog_zero_duration_s += max(
+                    0.0, now_wall - self.watchdog_zero_since_wall)
+                self.watchdog_zero_since_wall = None
+            self.last_watchdog_zero_stop = False
             tw.linear.x = float(v)
             tw.angular.z = float(w)
             self.last_cmd_time = rospy.Time.now()
         else:
             self.last_cmd_time = rospy.Time(0)
         self.last_cmd_twist = tw
+
+    def _watchdog_zero_duty_ratio(self):
+        if self.command_activity_start_wall is None:
+            return 0.0
+        now_wall = time.time()
+        zero_duration = float(self.watchdog_zero_duration_s)
+        if self.watchdog_zero_since_wall is not None:
+            zero_duration += max(0.0, now_wall - self.watchdog_zero_since_wall)
+        active_duration = max(0.0, now_wall - self.command_activity_start_wall)
+        return float(zero_duration / active_duration) if active_duration > 1e-9 else 0.0
+
+    def _mpc_timing_summary(self):
+        samples = list(self.mpc_timing_history or [])
+        fields = (
+            "t_reference_s", "t_rollout_s", "t_safety_eval_s",
+            "t_search_s", "t_post_s", "solve_wall_s")
+        summary = {"sample_count": int(len(samples))}
+        for field in fields:
+            values = [float(item.get(field, 0.0)) for item in samples]
+            summary[field] = {
+                "mean": float(np.mean(values)) if values else 0.0,
+                "p50": float(np.percentile(values, 50)) if values else 0.0,
+                "p95": float(np.percentile(values, 95)) if values else 0.0,
+                "max": float(max(values)) if values else 0.0,
+            }
+        return summary
 
     def _publish_zero_command(self):
         self._set_command_keepalive(0.0, 0.0, active=False)
@@ -6214,12 +6263,19 @@ class WheelchairNode:
             self.last_cmd_time = rospy.Time(0)
             self.cmd_pub.publish(Twist())
             self.stale_command_stop_count += 1
+            self.last_watchdog_command_age_s = max(0.0, float(age))
+            self.last_watchdog_zero_stop = True
+            if (self.command_activity_start_wall is not None and
+                    self.watchdog_zero_since_wall is None):
+                self.watchdog_zero_since_wall = time.time()
             rospy.logwarn_throttle(
                 1.0,
                 "[wc][watchdog] stale MPC command age=%.3fs hold=%.3fs; "
                 "published zero command",
                 max(0.0, float(age)), float(self.command_hold_s))
             return
+        self.last_watchdog_command_age_s = max(0.0, float(age))
+        self.last_watchdog_zero_stop = False
         self.cmd_pub.publish(self.last_cmd_twist)
         self.command_keepalive_publish_count += 1
 
@@ -6495,6 +6551,11 @@ class WheelchairNode:
                     float(control_update_interval_s))
             self._last_control_update_wall = now_wall
             self.mpc_solve_wall_history.append(float(solve_wall_s))
+            mpc_timing = dict(getattr(self.mpc, "last_timing", {}) or {})
+            if not mpc_timing:
+                mpc_timing = {"solve_wall_s": float(solve_wall_s)}
+            mpc_timing["solve_wall_s"] = float(solve_wall_s)
+            self.mpc_timing_history.append(mpc_timing)
             solve_overrun = bool(solve_wall_s > self.mpc_solve_deadline_s)
             if solve_overrun:
                 self.mpc_solve_overrun_count += 1
@@ -6551,12 +6612,20 @@ class WheelchairNode:
                 "final_approach_corridor_weight": float(self.mpc.lam_track),
                 "final_approach_heading_weight": float(self.mpc.lam_heading),
                 "solve_wall_s": float(solve_wall_s),
+                "mpc_timing": dict(mpc_timing),
                 "control_update_interval_s": float(control_update_interval_s),
                 "mpc_solve_overrun": solve_overrun,
+                "watchdog_command_age_s": float(
+                    self.last_watchdog_command_age_s),
+                "watchdog_zero_stop": bool(self.last_watchdog_zero_stop),
+                "zero_command_duty_ratio": float(
+                    self._watchdog_zero_duty_ratio()),
             }
             self.mpc_runtime_records.append(runtime_record)
             if len(self.mpc_runtime_records) > 200:
                 self.mpc_runtime_records = self.mpc_runtime_records[-200:]
+            if len(self.mpc_timing_history) > 200:
+                self.mpc_timing_history = self.mpc_timing_history[-200:]
             if (not self.baseline and not final_approach_active and
                     not str(self.mpc.last_solver_status).startswith(
                         "safe_stop:")):
