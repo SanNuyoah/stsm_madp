@@ -706,10 +706,11 @@ class ADPTransitionLearner(object):
         value_t = float(value_t_detail["raw"])
         value_next = float(value_next_detail["raw"])
         metadata = dict(getattr(self.critic, "metadata", {}) or {})
+        # TD values are compared with the calibrated return distribution, not
+        # the separate candidate-ranking normalization distribution.
         value_center = _as_float(metadata.get(
             "value_center", metadata.get("target_mean")), 0.0)
-        value_scale = abs(_as_float(metadata.get(
-            "value_scale", metadata.get("ranking_value_scale")), 0.0))
+        value_scale = abs(_as_float(metadata.get("value_scale"), 0.0))
         if value_scale <= 1e-6:
             value_scale = abs(_as_float(metadata.get("target_p95"), value_center) -
                               value_center)

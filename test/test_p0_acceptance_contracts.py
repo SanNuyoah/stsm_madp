@@ -1606,6 +1606,19 @@ def test_adp_promotion_gate_blocks_unstable_critic_without_replacing_seed():
     assert result["identity"]["theta_hash"] == critic_theta_hash(critic)
 
 
+def test_adp_value_guard_uses_td_return_scale_not_ranking_scale():
+    critic = ADPCritic(
+        feature_names=["bias"], theta=[100.0], mean=[0.0], std=[1.0],
+        metadata={"target_mean": 0.0, "target_p95": 1.0,
+                  "ranking_value_center": 1000.0,
+                  "ranking_value_scale": 10000.0})
+    learner = ADPTransitionLearner(
+        critic, config={"min_transition_dt": 0.0, "value_outlier_z": 8.0})
+    learner.observe({"bias": 1.0}, 0.0)
+    learner.observe({"bias": 1.0}, 1.0)
+    assert learner.diagnostics()["value_outlier_ratio"] == 1.0
+
+
 def test_adp_runtime_identity_rejects_wrong_expected_seed_hash():
     critic = ADPCritic(feature_names=["bias"], theta=[1.0], mean=[0.0],
                         std=[1.0], critic_version="test_v1")

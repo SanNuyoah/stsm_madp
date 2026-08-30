@@ -513,6 +513,10 @@ class HandoverNode:
         features = self._adp_learning_features(
             np.asarray(ee, float), gate=gate, interest_eval=interest_eval,
             control=control)
+        _, candidate_missing = candidate_feature_values(
+            self._adp_active_candidate_features)
+        if self._adp_active_candidate_missing:
+            candidate_missing = self._adp_active_candidate_missing
         self.adp_learning.observe(
             features, rospy.Time.now().to_sec(),
             task_state=self.task_context.get("task_state", ""),
@@ -521,7 +525,7 @@ class HandoverNode:
                 np.asarray(control if control is not None else [], float))),
             terminal=terminal, success=bool(self.task_completed),
             failure_reason=self.stop_reason,
-            feature_missing=self._adp_active_candidate_missing)
+            feature_missing=candidate_missing)
         self._adp_prev_ee = np.asarray(ee, float).copy()
 
     def _write_adp_learning_diagnostics(self):

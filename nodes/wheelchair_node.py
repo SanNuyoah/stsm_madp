@@ -768,6 +768,10 @@ class WheelchairNode:
                 tube_violation = max(0.0, float(tube_distance) - float(corridor.radius))
             except Exception:
                 pass
+        _, candidate_missing = candidate_feature_values(
+            self._adp_active_candidate_features)
+        if self._adp_active_candidate_missing:
+            candidate_missing = self._adp_active_candidate_missing
         self.adp_learning.observe(
             features, time.time(),
             task_state=self.task_context.get("task_state", ""),
@@ -776,7 +780,7 @@ class WheelchairNode:
             tube_violation=tube_violation,
             terminal=terminal, success=bool(self.task_completed),
             failure_reason=self.stop_reason,
-            feature_missing=self._adp_active_candidate_missing)
+            feature_missing=candidate_missing)
         self._adp_prev_pose = np.asarray(self.state, float).copy()
 
     def _write_adp_learning_diagnostics(self):
