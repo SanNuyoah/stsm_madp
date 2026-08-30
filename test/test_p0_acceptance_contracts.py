@@ -1646,6 +1646,20 @@ def test_candidate_conditioned_values_change_with_same_robot_state():
     assert all(term["adp_cost"] == 0.0 for term in zero_terms)
 
 
+def test_candidate_feature_builder_keeps_canonical_candidate_schema_values():
+    canonical = {
+        "candidate_path_length": 1.25,
+        "candidate_risk_mean": 0.75,
+        "candidate_risk_max": 1.5,
+        "candidate_min_clearance": 0.08,
+        "candidate_task_cost": 2.5,
+        "candidate_execution_cost": 3.5,
+    }
+    values, missing = candidate_feature_values(canonical)
+    assert values == canonical
+    assert not any(missing.values())
+
+
 def test_adp_calibration_fits_real_transition_cost_to_go_targets():
     template = ADPCritic(feature_names=["bias", "phi_total"], theta=[7.0, 2.0],
                          mean=[0.0, 0.0], std=[1.0, 1.0], gamma=0.5)

@@ -110,8 +110,10 @@ def candidate_feature_values(candidate=None):
     values = {}
     missing = {}
     for name in CANDIDATE_FEATURE_NAMES:
-        value = None
+        value = candidate.get(name)
         for key in aliases[name]:
+            if value not in (None, ""):
+                break
             if candidate.get(key) not in (None, ""):
                 value = candidate.get(key)
                 break
