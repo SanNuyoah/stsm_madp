@@ -7,7 +7,7 @@ import numpy as np
 import yaml
 
 
-DEFAULT_FEATURE_NAMES = [
+STATE_FEATURE_NAMES = [
     "bias",
     "phi_total",
     "phi_prox",
@@ -25,6 +25,18 @@ DEFAULT_FEATURE_NAMES = [
     "d_corridor",
     "phase_norm",
 ]
+
+CANDIDATE_FEATURE_NAMES = [
+    "candidate_path_length",
+    "candidate_risk_mean",
+    "candidate_risk_max",
+    "candidate_min_clearance",
+    "candidate_task_cost",
+    "candidate_execution_cost",
+]
+
+FEATURE_SCHEMA_VERSION = "candidate_conditioned_v2"
+DEFAULT_FEATURE_NAMES = STATE_FEATURE_NAMES + CANDIDATE_FEATURE_NAMES
 
 DEFAULT_COST_WEIGHTS = {
     "w_phi": 1.0,
@@ -83,6 +95,44 @@ def _safe_std(std):
     return std
 
 
+def candidate_feature_values(candidate=None):
+    """Normalize the stable candidate summary into the shared v2 schema."""
+    candidate = dict(candidate or {})
+    aliases = {
+        "candidate_path_length": ("path_length", "length_cost"),
+        "candidate_risk_mean": ("risk_mean", "risk_cost"),
+        "candidate_risk_max": ("risk_max", "max_risk", "risk_value"),
+        "candidate_min_clearance": ("min_clearance", "clearance_value"),
+        "candidate_task_cost": ("task_cost",),
+        "candidate_execution_cost": (
+            "execution_cost", "motion_cost", "smoothness_cost"),
+    }
+    values = {}
+    missing = {}
+    for name in CANDIDATE_FEATURE_NAMES:
+        value = None
+        for key in aliases[name]:
+            if candidate.get(key) not in (None, ""):
+                value = candidate.get(key)
+                break
+        missing[name] = value is None
+        values[name] = _as_float(value, 0.0)
+    return values, missing
+
+
+def require_feature_schema(critic, expected_version=FEATURE_SCHEMA_VERSION,
+                           expected_feature_names=DEFAULT_FEATURE_NAMES):
+    """Reject an incompatible critic instead of silently resizing its weights."""
+    metadata = dict(getattr(critic, "metadata", {}) or {})
+    version = str(metadata.get("feature_schema_version", ""))
+    names = list(getattr(critic, "feature_names", []) or [])
+    if version != str(expected_version) or names != list(expected_feature_names):
+        raise ValueError(
+            "critic_feature_schema_mismatch: expected {} / {} features, got {} / {}".format(
+                expected_version, len(expected_feature_names), version, len(names)))
+    return True
+
+
 class ADPCritic(object):
     def __init__(self, feature_names=None, theta=None, mean=None, std=None,
                  gamma=0.95, clip_value=100.0, cost_weights=None,
@@ -103,12 +153,12 @@ class ADPCritic(object):
         self.learning_config = dict(DEFAULT_LEARNING_CONFIG)
         if learning_config:
             self.learning_config.update(learning_config)
-        if self.theta.shape[0] != n:
-            self.theta = np.resize(self.theta, n)
-        if self.mean.shape[0] != n:
-            self.mean = np.resize(self.mean, n)
-        if self.std.shape[0] != n:
-            self.std = _safe_std(np.resize(self.std, n))
+        for name, values in (("theta", self.theta), ("mean", self.mean),
+                             ("std", self.std)):
+            if values.shape[0] != n:
+                raise ValueError(
+                    "critic_feature_schema_mismatch: {} has {} values for {} features".format(
+                        name, values.shape[0], n))
 
     def featurize(self, raw_feature_dict):
         raw = raw_feature_dict or {}
@@ -267,10 +317,16 @@ def adp_ranking_adjustments(raw_values, metadata=None, lambda_adp=0.0,
         return [], {"source": "empty", "center": 0.0, "scale": 1.0}
     values = np.where(np.isfinite(values), values, 0.0)
     metadata = dict(metadata or {})
-    center = _as_float(metadata.get("target_mean"), np.nan)
-    p95 = _as_float(metadata.get("target_p95"), np.nan)
-    scale = abs(p95 - center) if np.isfinite(center) and np.isfinite(p95) else 0.0
-    source = "metadata_target_mean_p95"
+    center = _as_float(metadata.get(
+        "ranking_value_center", metadata.get("target_mean")), np.nan)
+    scale = _as_float(metadata.get("ranking_value_scale"), 0.0)
+    if abs(scale) <= 1e-12:
+        p95 = _as_float(metadata.get("target_p95"), np.nan)
+        scale = (abs(p95 - center)
+                 if np.isfinite(center) and np.isfinite(p95) else 0.0)
+    source = ("metadata_ranking_value_distribution"
+              if "ranking_value_center" in metadata else
+              "metadata_target_mean_p95")
     if not np.isfinite(center) or scale < 1e-6:
         center = float(np.median(values))
         mad = float(np.median(np.abs(values - center)))
@@ -302,7 +358,7 @@ class ADPFeatureBuilder(object):
 
     def build_wheelchair(self, pose2d, goal, field, gate_info=None,
                          interest_risk=None, corridor=None, u=None,
-                         prev_pose2d=None):
+                         prev_pose2d=None, candidate_features=None):
         pose = np.asarray(pose2d, float)
         goal = np.asarray(goal, float)
         z = np.array([pose[0], pose[1], 0.0], float)
@@ -326,10 +382,12 @@ class ADPFeatureBuilder(object):
             "d_corridor": float(d_corridor),
             "phase_norm": 0.0,
         })
+        raw.update(candidate_feature_values(candidate_features)[0])
         return raw
 
     def build_arm(self, ee_pos, target_pos, field, gate_info=None,
-                  interest_risk=None, phase=None, u=None, prev_ee_pos=None):
+                  interest_risk=None, phase=None, u=None, prev_ee_pos=None,
+                  candidate_features=None):
         ee = np.asarray(ee_pos, float)
         target = np.asarray(target_pos, float)
         comp = field.risk_components(ee)
@@ -352,6 +410,7 @@ class ADPFeatureBuilder(object):
             "d_corridor": 0.0,
             "phase_norm": phase_norm,
         })
+        raw.update(candidate_feature_values(candidate_features)[0])
         return raw
 
     def from_row(self, row, prev_row=None):

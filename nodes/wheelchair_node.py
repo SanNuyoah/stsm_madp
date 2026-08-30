@@ -33,7 +33,7 @@ from stsm_madp.safety_gate import SafetyGate, SafetyGateResult
 from stsm_madp.adp import (
     ADPCritic, ADPFeatureBuilder, ADPTransitionLearner,
     adp_ranking_adjustments, adp_role_from_runtime, clone_critic,
-    save_and_verify_critic)
+    candidate_feature_values, require_feature_schema, save_and_verify_critic)
 from stsm_madp.topology import topology_param_or_auto, topology_profile_defaults
 from stsm_madp.topology_candidate_generator import (
     recover_candidate_corridor_feasibility)
@@ -253,7 +253,7 @@ class WheelchairNode:
         self.adp_model = rospy.get_param(
             "~adp_model",
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
-                                         "config", "adp_critic_wheelchair_calibrated.yaml")))
+                                         "config", "adp_critic_wheelchair_candidate_conditioned.yaml")))
         self.lambda_adp = float(rospy.get_param("~lambda_adp", 0.005))
         self.lambda_adp_corridor = float(rospy.get_param(
             "~lambda_adp_corridor", self.lambda_adp))
@@ -274,6 +274,7 @@ class WheelchairNode:
         self.adp_mpc_influence_enabled = False
         self.adp_learning = None
         self._adp_prev_pose = None
+        self._adp_active_candidate_features = {}
         self.last_adp_value = 0.0
         self.selected_corridor = None
         self.execution_corridor = None
@@ -617,6 +618,7 @@ class WheelchairNode:
             return
         try:
             self.adp_critic = ADPCritic.load_yaml(self.adp_model)
+            require_feature_schema(self.adp_critic)
             self.adp_features = ADPFeatureBuilder(self.adp_critic.feature_names)
             self._configure_adp_learning()
             self.adp_status_pub.publish(String(
@@ -683,7 +685,53 @@ class WheelchairNode:
             self.state, self.goal, self.field, gate_info=gate_info,
             interest_risk=risk, corridor=corridor,
             u=self.u_prev if control is None else control,
-            prev_pose2d=self._adp_prev_pose)
+            prev_pose2d=self._adp_prev_pose,
+            candidate_features=(self._adp_candidate_features(corridor)[0]
+                                if corridor is not None else
+                                self._adp_active_candidate_features))
+
+    @staticmethod
+    def _adp_candidate_features(corridor):
+        raw = {}
+        for name in ("path_length", "length_cost", "risk_mean", "risk_cost",
+                     "mean_phi_on_path",
+                     "risk_max", "max_risk", "max_phi_on_path", "min_clearance",
+                     "clearance_value", "task_cost", "execution_cost",
+                     "motion_cost", "smoothness_cost", "smooth_cost"):
+            value = getattr(corridor, name, None)
+            if value is not None:
+                raw[name] = value
+        if "max_phi_on_path" in raw and "risk_max" not in raw:
+            raw["risk_max"] = raw["max_phi_on_path"]
+        if "mean_phi_on_path" in raw and "risk_mean" not in raw:
+            raw["risk_mean"] = raw["mean_phi_on_path"]
+        if "smooth_cost" in raw and "smoothness_cost" not in raw:
+            raw["smoothness_cost"] = raw["smooth_cost"]
+        return candidate_feature_values(raw)
+
+    @staticmethod
+    def _candidate_feature_delta_summary(rows):
+        if len(rows) < 2:
+            return {"candidate_count": len(rows), "pair_deltas": []}
+        first, second = rows[0], rows[1]
+        left = first.get("candidate_adp_features_raw", {}) or {}
+        right = second.get("candidate_adp_features_raw", {}) or {}
+        deltas = {name: float(left.get(name, 0.0)) - float(right.get(name, 0.0))
+                  for name in sorted(set(left) | set(right))}
+        raw_gap = float(first.get("adp_value_raw", 0.0)) - float(
+            second.get("adp_value_raw", 0.0))
+        adp_gap = float(first.get("adp_cost", 0.0)) - float(
+            second.get("adp_cost", 0.0))
+        return {"candidate_count": len(rows), "num_candidate_pairs": 1,
+                "num_pairs_with_feature_difference": int(any(abs(v) > 1e-12 for v in deltas.values())),
+                "num_pairs_with_raw_value_difference": int(abs(raw_gap) > 1e-12),
+                "num_pairs_with_adp_cost_difference": int(abs(adp_gap) > 1e-12),
+                "max_raw_value_gap": abs(raw_gap), "max_adp_cost_gap": abs(adp_gap),
+                "pair_deltas": [{
+            "candidate_a": first.get("corridor_id", ""),
+            "candidate_b": second.get("corridor_id", ""),
+            "feature_deltas": deltas, "adp_value_raw_delta": raw_gap,
+        }]}
 
     def _record_adp_transition(self, gate=None, interest_eval=None,
                                corridor=None, terminal=False):
@@ -1703,6 +1751,8 @@ class WheelchairNode:
             raise RuntimeError("topology candidate selection returned no corridor")
         self.selected_corridor = selected
         self.execution_corridor = selected
+        self._adp_active_candidate_features = dict(getattr(
+            selected, "adp_candidate_features", {}) or {})
         self._sync_selected_corridor_geometry(self.selected_corridor)
         self._sync_runtime_topology_debug(corrs, selected)
         self.last_valid_topology_debug = copy.deepcopy(
@@ -3187,6 +3237,9 @@ class WheelchairNode:
                 "base_total_cost": float(getattr(corr, "base_cost", 0.0)),
                 "adp_value_raw": float(getattr(corr, "adp_value_raw", 0.0)),
                 "adp_value_normalized": float(getattr(corr, "adp_value_normalized", 0.0)),
+                "adp_value_normalized_preclip": float((getattr(
+                    corr, "adp_ranking_audit", {}) or {}).get(
+                    "ranking_normalization", {}).get("normalized_before_clip", 0.0)),
                 "effective_lambda_adp": float(getattr(corr, "effective_lambda_adp", 0.0)),
                 "adp_cost": float(getattr(corr, "adp_cost", 0.0)),
                 "total_cost_with_adp": float(getattr(corr, "total_cost", getattr(corr, "cost", 0.0))),
@@ -3194,6 +3247,14 @@ class WheelchairNode:
                 "rank_after_adp": int(getattr(corr, "rank_after_adp", getattr(corr, "rank_total", rank))),
                 "adp_changed_rank": bool(getattr(corr, "adp_changed_rank", False)),
                 "ranking_theta_source": str(getattr(corr, "adp_ranking_theta_source", "")),
+                "adp_ranking_audit": dict(getattr(corr, "adp_ranking_audit", {}) or {}),
+                "candidate_adp_features_raw": dict(getattr(
+                    corr, "adp_candidate_features", {}) or {}),
+                "candidate_adp_features_normalized": dict((getattr(
+                    corr, "adp_ranking_audit", {}) or {}).get(
+                    "candidate_adp_features_normalized", {}) or {}),
+                "candidate_feature_missing": dict(getattr(
+                    corr, "adp_candidate_feature_missing", {}) or {}),
                 "adp_role": adp_role_from_runtime(
                     self.adp_enabled, bool(self.adp_learning and self.adp_learning.config.get("enabled", False)),
                     self.adp_decision_influence_enabled,
@@ -3285,6 +3346,8 @@ class WheelchairNode:
             rows.append(row)
         if rows:
             dbg["candidate_corridors"] = rows
+            dbg["final_candidate_ranking"] = list(rows)
+            dbg["candidate_feature_delta_summary"] = self._candidate_feature_delta_summary(rows)
             dbg["candidate_after_filter"] = rows
             dbg["candidate_after_top_k"] = rows
             dbg["candidate_after_filter_count"] = len(rows)
@@ -3580,14 +3643,36 @@ class WheelchairNode:
             corr.rank_base = int(rank)
         snapshot = self.adp_ranking_critic
         raw_values = []
+        ranking_audits = []
         if snapshot is not None:
             for corr in rescored:
+                candidate_features, candidate_missing = self._adp_candidate_features(corr)
                 features = self.adp_features.build_wheelchair(
                     self.state, self.goal, self.field,
                     gate_info={"state": "RANKING", "stop": False,
                                "rho_warn": self.gate.rho_warn},
-                    corridor=corr, u=self.u_prev)
-                raw_values.append(snapshot.predict_detail(features)["raw"])
+                    corridor=corr, u=self.u_prev,
+                    candidate_features=candidate_features)
+                normalized = snapshot.featurize(features)
+                prediction = snapshot.predict_detail(features)
+                corr.adp_candidate_features = dict(candidate_features)
+                corr.adp_candidate_feature_missing = dict(candidate_missing)
+                ranking_audits.append({
+                    "candidate_id": candidate_id(corr),
+                    "feature_vector": [{
+                        "feature_name": str(name),
+                        "raw_value": float(features.get(name, 1.0 if name == "bias" else 0.0)),
+                        "normalized_value": float(normalized_value),
+                        "theta": float(theta),
+                        "weighted_value": float(theta * normalized_value),
+                    } for name, normalized_value, theta in zip(
+                        snapshot.feature_names, normalized, snapshot.theta)],
+                    "candidate_adp_features_raw": dict(candidate_features),
+                    "candidate_feature_missing": dict(candidate_missing),
+                    "prediction_raw": float(prediction["raw"]),
+                    "prediction_clipped": float(prediction["clipped"]),
+                })
+                raw_values.append(float(prediction["raw"]))
         adjustments, norm_meta = adp_ranking_adjustments(
             raw_values, metadata=(snapshot.metadata if snapshot else {}),
             lambda_adp=(self.adp_learning.config.get("lambda_adp", 0.0)
@@ -3599,7 +3684,20 @@ class WheelchairNode:
                        if self.adp_learning else 3.0),
             contribution_clip=(self.adp_learning.config.get("adp_contribution_clip", 0.10)
                                if self.adp_learning else 0.10))
-        for corr, item in zip(rescored, adjustments):
+        for corr, item, audit in zip(rescored, adjustments, ranking_audits):
+            normalized_before_clip = ((float(item["adp_value_raw"]) -
+                                       float(norm_meta["center"])) /
+                                      max(float(norm_meta["scale"]), 1e-6))
+            audit["ranking_normalization"] = {
+                "source": str(norm_meta.get("source", "")),
+                "center": float(norm_meta["center"]), "scale": float(norm_meta["scale"]),
+                "normalized_before_clip": float(normalized_before_clip),
+                "normalized_after_clip": float(item["adp_value_normalized"]),
+            }
+            audit["candidate_adp_features_normalized"] = {
+                item["feature_name"]: float(item["normalized_value"])
+                for item in audit["feature_vector"]
+                if item["feature_name"].startswith("candidate_")}
             corr.adp_value_raw = float(item["adp_value_raw"])
             corr.adp_value_normalized = float(item["adp_value_normalized"])
             corr.effective_lambda_adp = float(item["effective_lambda_adp"])
@@ -3609,6 +3707,7 @@ class WheelchairNode:
             corr.cost = float(corr.total_cost)
             corr.adp_ranking_theta_source = "run_start_snapshot"
             corr.adp_normalization = dict(norm_meta)
+            corr.adp_ranking_audit = dict(audit)
             breakdown = dict(getattr(corr, "candidate_cost_breakdown", {}) or {})
             breakdown.update(dict(item, total_cost_with_adp=float(corr.total_cost),
                                   ranking_theta_source="run_start_snapshot"))

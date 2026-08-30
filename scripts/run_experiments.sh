@@ -85,8 +85,8 @@ adp_contribution_clip="${ADP_CONTRIBUTION_CLIP:-0.10}"
 # A caller can still deliberately use one model for both targets with ADP_MODEL.
 # The formal default keeps each critic on the matching online-cost calibration.
 adp_model_override="${ADP_MODEL:-}"
-arm_adp_model="${ADP_ARM_MODEL:-${pkg_dir}/config/adp_critic_arm_calibrated.yaml}"
-wheelchair_adp_model="${ADP_WHEELCHAIR_MODEL:-${pkg_dir}/config/adp_critic_wheelchair_calibrated.yaml}"
+arm_adp_model="${ADP_ARM_MODEL:-${pkg_dir}/config/adp_critic_arm_candidate_conditioned.yaml}"
+wheelchair_adp_model="${ADP_WHEELCHAIR_MODEL:-${pkg_dir}/config/adp_critic_wheelchair_candidate_conditioned.yaml}"
 lambda_adp="${LAMBDA_ADP:-0.005}"
 lambda_adp_corridor="${LAMBDA_ADP_CORRIDOR:-0.05}"
 lambda_adp_terminal="${LAMBDA_ADP_TERMINAL:-0.0015}"

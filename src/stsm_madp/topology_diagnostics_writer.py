@@ -571,6 +571,8 @@ def write_failed_topology_diagnostics(base_dir, robot_type, debug=None,
         "candidate_filter_report.json": filter_report,
         "candidate_generation_report.json": candidate_report,
         "candidate_ranking.json": ranking_rows,
+        "candidate_feature_delta_summary.json": dict(debug.get(
+            "candidate_feature_delta_summary", {}) or {}),
         "candidate_recovery_ranking.json": recovery_ranking,
         "candidate_task_cost_breakdown.json": candidate_task_breakdown,
         "task_state_diagnostics.json": task_state_diag,

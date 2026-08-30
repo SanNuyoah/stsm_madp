@@ -14,7 +14,7 @@
   <arg name="topology_lambda_tracking" default="0.20"/>
   <arg name="topology_lambda_saddle_value" default="0.30"/>
   <arg name="adp_enabled" default="true"/>
-  <arg name="adp_model" default="$(find stsm_madp)/config/adp_critic_arm_calibrated.yaml"/>
+  <arg name="adp_model" default="$(find stsm_madp)/config/adp_critic_arm_candidate_conditioned.yaml"/>
   <arg name="adp_decision_influence_enabled" default="true"/>
   <arg name="adp_ranking_influence_enabled" default="true"/>
   <arg name="adp_mpc_influence_enabled" default="false"/>

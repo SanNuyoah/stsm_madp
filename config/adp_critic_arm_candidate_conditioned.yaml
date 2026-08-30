@@ -1,0 +1,192 @@
+clip_value: 200.0
+cost_weights:
+  w_corr: 0.5
+  w_exceed: 3.0
+  w_ip: 0.6
+  w_phi: 1.0
+  w_prog: 0.4
+  w_stop: 20.0
+  w_u: 0.05
+critic_version: linear_adp_candidate_conditioned_v2_calibrated
+feature_names:
+- bias
+- phi_total
+- phi_prox
+- phi_close
+- phi_body
+- phi_env
+- risk_exceed
+- gate_slow
+- gate_stop
+- d_goal
+- progress
+- speed
+- ip_phi_max
+- ip_phi_mean
+- d_corridor
+- phase_norm
+- candidate_path_length
+- candidate_risk_mean
+- candidate_risk_max
+- candidate_min_clearance
+- candidate_task_cost
+- candidate_execution_cost
+gamma: 0.95
+learning:
+  adp_contribution_clip: 0.1
+  adp_norm_clip: 3.0
+  adp_value_normalization: robust
+  alpha: 0.001
+  decision_influence_enabled: true
+  enabled: true
+  failure_terminal_penalty: 3.0
+  lambda_adp: 0.02
+  min_transition_dt: 0.1
+  mpc_influence_enabled: false
+  ranking_influence_enabled: true
+  risk_scale: 2.0
+  save_every_n_transitions: 50
+  save_updated_critic: true
+  td_error_clip: 5.0
+  theta_delta_norm_max: 0.05
+mean:
+- 0.0
+- 2.4598836008388005
+- 0.7640660158427748
+- 0.0
+- 0.7448690017501893
+- 0.5841968956413025
+- 0.0
+- 0.0
+- 0.0
+- 0.2598689630705098
+- 0.0010726884915549055
+- 0.06008287541840271
+- 2.478035786423474
+- 1.8201347473560203
+- 0.0
+- 0.5275529865125197
+- 0.29945795339680553
+- 0.4615501811675374
+- 0.0
+- 0.0035746806703217293
+- 0.7035541846065484
+- 2.0385758668662612
+metadata:
+  calibrated_at: 2026-08-30T10:45:13+0800
+  calibration_method: real_online_transition_cost_to_go
+  calibration_robot: arm
+  calibration_sources:
+  - D:\AAA\stsm_madp\results\runs\20260829_R003\arm\stsm\adp_learning_diagnostics.json
+  - D:\AAA\stsm_madp\results\runs\20260829_R004\arm\stsm\adp_learning_diagnostics.json
+  - D:\AAA\stsm_madp\results\runs\20260829_R005\arm\stsm\adp_learning_diagnostics.json
+  - D:\AAA\stsm_madp\results\runs\20260829_R006\arm\stsm\adp_learning_diagnostics.json
+  - D:\AAA\stsm_madp\results\runs\20260829_R007\arm\stsm\adp_learning_diagnostics.json
+  candidate_conditioned: true
+  candidate_feature_missing_source_count:
+    candidate_execution_cost: 0
+    candidate_min_clearance: 4
+    candidate_path_length: 0
+    candidate_risk_max: 5
+    candidate_risk_mean: 0
+    candidate_task_cost: 0
+  episode_count: 5
+  excluded_sources:
+  - diagnostics: D:\AAA\stsm_madp\results\runs\20260828_R007\arm\stsm\adp_learning_diagnostics.json
+    ranking: D:\AAA\stsm_madp\results\runs\20260828_R007\arm\stsm\candidate_ranking.json
+    reason: no_executed_selected_transitions
+  - diagnostics: D:\AAA\stsm_madp\results\runs\20260828_R008\arm\stsm\adp_learning_diagnostics.json
+    ranking: D:\AAA\stsm_madp\results\runs\20260828_R008\arm\stsm\candidate_ranking.json
+    reason: no_executed_selected_transitions
+  - diagnostics: D:\AAA\stsm_madp\results\runs\20260828_R009\arm\stsm\adp_learning_diagnostics.json
+    ranking: D:\AAA\stsm_madp\results\runs\20260828_R009\arm\stsm\candidate_ranking.json
+    reason: no_executed_selected_transitions
+  - diagnostics: D:\AAA\stsm_madp\results\runs\20260829_R001\arm\stsm\adp_learning_diagnostics.json
+    ranking: D:\AAA\stsm_madp\results\runs\20260829_R001\arm\stsm\candidate_ranking.json
+    reason: no_executed_selected_transitions
+  - diagnostics: D:\AAA\stsm_madp\results\runs\20260829_R002\arm\stsm\adp_learning_diagnostics.json
+    ranking: D:\AAA\stsm_madp\results\runs\20260829_R002\arm\stsm\candidate_ranking.json
+    reason: no_executed_selected_transitions
+  feature_count: 22
+  feature_names:
+  - bias
+  - phi_total
+  - phi_prox
+  - phi_close
+  - phi_body
+  - phi_env
+  - risk_exceed
+  - gate_slow
+  - gate_stop
+  - d_goal
+  - progress
+  - speed
+  - ip_phi_max
+  - ip_phi_mean
+  - d_corridor
+  - phase_norm
+  - candidate_path_length
+  - candidate_risk_mean
+  - candidate_risk_max
+  - candidate_min_clearance
+  - candidate_task_cost
+  - candidate_execution_cost
+  feature_schema_version: candidate_conditioned_v2
+  fit_loss: 0.5540532311261924
+  ranking_value_center: 924.8224079427016
+  ranking_value_p5: 253.3252137076396
+  ranking_value_p95: 1596.3196021777635
+  ranking_value_sample_count: 2
+  ranking_value_scale: 553.0822784243983
+  sample_count: 865
+  seed_critic_target_mismatch: true
+  target_max: 26.58876821737965
+  target_mean: 22.296573077609505
+  target_min: 0.3043743978836759
+  target_p95: 26.422708009896
+std:
+- 1.0
+- 0.2127914177691502
+- 0.024562218914554283
+- 1.0
+- 0.19632758589601657
+- 0.05716861582846944
+- 1.0
+- 1.0
+- 1.0
+- 0.30662141975873175
+- 0.0006848105622848575
+- 0.03483299145550394
+- 0.2063443914052392
+- 0.12198973907753195
+- 1.0
+- 0.3029166471243897
+- 0.00020305906743943209
+- 0.9197786518062658
+- 1.0
+- 0.007123634875994074
+- 1.4020449905428012
+- 1.0408772839898315
+theta:
+- 22.29657049997585
+- 9.461368346034414
+- 0.8120385723559056
+- 0.0
+- 9.157005538254671
+- 3.253636634629946
+- 0.0
+- 0.0
+- 0.0
+- -0.8610917646376423
+- 0.18512694932261978
+- -0.39850784748508344
+- -15.712180844151819
+- -0.8107064728629544
+- 0.0
+- -0.8984518372157531
+- 0.36464922422510326
+- 0.1241559193866803
+- 0.0
+- 0.12415574400444503
+- 0.1241559979983772
+- 0.14063978190830542

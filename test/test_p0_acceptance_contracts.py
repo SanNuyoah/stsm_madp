@@ -37,7 +37,8 @@ from stsm_madp.social_field import (
 from stsm_madp.adp import (
     ADPCritic, ADPTransitionLearner, adp_role_from_runtime,
     adp_ranking_adjustments, clone_critic,
-    fit_critic_from_transition_records, save_and_verify_critic)
+    candidate_feature_values, fit_critic_from_transition_records,
+    require_feature_schema, save_and_verify_critic)
 from stsm_madp.decision_trace import trace_from_debug
 from stsm_madp.task_semantics import infer_task_context
 from stsm_madp.topology import TopologicalCorridorPlanner
@@ -148,7 +149,7 @@ def test_final_candidate_ranking_keeps_adp_fields_when_writer_enriches_rows():
 
 
 def test_adp_ranking_snapshot_does_not_change_when_live_critic_learns():
-    live = ADPCritic(theta=np.ones(16), metadata={"target_mean": 2.0,
+    live = ADPCritic(theta=np.ones(22), metadata={"target_mean": 2.0,
                                                     "target_p95": 3.0})
     snapshot = clone_critic(live)
     live.theta[0] = 99.0
@@ -1600,9 +1601,49 @@ def test_formal_experiments_default_to_target_calibrated_critics():
     with open(os.path.join(ROOT, "scripts", "run_experiments.sh"), "r") as handle:
         source = handle.read()
     assert "adp_model_override=\"${ADP_MODEL:-}\"" in source
-    assert "adp_critic_arm_calibrated.yaml" in source
-    assert "adp_critic_wheelchair_calibrated.yaml" in source
+    assert "adp_critic_arm_candidate_conditioned.yaml" in source
+    assert "adp_critic_wheelchair_candidate_conditioned.yaml" in source
     assert 'adp_model:=\"${run_adp_model}\"' in source
+
+
+def test_candidate_conditioned_schema_rejects_legacy_critic():
+    legacy = ADPCritic(feature_names=["bias"], theta=[0.0], mean=[0.0],
+                       std=[1.0], metadata={"feature_schema_version": "v1"})
+    try:
+        require_feature_schema(legacy)
+        assert False, "legacy critic must not be silently expanded"
+    except ValueError as exc:
+        assert "critic_feature_schema_mismatch" in str(exc)
+
+
+def test_arm_and_wheelchair_candidate_conditioned_critics_match_schema():
+    for filename in ("adp_critic_arm_candidate_conditioned.yaml",
+                     "adp_critic_wheelchair_candidate_conditioned.yaml"):
+        critic = ADPCritic.load_yaml(os.path.join(ROOT, "config", filename))
+        assert require_feature_schema(critic)
+
+
+def test_candidate_conditioned_values_change_with_same_robot_state():
+    candidate_a, missing_a = candidate_feature_values({
+        "path_length": 0.3, "risk_cost": 2.2, "max_risk": 1.4,
+        "min_clearance": 0.04, "task_cost": 3.5, "execution_cost": 4.1})
+    candidate_b, missing_b = candidate_feature_values({
+        "path_length": 1.1, "risk_cost": 1.8, "max_risk": 1.0,
+        "min_clearance": 0.01, "task_cost": 3.3, "execution_cost": 3.0})
+    assert not any(missing_a.values())
+    assert not any(missing_b.values())
+    names = ["bias", "candidate_path_length", "candidate_risk_mean"]
+    critic = ADPCritic(feature_names=names, theta=[0.0, 2.0, 1.0],
+                       mean=[0.0, 0.0, 0.0], std=[1.0, 1.0, 1.0])
+    value_a = critic.predict_detail(dict(bias=1.0, **candidate_a))["raw"]
+    value_b = critic.predict_detail(dict(bias=1.0, **candidate_b))["raw"]
+    assert value_a != value_b
+    terms, _meta = adp_ranking_adjustments(
+        [value_a, value_b], lambda_adp=0.02, norm_clip=10.0)
+    assert terms[0]["adp_value_raw"] != terms[1]["adp_value_raw"]
+    zero_terms, _meta = adp_ranking_adjustments(
+        [value_a, value_b], lambda_adp=0.0, norm_clip=10.0)
+    assert all(term["adp_cost"] == 0.0 for term in zero_terms)
 
 
 def test_adp_calibration_fits_real_transition_cost_to_go_targets():
