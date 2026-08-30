@@ -2382,7 +2382,13 @@ class WheelchairNode:
         join_indices = list(range(1, max_join_index + 1))
         turn_actions = (-0.16, 0.0, 0.16)
         start_yaw = float(self.state[2])
-        frontier = [(start, start_yaw, [start.copy()], 0.0)]
+        # Keep rollout samples in the same dimensionality as the selected
+        # corridor.  Topology routes carry a z column while the diff-drive
+        # state is planar; mixing the two previously made the final merge
+        # raise before the connector audit could produce diagnostics.
+        start_point = np.zeros(ref.shape[1], dtype=float)
+        start_point[:2] = start
+        frontier = [(start, start_yaw, [start_point], 0.0)]
         last_safety = {}
 
         for join_idx in join_indices:
@@ -2401,7 +2407,9 @@ class WheelchairNode:
                         # but cannot deliberately move away from the goal.
                         if float(np.linalg.norm(next_xy - goal)) > d0 + 0.03:
                             continue
-                        next_path = path + [next_xy]
+                        next_point = np.zeros(ref.shape[1], dtype=float)
+                        next_point[:2] = next_xy
+                        next_path = path + [next_point]
                         search["connector_search_expansions"] += 1
                         safety, footprint_reason = (
                             self._runtime_replan_connector_safety(
