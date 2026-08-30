@@ -1483,6 +1483,9 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "runtime_replan_no_safe_join_point" in wheelchair_source
     assert "connector_search_expansions" in wheelchair_source
     assert "join_idx_selected" in wheelchair_source
+    assert "def _runtime_replan_join_point_audit(" in wheelchair_source
+    assert "join_point_source_count" in wheelchair_source
+    assert "join_point_audit" in wheelchair_source
     assert "_runtime_replan_connector_safety(" in wheelchair_source
     assert "critical_point_sequence_invalid" in wheelchair_source
     assert "def _runtime_recovery(" in wheelchair_source

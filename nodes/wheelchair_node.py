@@ -2110,6 +2110,11 @@ class WheelchairNode:
                 "connector_min_clearance", None),
             "connector_manifold_violation_count": int(data.get(
                 "connector_manifold_violation_count", 0)),
+            "join_point_source_count": int(data.get(
+                "join_point_source_count", 0)),
+            "join_point_search_cap": int(data.get(
+                "join_point_search_cap", 0)),
+            "join_point_audit": list(data.get("join_point_audit", []) or []),
         }
 
     def _finalize_runtime_replan_connectability(self, corridor, attempt,
@@ -2245,6 +2250,9 @@ class WheelchairNode:
             "connector_search_expansions": 0,
             "connector_min_clearance": None,
             "connector_manifold_violation_count": 0,
+            "join_point_source_count": 0,
+            "join_point_search_cap": 15,
+            "join_point_audit": [],
         }
         direct_ok, direct_reason, direct_progress, direct_safety = (
             self._runtime_replan_path_status(corridor, raw))
@@ -2382,6 +2390,14 @@ class WheelchairNode:
         join_indices = list(range(1, max_join_index + 1))
         turn_actions = (-0.16, 0.0, 0.16)
         start_yaw = float(self.state[2])
+        search["join_point_source_count"] = int(len(ref))
+        join_audit = self._runtime_replan_join_point_audit(
+            corridor, ref, join_indices, start, goal, start_yaw)
+        search["join_point_audit"] = join_audit
+        # Point-level prefilter only.  The existing prefix and merged-route
+        # contracts still make the final connectability decision.
+        join_indices = [int(item["index"]) for item in join_audit
+                        if not str(item.get("pre_filter_reject_reason", ""))]
         # Keep rollout samples in the same dimensionality as the selected
         # corridor.  Topology routes carry a z column while the diff-drive
         # state is planar; mixing the two previously made the final merge
@@ -2453,6 +2469,46 @@ class WheelchairNode:
             last_safety.get("manifold_violation_count", 0) or 0)
         corridor.runtime_replan_connector_search = search
         return None
+
+    def _runtime_replan_join_point_audit(self, corridor, reference,
+                                         join_indices, start, goal,
+                                         current_yaw):
+        """Audit every bounded topology join before connector rollout."""
+        report = []
+        d0 = float(np.linalg.norm(start - goal))
+        for join_idx in join_indices:
+            point = np.asarray(reference[join_idx:join_idx + 1], float)
+            join = point[0, :2]
+            safety, footprint_reason = self._runtime_replan_connector_safety(
+                corridor, point)
+            clearance = float(safety.get("min_clearance", 0.0))
+            manifold_valid = bool(safety.get("valid", False)) and not bool(
+                int(safety.get("manifold_violation_count", 0) or 0))
+            heading = float(np.arctan2(
+                join[1] - start[1], join[0] - start[0]))
+            heading_error = abs(float(np.arctan2(
+                np.sin(heading - current_yaw),
+                np.cos(heading - current_yaw))))
+            goal_progress = float(d0 - np.linalg.norm(join - goal))
+            reject_reason = ""
+            if clearance + 1e-9 < 0.10:
+                reject_reason = "join_point_clearance"
+            elif not manifold_valid:
+                reject_reason = "join_point_manifold"
+            elif footprint_reason:
+                reject_reason = "join_point_" + str(footprint_reason)
+            elif goal_progress < -0.03:
+                reject_reason = "join_point_goal_regression"
+            report.append({
+                "index": int(join_idx),
+                "distance_from_current_pose": float(np.linalg.norm(join - start)),
+                "clearance": clearance,
+                "manifold_valid": bool(manifold_valid),
+                "goal_progress": goal_progress,
+                "initial_heading_error": heading_error,
+                "pre_filter_reject_reason": reject_reason,
+            })
+        return report
 
     def _make_heading_progress_prefix(self, reference, corridor):
         """Build a short launch segment aligned with the current diff-drive pose."""
