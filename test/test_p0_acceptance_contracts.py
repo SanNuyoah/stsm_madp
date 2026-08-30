@@ -1473,6 +1473,13 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "watchdog_command_age_s" in wheelchair_source
     assert "zero_command_duty_ratio" in wheelchair_source
     assert "mpc_phase_timing" in wheelchair_source
+    assert "def _audit_runtime_replan_connectability(" in wheelchair_source
+    assert "def _runtime_replan_path_status(" in wheelchair_source
+    assert "runtime_replan_connectability_attempts" in wheelchair_source
+    assert "runtime_replan_connectability.json" in wheelchair_source
+    assert "runtime_replan_connector_turn_limit" in wheelchair_source
+    assert "runtime_replan_goal_progress_insufficient" in wheelchair_source
+    assert "critical_point_sequence_invalid" in wheelchair_source
     assert "def _runtime_recovery(" in wheelchair_source
     assert wheelchair_source.count("_runtime_recovery(") == 6
     assert wheelchair_source.count("new_corridor = self._plan_corridor()") == 1

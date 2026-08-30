@@ -29,6 +29,7 @@ from stsm_madp.mpc import (
     write_mpc_outputs)
 from stsm_madp.topology_constraint import (
     build_topology_constraint, write_topology_constraint)
+from stsm_madp.manifold_constraint_evaluator import ManifoldConstraintEvaluator
 from stsm_madp.safety_gate import SafetyGate, SafetyGateResult
 from stsm_madp.adp import (
     ADPCritic, ADPFeatureBuilder, ADPTransitionLearner,
@@ -296,6 +297,8 @@ class WheelchairNode:
         self.runtime_failed_corridors = {}
         self.runtime_topology_candidate_switch_trials = []
         self.runtime_topology_candidate_switch_count = 0
+        self.runtime_replan_connectability_attempts = []
+        self._runtime_replan_context = None
         self.runtime_global_stop_summary = {}
         self._runtime_gate_scale = 1.0
         self._runtime_gate_stop = False
@@ -2076,6 +2079,159 @@ class WheelchairNode:
             return float(self.state[2])
         return float(np.arctan2(delta[1], delta[0]))
 
+    def _runtime_replan_connectability_payload(self, corridor):
+        data = dict(getattr(
+            corridor, "runtime_replan_connectability", {}) or {})
+        return {
+            "runtime_replan": bool(data.get("runtime_replan", False)),
+            "current_yaw": float(data.get("current_yaw", 0.0)),
+            "candidate_first_heading": float(data.get(
+                "candidate_first_heading", 0.0)),
+            "initial_heading_error": float(data.get(
+                "initial_heading_error", 0.0)),
+            "pre_refine_max_turn": float(data.get("pre_refine_max_turn", 0.0)),
+            "connector_used": bool(data.get("connector_used", False)),
+            "connector_length": float(data.get("connector_length", 0.0)),
+            "post_refine_max_turn": float(data.get("post_refine_max_turn", 0.0)),
+            "replan_goal_progress_first_N": float(data.get(
+                "replan_goal_progress_first_N", 0.0)),
+            "final_reject_reason": str(data.get("final_reject_reason", "")),
+            "connectability_status": str(data.get(
+                "connectability_status", "not_runtime_replan")),
+        }
+
+    def _finalize_runtime_replan_connectability(self, corridor, attempt,
+                                                reject_reason="",
+                                                post_refine_max_turn=None,
+                                                goal_progress=None):
+        data = dict(getattr(
+            corridor, "runtime_replan_connectability", {}) or {})
+        if data:
+            if post_refine_max_turn is not None:
+                data["post_refine_max_turn"] = float(post_refine_max_turn)
+            if goal_progress is not None:
+                data["replan_goal_progress_first_N"] = float(goal_progress)
+            data["final_reject_reason"] = str(reject_reason or "")
+            data["connectability_status"] = (
+                "rejected" if reject_reason else "accepted")
+            corridor.runtime_replan_connectability = data
+            self.runtime_replan_connectability_attempts.append(dict(data))
+        attempt.update(self._runtime_replan_connectability_payload(corridor))
+
+    def _runtime_replan_path_status(self, corridor, path):
+        """Validate a repaired replan reference before refinement mutates it."""
+        points = self._as_corridor_points(path)
+        if self.state is None or len(points) < 2:
+            return False, "runtime_replan_reference_empty", 0.0
+        from stsm_madp.deform import path_curvature_metrics
+
+        current = np.asarray(self.state[:2], float)
+        goal = np.asarray(self.goal[:2], float)
+        first_n = min(8, len(points))
+        d0 = float(np.linalg.norm(current - goal))
+        goal_dists = np.linalg.norm(points[:first_n, :2] - goal, axis=1)
+        progress = float(d0 - goal_dists[-1])
+        initial_regression = float(max(0.0, np.max(goal_dists) - d0))
+        if initial_regression > 0.03 + 1e-9:
+            return False, "runtime_replan_initial_goal_regression", progress
+        if progress + 1e-9 < float(self.min_progress_per_solve):
+            return False, "runtime_replan_goal_progress_insufficient", progress
+        turn_limit = min(float(self.topology_max_corridor_turn), 0.40) + 0.03
+        max_turn = float(path_curvature_metrics(points).get("max_turn", 0.0))
+        if not np.isfinite(max_turn) or max_turn > turn_limit + 1e-9:
+            return False, "runtime_replan_connector_turn_limit", progress
+        constraint = build_topology_constraint(
+            selected_topology_graph=dict(getattr(
+                self.manifold, "last_topology_debug", {}) or {}),
+            selected_corridor=corridor, safe_manifold=self.manifold,
+            refined_reference=points.tolist(),
+            safe_threshold=float(self.manifold.rho), minimum_clearance=0.10,
+            phase="navigation", robot_type="wheelchair",
+            manifold_constraint_mode=self.manifold_constraint_mode)
+        evaluator = ManifoldConstraintEvaluator(
+            manifold_constraint=dict(constraint.get("manifold_constraint", {}) or {}),
+            corridor_constraint=dict(constraint.get("corridor_constraint", {}) or {}),
+            risk_field=self.field)
+        safety = evaluator.evaluate_trajectory(points)
+        if not bool(safety.get("valid", False)):
+            return False, "runtime_replan_connector_manifold_or_clearance", progress
+        footprint_ok, footprint_reason = self._footprint_path_checker(points)
+        if not footprint_ok:
+            return False, "runtime_replan_connector_" + str(footprint_reason), progress
+        return True, "", progress
+
+    def _runtime_replan_connector_length(self, raw, connected):
+        from stsm_madp.deform import path_length
+
+        original = self._as_corridor_points(raw)
+        candidate = self._as_corridor_points(connected)
+        if len(candidate) < 2:
+            return 0.0
+        for idx in range(1, len(candidate)):
+            if (len(original) > 1 and float(np.min(np.linalg.norm(
+                    original[1:, :2] - candidate[idx, :2], axis=1))) <= 1e-6):
+                return float(path_length(candidate[:idx + 1]))
+        return float(path_length(candidate))
+
+    def _audit_runtime_replan_connectability(self, corridor):
+        """Make a bounded, safe connection from current pose to a replan route."""
+        context = dict(self._runtime_replan_context or {})
+        if not bool(context.get("active", False)):
+            return True, ""
+        raw = self._as_corridor_points(getattr(corridor, "waypoints", []))
+        current_yaw = float(self.state[2]) if self.state is not None else 0.0
+        first_heading = self._path_yaw(raw, 0) if len(raw) > 1 else current_yaw
+        heading_error = abs(float(np.arctan2(
+            np.sin(first_heading - current_yaw),
+            np.cos(first_heading - current_yaw))))
+        from stsm_madp.deform import path_curvature_metrics
+        pre_turn = float(path_curvature_metrics(raw).get("max_turn", 0.0))
+        data = {
+            "runtime_replan": True,
+            "current_yaw": current_yaw,
+            "candidate_first_heading": first_heading,
+            "initial_heading_error": heading_error,
+            "pre_refine_max_turn": pre_turn,
+            "connector_used": False,
+            "connector_length": 0.0,
+            "post_refine_max_turn": 0.0,
+            "replan_goal_progress_first_N": 0.0,
+            "final_reject_reason": "",
+            "connectability_status": "audit_pending",
+        }
+        direct_ok, direct_reason, direct_progress = (
+            self._runtime_replan_path_status(corridor, raw))
+        data["replan_goal_progress_first_N"] = float(direct_progress)
+        if direct_ok:
+            data["connectability_status"] = "direct_connectable"
+            corridor.runtime_replan_connectability = data
+            return True, ""
+        connector = self._make_heading_progress_prefix(raw, corridor)
+        if connector is None or len(connector) < 2:
+            data["final_reject_reason"] = direct_reason or "runtime_replan_connector_unavailable"
+            data["connectability_status"] = "connector_unavailable"
+            corridor.runtime_replan_connectability = data
+            return False, data["final_reject_reason"]
+        connector = self._as_corridor_points(connector)
+        connector_ok, connector_reason, connector_progress = (
+            self._runtime_replan_path_status(corridor, connector))
+        data["connector_used"] = True
+        data["connector_length"] = self._runtime_replan_connector_length(
+            raw, connector)
+        data["replan_goal_progress_first_N"] = float(connector_progress)
+        if not connector_ok:
+            data["final_reject_reason"] = connector_reason
+            data["connectability_status"] = "connector_rejected"
+            corridor.runtime_replan_connectability = data
+            return False, connector_reason
+        # Preserve all topology waypoints on the corridor object; refinement
+        # receives only a safe, yaw-connected execution seed.
+        corridor.runtime_replan_original_waypoints = np.asarray(raw, float)
+        corridor.waypoints = np.asarray(connector, float)
+        data["connectability_status"] = "connector_accepted"
+        corridor.runtime_replan_connectability = data
+        return True, ""
+
     def _footprint_path_checker(self, path):
         pts = np.asarray(path, float)
         raw_count = int(len(pts))
@@ -2539,6 +2695,22 @@ class WheelchairNode:
             if not self._corridor_is_topological(corr):
                 prepared.append(corr)
                 continue
+            connectable, connectability_reason = (
+                self._audit_runtime_replan_connectability(corr))
+            if not connectable:
+                corr.reject_reason = str(connectability_reason)
+                attempt = self._refinement_attempt_payload(
+                    corr, {}, corr.reject_reason,
+                    stage="runtime_replan_connectability")
+                attempt["accepted"] = False
+                attempt["reject_reason"] = str(corr.reject_reason)
+                self._finalize_runtime_replan_connectability(
+                    corr, attempt, corr.reject_reason)
+                refinement_attempts.append(attempt)
+                rospy.logwarn(
+                    "[wc][replan] reject %s connectability=%s",
+                    cid, corr.reject_reason)
+                continue
             rospy.loginfo(
                 "[wc][refine] start %s index=%d samples=%d max_points=%d footprint_points=%d",
                 cid, int(index), int(self.topology_refinement_samples),
@@ -2564,10 +2736,13 @@ class WheelchairNode:
                 self.max_refined_footprint_check_points)
             attempt["refined_footprint_checked_points"] = int(
                 self.last_refined_footprint_checked_points)
+            attempt.update(self._runtime_replan_connectability_payload(corr))
             if not ok:
                 corr.reject_reason = str(reason)
                 attempt["accepted"] = False
                 attempt["reject_reason"] = str(corr.reject_reason)
+                self._finalize_runtime_replan_connectability(
+                    corr, attempt, corr.reject_reason)
                 refinement_attempts.append(attempt)
                 rospy.logwarn("[wc][refine] reject %s reason=%s",
                               getattr(corr, "corridor_id",
@@ -2668,6 +2843,9 @@ class WheelchairNode:
                         "diff_drive_reference_source", reference_source))
                     attempt["nonholonomic_execution_profile"] = dict(
                         metrics.get("nonholonomic_execution_profile", {}))
+                    self._finalize_runtime_replan_connectability(
+                        corr, attempt, corr.reject_reason,
+                        post_refine_max_turn=refined_max_turn)
                     refinement_attempts.append(attempt)
                     rospy.logwarn(
                         "[wc][refine] reject %s reason=%s",
@@ -2683,6 +2861,9 @@ class WheelchairNode:
                 attempt["execution_curvature_limit"] = float(
                     executable_curvature_limit)
                 attempt["execution_turn_limit"] = float(executable_turn_limit)
+                self._finalize_runtime_replan_connectability(
+                    corr, attempt, corr.reject_reason,
+                    post_refine_max_turn=refined_max_turn)
                 refinement_attempts.append(attempt)
                 rospy.logwarn(
                     "[wc][refine] reject %s reason=%s max_curv=%.3f limit=%.3f",
@@ -2700,6 +2881,9 @@ class WheelchairNode:
                 attempt["execution_turn_limit"] = float(executable_turn_limit)
                 attempt["execution_turn_tolerance"] = float(
                     executable_turn_tolerance)
+                self._finalize_runtime_replan_connectability(
+                    corr, attempt, corr.reject_reason,
+                    post_refine_max_turn=refined_max_turn)
                 refinement_attempts.append(attempt)
                 rospy.logwarn(
                     "[wc][refine] reject %s reason=%s max_turn=%.3f limit=%.3f",
@@ -2726,7 +2910,6 @@ class WheelchairNode:
                 "diff_drive_reference_source", reference_source))
             attempt["nonholonomic_execution_profile"] = dict(metrics.get(
                 "nonholonomic_execution_profile", {}))
-            refinement_attempts.append(attempt)
             corr.waypoints = np.asarray(refined, float)
             corr.refined_waypoints = np.asarray(refined, float)
             corr.centerline = np.asarray(refined, float)
@@ -2854,6 +3037,11 @@ class WheelchairNode:
                 breakdown["execution_feasible"] = False
                 breakdown["hard_feasible"] = False
                 corr.candidate_cost_breakdown = breakdown
+                self._finalize_runtime_replan_connectability(
+                    corr, attempt, corr.reject_reason,
+                    post_refine_max_turn=refined_max_turn,
+                    goal_progress=contract_status.get(
+                        "reference_goal_progress", None))
                 refinement_attempts.append(attempt)
                 rospy.logwarn(
                     "[wc][refine] reject %s reason=%s diff_drive=%.3f critical=%s sequence_valid=%s",
@@ -2866,6 +3054,11 @@ class WheelchairNode:
                         "topology_sequence_valid", True)))
                 continue
             attempt["stsm_execution_contract"] = dict(contract_status)
+            self._finalize_runtime_replan_connectability(
+                corr, attempt, "", post_refine_max_turn=refined_max_turn,
+                goal_progress=contract_status.get(
+                    "reference_goal_progress", None))
+            refinement_attempts.append(attempt)
             prepared.append(corr)
             rospy.loginfo(
                 "[wc][refine] accepted %s length=%.3f max_turn=%.3f max_curv=%.3f diff_drive=%.3f init_head=%.3f mono_reg=%.3f source=%s",
@@ -4224,6 +4417,13 @@ class WheelchairNode:
                     self._corridor_label(corridor, ""))
                 return corridor, False
         self.runtime_full_replan_count += 1
+        self._runtime_replan_context = {
+            "active": True,
+            "reason": str(reason),
+            "current_pose": [float(value) for value in self.state[:3]],
+            "current_yaw": float(self.state[2]),
+            "started_at": float(now.to_sec()),
+        }
         try:
             rospy.loginfo("[wc][recovery] full replan reason=%s current=%s count=%d",
                           reason, self._corridor_label(corridor, ""),
@@ -4256,6 +4456,8 @@ class WheelchairNode:
                 "[wc][recovery] full replan failed closed reason=%s current=%s: %s",
                 reason, self._corridor_label(corridor, ""), exc)
             return corridor, False
+        finally:
+            self._runtime_replan_context = None
 
     def _runtime_candidate_first_step_status(self, candidate):
         """Check whether a ranked topology candidate is executable now.
@@ -5039,6 +5241,8 @@ class WheelchairNode:
             "runtime_candidate_switch_count": int(
                 self.runtime_topology_candidate_switch_count),
             "runtime_full_replan_count": int(self.runtime_full_replan_count),
+            "runtime_replan_connectability_attempts": list(
+                self.runtime_replan_connectability_attempts),
             "runtime_global_stop_summary": dict(
                 self.runtime_global_stop_summary),
             "runtime_global_stop_attempted_corridors": list(
@@ -5826,8 +6030,23 @@ class WheelchairNode:
         self._write_mpc_reference_path()
         self._write_baseline_evidence()
         self._write_mpc_diagnostics()
+        self._write_runtime_replan_connectability_diagnostics()
         self._write_decision_trace()
         self._write_candidate_recovery_diagnostics()
+
+    def _write_runtime_replan_connectability_diagnostics(self):
+        diag, _breakdown = self._mpc_output_paths()
+        output_dir = os.path.dirname(diag)
+        if output_dir and not os.path.isdir(output_dir):
+            os.makedirs(output_dir)
+        payload = {
+            "runtime_full_replan_count": int(self.runtime_full_replan_count),
+            "attempt_count": int(len(self.runtime_replan_connectability_attempts)),
+            "attempts": list(self.runtime_replan_connectability_attempts),
+        }
+        with open(os.path.join(
+                output_dir or ".", "runtime_replan_connectability.json"), "w") as f:
+            json.dump(payload, f, indent=2, sort_keys=True)
 
     def _baseline_corridor_follow_control(self, corridor, ref, v, w, dist):
         if not (self.baseline and
