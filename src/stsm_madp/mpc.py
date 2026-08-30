@@ -8,7 +8,8 @@ import json
 import os
 import time
 
-from stsm_madp.interest_points import forbidden_anchor_hit, pose_interest_risk
+from stsm_madp.interest_points import (
+    forbidden_anchor_hit, pose_interest_risk, pose_interest_risk_batch)
 from stsm_madp.critical_point_tracker import CriticalPointTracker
 from stsm_madp.topology_stage_tracker import TopologyStageTracker
 from stsm_madp.topology_constraint import (
@@ -5156,6 +5157,7 @@ class WheelchairMPC:
                 warm = self._pure_pursuit_u(
                     x, local_ref if len(local_ref) else ref, field, previous)
                 local_goal_u = self._goal_seek_u(x, goal)
+                step_candidates = []
                 for u in self._sequence_step_controls(
                         previous, warm_u=warm, goal_u=local_goal_u):
                     if (abs(float(u[0] - previous[0])) >
@@ -5175,15 +5177,56 @@ class WheelchairMPC:
                     x_next = self._step(x, u)
                     state_key = tuple(float(value) for value in x_next[:3])
                     position_key = state_key[:2]
+                    step_candidates.append((u, x_next, state_key, position_key))
+
+                # Each sibling rollout has the same safety definition.  Batch
+                # its field queries before performing the unchanged hard/soft
+                # checks below; this keeps watchdog freshness independent of
+                # the number of equivalent footprint evaluations.
+                batch_safety_t0 = time.time()
+                uncached_positions = []
+                seen_positions = set()
+                uncached_states = []
+                for _u, x_next, _state_key, position_key in step_candidates:
+                    if (position_key not in manifold_state_cache and
+                            position_key not in seen_positions):
+                        seen_positions.add(position_key)
+                        uncached_positions.append(position_key)
+                        uncached_states.append([x_next[0], x_next[1], 0.0])
+                if uncached_states:
+                    for key, status in zip(
+                            uncached_positions,
+                            manifold_evaluator.evaluate_states(uncached_states)):
+                        manifold_state_cache[key] = status
+                if interest_enabled:
+                    uncached_interest_keys = []
+                    uncached_interest_states = []
+                    seen_interest = set()
+                    for _u, x_next, state_key, _position_key in step_candidates:
+                        if (state_key not in interest_state_cache and
+                                state_key not in seen_interest):
+                            seen_interest.add(state_key)
+                            uncached_interest_keys.append(state_key)
+                            uncached_interest_states.append(x_next)
+                    if uncached_interest_states:
+                        summaries = pose_interest_risk_batch(
+                            field, uncached_interest_states,
+                            local_points=interest_constraints.get("local_points"),
+                            labels=interest_constraints.get("labels"))
+                        for key, summary in zip(uncached_interest_keys, summaries):
+                            hit, _label, _anchor, reason = forbidden_anchor_hit(
+                                field, summary.get("labels", []),
+                                summary.get("points", []))
+                            interest_state_cache[key] = (summary, hit, reason)
+                timing["t_safety_eval_s"] += max(
+                    0.0, time.time() - batch_safety_t0)
+
+                for u, x_next, state_key, position_key in step_candidates:
                     parts = dict(item["parts"])
                     hard_violation = False
                     step_soft_cost = 0.0
                     safety_t0 = time.time()
                     manifold_state = manifold_state_cache.get(position_key)
-                    if manifold_state is None:
-                        manifold_state = manifold_evaluator.evaluate_state(
-                            [x_next[0], x_next[1], 0.0])
-                        manifold_state_cache[position_key] = manifold_state
                     manifold_risk_violation = max(
                         0.0, float(manifold_state.get("risk", 0.0)) -
                         float(manifold_evaluator.risk_threshold))
@@ -5208,17 +5251,6 @@ class WheelchairMPC:
                         continue
                     if interest_enabled:
                         cached_interest = interest_state_cache.get(state_key)
-                        if cached_interest is None:
-                            summary = pose_interest_risk(
-                                field, x_next,
-                                local_points=interest_constraints.get(
-                                    "local_points"),
-                                labels=interest_constraints.get("labels"))
-                            hit, _label, _anchor, reason = forbidden_anchor_hit(
-                                field, summary.get("labels", []),
-                                summary.get("points", []))
-                            cached_interest = (summary, hit, reason)
-                            interest_state_cache[state_key] = cached_interest
                         summary, hit, reason = cached_interest
                         if hit:
                             violation_counts["forbidden"] += 1

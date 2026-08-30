@@ -140,10 +140,11 @@ class SafetyEvaluator(object):
         _q, dist, _s = _polyline_project(state, centerline)
         return float(dist), bool(dist <= radius + 1e-9)
 
-    def evaluate_state(self, state):
+    def evaluate_state(self, state, risk=None):
         point = np.asarray(state, float)[:3]
         clearance = distance_to_manifold_boundary(point, self._boundary())
-        risk = manifold_risk_value(point, self.risk_field)
+        risk = (manifold_risk_value(point, self.risk_field)
+                if risk is None else float(risk))
         clearance_source = "risk_manifold_boundary"
         if not np.isfinite(clearance) and self.risk_field is not None and hasattr(
                 self.risk_field, "grad_phi_s"):
@@ -178,6 +179,17 @@ class SafetyEvaluator(object):
             "required_clearance": float(self.required_clearance),
             "risk_threshold": float(self.risk_threshold),
         }
+
+    def evaluate_states(self, states):
+        """Batch only the risk query; retain the existing per-state checks."""
+        points = _as_points(states)
+        if len(points) == 0:
+            return []
+        if self.risk_field is not None and hasattr(self.risk_field, "phi_s_batch"):
+            risks = np.asarray(self.risk_field.phi_s_batch(points), float)
+            return [self.evaluate_state(point, risk=risk)
+                    for point, risk in zip(points, risks)]
+        return [self.evaluate_state(point) for point in points]
 
     def evaluate_state_or_points(self, state=None, interest_points=None,
                                  robot_type="", task_phase="",

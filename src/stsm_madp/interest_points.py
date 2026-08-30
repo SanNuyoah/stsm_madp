@@ -99,6 +99,63 @@ def pose_interest_risk(field, state, local_points=None, offsets=None,
     return summary
 
 
+def pose_interest_risk_batch(field, states, local_points=None, labels=None):
+    """Evaluate fixed local interest points for several planar poses exactly.
+
+    Wheelchair MPC evaluates a short set of sibling rollouts at each beam
+    layer.  Their footprint risks do not depend on one another, so the social
+    field can evaluate the flattened footprint points in one vectorized call
+    without changing the per-pose risk definition.
+    """
+    pose_array = np.asarray(states, float)
+    if pose_array.size == 0:
+        return []
+    if pose_array.ndim == 1:
+        pose_array = pose_array.reshape((1, pose_array.shape[0]))
+    points_map = local_points or DEFAULT_WC_LOCAL_POINTS
+    out_labels = [label for label in (labels or points_map.keys())
+                  if label in points_map]
+    if not out_labels:
+        return [{"phi_each": [], "phi_max": 0.0, "phi_mean": 0.0,
+                 "phi_sum": 0.0, "risk_gate": 0.0, "worst_idx": -1,
+                 "worst_label": "", "labels": [], "points": []}
+                for _ in pose_array]
+    local = np.asarray([points_map[label] for label in out_labels], float)
+    yaw = pose_array[:, 2] if pose_array.shape[1] >= 3 else np.zeros(
+        len(pose_array), float)
+    c, s = np.cos(yaw), np.sin(yaw)
+    world = np.zeros((len(pose_array), len(out_labels), 3), float)
+    world[:, :, 0] = (pose_array[:, None, 0] +
+                      c[:, None] * local[None, :, 0] -
+                      s[:, None] * local[None, :, 1])
+    world[:, :, 1] = (pose_array[:, None, 1] +
+                      s[:, None] * local[None, :, 0] +
+                      c[:, None] * local[None, :, 1])
+    if hasattr(field, "phi_s_batch"):
+        values = np.asarray(field.phi_s_batch(
+            world.reshape((-1, 3))), float).reshape(world.shape[:2])
+    else:
+        values = np.asarray([
+            float(field.phi_s(point)) for point in world.reshape((-1, 3))
+        ], float).reshape(world.shape[:2])
+    summaries = []
+    for row, points in zip(values, world):
+        phi_each = row.tolist()
+        worst_idx = int(np.argmax(row)) if len(row) else -1
+        summaries.append({
+            "phi_each": phi_each,
+            "phi_max": float(np.max(row)) if len(row) else 0.0,
+            "phi_mean": float(np.mean(row)) if len(row) else 0.0,
+            "phi_sum": float(np.sum(row)) if len(row) else 0.0,
+            "risk_gate": float(np.max(row)) if len(row) else 0.0,
+            "worst_idx": worst_idx,
+            "worst_label": out_labels[worst_idx] if worst_idx >= 0 else "",
+            "labels": list(out_labels),
+            "points": [point.copy() for point in points],
+        })
+    return summaries
+
+
 def point_inside_anchor(anchor, p):
     return float(anchor.signed_distance(p)) <= 0.0
 

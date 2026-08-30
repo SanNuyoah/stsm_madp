@@ -32,6 +32,7 @@ from stsm_madp.mpc import _task_state_diagnostics_payload
 from stsm_madp.mpc import evaluate_executed_trajectory
 from stsm_madp.mpc import wheelchair_nonholonomic_execution_profile
 from stsm_madp.safety_evaluator import SafetyEvaluator
+from stsm_madp.interest_points import pose_interest_risk, pose_interest_risk_batch
 from stsm_madp.social_field import (
     HumanState, SemanticAnchor, SocialField, SocialFieldParams)
 from stsm_madp.adp import (
@@ -63,6 +64,35 @@ class ZeroField(object):
 
     def grad_phi_s(self, point):
         return np.zeros_like(np.asarray(point, float))
+
+
+class BatchRiskField(object):
+    anchors = []
+
+    def phi_s(self, point, velocity=None):
+        point = np.asarray(point, float)
+        return float(point[0] ** 2 + 0.5 * point[1] ** 2)
+
+    def phi_s_batch(self, points, velocities=None):
+        points = np.asarray(points, float)
+        return points[:, 0] ** 2 + 0.5 * points[:, 1] ** 2
+
+
+def test_batched_wheelchair_footprint_risk_matches_per_pose_evaluation():
+    field = BatchRiskField()
+    poses = np.asarray([
+        [0.1, -0.2, 0.0],
+        [0.3, 0.4, np.pi / 3.0],
+    ])
+    batched = pose_interest_risk_batch(field, poses)
+    scalar = [pose_interest_risk(field, pose) for pose in poses]
+
+    assert len(batched) == len(scalar)
+    for batch_summary, scalar_summary in zip(batched, scalar):
+        assert batch_summary["labels"] == scalar_summary["labels"]
+        assert np.allclose(batch_summary["phi_each"], scalar_summary["phi_each"])
+        assert batch_summary["phi_max"] == scalar_summary["phi_max"]
+        assert batch_summary["phi_mean"] == scalar_summary["phi_mean"]
 
 
 class CountingZeroField(ZeroField):
