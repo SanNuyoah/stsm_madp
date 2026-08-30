@@ -38,7 +38,8 @@ from stsm_madp.adp import (
     ADPCritic, ADPTransitionLearner, adp_role_from_runtime,
     adp_ranking_adjustments, clone_critic,
     candidate_feature_values, fit_critic_from_transition_records,
-    require_feature_schema, save_and_verify_critic)
+    recenter_critic_feature_normalization, require_feature_schema,
+    save_and_verify_critic)
 from stsm_madp.decision_trace import trace_from_debug
 from stsm_madp.task_semantics import infer_task_context
 from stsm_madp.topology import TopologicalCorridorPlanner
@@ -1658,6 +1659,18 @@ def test_candidate_feature_builder_keeps_canonical_candidate_schema_values():
     values, missing = candidate_feature_values(canonical)
     assert values == canonical
     assert not any(missing.values())
+
+
+def test_recentered_candidate_normalization_preserves_critic_value():
+    critic = ADPCritic(
+        feature_names=["bias", "candidate_path_length"],
+        theta=[2.0, 3.0], mean=[0.0, 1.0], std=[1.0, 0.5])
+    features = {"bias": 1.0, "candidate_path_length": 2.0}
+    before = critic.predict_detail(features)["raw"]
+    recenter_critic_feature_normalization(
+        critic, {"candidate_path_length": {"mean": 2.0, "std": 1.0}})
+    assert np.isclose(before, critic.predict_detail(features)["raw"])
+    assert np.isclose(critic.featurize(features)[1], 0.0)
 
 
 def test_adp_calibration_fits_real_transition_cost_to_go_targets():

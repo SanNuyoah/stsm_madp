@@ -135,6 +135,30 @@ def require_feature_schema(critic, expected_version=FEATURE_SCHEMA_VERSION,
     return True
 
 
+def recenter_critic_feature_normalization(critic, feature_stats):
+    """Apply new feature normalizers without changing the fitted linear value."""
+    stats = dict(feature_stats or {})
+    if not stats:
+        return
+    bias_index = (critic.feature_names.index("bias")
+                  if "bias" in critic.feature_names else None)
+    bias_shift = 0.0
+    for index, name in enumerate(critic.feature_names):
+        if name == "bias" or name not in stats:
+            continue
+        old_mean = float(critic.mean[index])
+        old_std = max(abs(float(critic.std[index])), 1e-6)
+        new_mean = _as_float(stats[name].get("mean"), old_mean)
+        new_std = max(abs(_as_float(stats[name].get("std"), old_std)), 1e-6)
+        physical_weight = float(critic.theta[index]) / old_std
+        bias_shift += physical_weight * (new_mean - old_mean)
+        critic.theta[index] = physical_weight * new_std
+        critic.mean[index] = new_mean
+        critic.std[index] = new_std
+    if bias_index is not None:
+        critic.theta[bias_index] += bias_shift
+
+
 class ADPCritic(object):
     def __init__(self, feature_names=None, theta=None, mean=None, std=None,
                  gamma=0.95, clip_value=100.0, cost_weights=None,

@@ -13,7 +13,8 @@ if PACKAGE_SRC not in sys.path:
     sys.path.insert(0, PACKAGE_SRC)
 
 from stsm_madp.adp import (  # noqa: E402
-    ADPCritic, candidate_feature_values, fit_critic_from_transition_records)
+    ADPCritic, CANDIDATE_FEATURE_NAMES, candidate_feature_values,
+    fit_critic_from_transition_records, recenter_critic_feature_normalization)
 
 
 def _selected_candidate_features(diagnostics_path):
@@ -78,6 +79,49 @@ def _ranking_value_distribution(diagnostics_paths, critic):
             "ranking_value_sample_count": int(array.size)}
 
 
+def _candidate_feature_normalization(diagnostics_paths):
+    samples = {name: [] for name in CANDIDATE_FEATURE_NAMES}
+    for diagnostics_path in diagnostics_paths:
+        _selected_id, _candidate, ranking_path = _selected_candidate_features(
+            diagnostics_path)
+        if not os.path.isfile(ranking_path):
+            continue
+        with open(ranking_path, "r") as handle:
+            rows = json.load(handle)
+        for row in rows if isinstance(rows, list) else []:
+            if str(row.get("candidate_status", "safe")) not in (
+                    "safe", "feasible", "recoverable"):
+                continue
+            raw = dict(row.get("candidate_adp_features_raw", {}) or {})
+            if not raw:
+                raw = dict(row.get("adp_ranking_audit", {}).get(
+                    "candidate_context", {}) or {})
+            if not raw:
+                raw = dict(row)
+            values, _missing = candidate_feature_values(raw)
+            for name, value in values.items():
+                if np.isfinite(value):
+                    samples[name].append(float(value))
+    stats = {}
+    for name, values in samples.items():
+        if len(values) < 2:
+            continue
+        array = np.asarray(values, float)
+        median = float(np.median(array))
+        q25, q75 = np.percentile(array, [25, 75])
+        scale = float((q75 - q25) / 1.349)
+        if scale <= 1e-6:
+            scale = float(np.std(array))
+        if scale <= 1e-6:
+            scale = 1.0
+        stats[name] = {
+            "mean": median, "std": scale, "p5": float(np.percentile(array, 5)),
+            "p95": float(np.percentile(array, 95)), "sample_count": int(array.size),
+            "source": "legal_candidate_feature_distribution",
+        }
+    return stats
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Fit a critic to real ADP transition cost-to-go records.")
@@ -134,6 +178,8 @@ def main():
         records, template, gamma=template.gamma, ridge=args.ridge)
     if args.candidate_conditioned:
         critic.critic_version = "linear_adp_candidate_conditioned_v2_calibrated"
+        candidate_stats = _candidate_feature_normalization(sources)
+        recenter_critic_feature_normalization(critic, candidate_stats)
     critic.metadata.update({
         "calibrated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "calibration_method": "real_online_transition_cost_to_go",
@@ -152,6 +198,7 @@ def main():
     critic.metadata.update(summary)
     if args.candidate_conditioned:
         critic.metadata.update(_ranking_value_distribution(sources, critic))
+        critic.metadata["candidate_feature_normalization"] = candidate_stats
     critic.save_yaml(args.out)
     print("calibrated {} samples={} episodes={} target_mean={:.6f}".format(
         args.out, summary["sample_count"], summary["episode_count"],

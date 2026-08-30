@@ -66,14 +66,14 @@ mean:
 - 0.5366998335048895
 - 0.04341883075049034
 - 0.0
-- 2.8442446499104883
-- 4.3318901843471265
+- 2.8441873278770564
+- 4.332279136362188
 - 0.0
 - 0.0
-- 0.728461043228888
-- 0.5354409201103785
+- 0.7284610432288827
+- 0.5352708506460384
 metadata:
-  calibrated_at: 2026-08-30T10:45:13+0800
+  calibrated_at: 2026-08-30T11:14:57+0800
   calibration_method: real_online_transition_cost_to_go
   calibration_robot: wheelchair
   calibration_sources:
@@ -91,6 +91,49 @@ metadata:
     candidate_risk_max: 6
     candidate_risk_mean: 0
     candidate_task_cost: 0
+  candidate_feature_normalization:
+    candidate_execution_cost:
+      mean: 0.5352708506460384
+      p5: 0.5321043790903929
+      p95: 0.5421903444423323
+      sample_count: 6
+      source: legal_candidate_feature_distribution
+      std: 0.006002882378149801
+    candidate_min_clearance:
+      mean: 0.0
+      p5: 0.0
+      p95: 0.0
+      sample_count: 6
+      source: legal_candidate_feature_distribution
+      std: 1.0
+    candidate_path_length:
+      mean: 2.8441873278770564
+      p5: 2.8335703002815347
+      p95: 2.8640617444949847
+      sample_count: 6
+      source: legal_candidate_feature_distribution
+      std: 0.011864687982263913
+    candidate_risk_max:
+      mean: 0.0
+      p5: 0.0
+      p95: 0.0
+      sample_count: 6
+      source: legal_candidate_feature_distribution
+      std: 1.0
+    candidate_risk_mean:
+      mean: 4.332279136362188
+      p5: 4.329580319994152
+      p95: 4.335619931819624
+      sample_count: 6
+      source: legal_candidate_feature_distribution
+      std: 0.003928854483151239
+    candidate_task_cost:
+      mean: 0.7284610432288827
+      p5: 0.7284610432288827
+      p95: 0.7284610432288827
+      sample_count: 6
+      source: legal_candidate_feature_distribution
+      std: 1.0
   episode_count: 6
   excluded_sources: []
   feature_count: 22
@@ -142,14 +185,14 @@ std:
 - 0.4483570186459447
 - 0.03557357721598169
 - 1.0
-- 0.012528150200244049
-- 0.002748514892175896
+- 0.011864687982263913
+- 0.003928854483151239
 - 1.0
 - 1.0
 - 1.0
-- 0.004119517602325137
+- 0.006002882378149801
 theta:
-- 4.421916438622735
+- 4.448460459933783
 - 38.32933770211384
 - -4.00281018940353
 - 0.0
@@ -165,9 +208,9 @@ theta:
 - 4.500133915482663
 - 0.1147597616514387
 - 0.0
-- -0.18628272933110765
-- 0.10710773581588975
+- -0.17641762149012707
+- 0.15310475822355724
 - 0.0
 - 0.0
 - -2.356470468995684e-14
-- -0.25517253975769855
+- -0.3718325518101091
