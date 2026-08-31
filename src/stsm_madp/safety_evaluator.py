@@ -120,7 +120,7 @@ def safety_context_audit(point, manifold_constraint=None, corridor_constraint=No
     }
     fingerprint_json = json.dumps(
         fingerprint_payload, sort_keys=True, separators=(",", ":"))
-    return dict({
+    audit = {
         "stage": str(stage), "x": float(p[0]), "y": float(p[1]),
         "task_state": str(task_context.get("task_state", "")),
         "task_context_source": str(task_context_source),
@@ -138,13 +138,14 @@ def safety_context_audit(point, manifold_constraint=None, corridor_constraint=No
         "social_field_weights": weights,
         "safety_context_fingerprint": hashlib.sha256(
             fingerprint_json.encode("utf-8")).hexdigest(),
-        **phi,
         "clearance": float(status["clearance"]),
         "risk": float(status["risk"]),
         "manifold_valid": bool(status["inside_manifold"]),
         "hard_valid": bool(status["inside_manifold"] and
                            status["inside_corridor"]),
-    })
+    }
+    audit.update(phi)
+    return audit
 
 
 def _polyline_project(point, centerline):
