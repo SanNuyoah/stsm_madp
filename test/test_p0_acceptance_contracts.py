@@ -1950,6 +1950,53 @@ def test_failed_wheelchair_diagnostics_persist_candidate_path_trace():
     assert not saved["path_trace_complete"]
 
 
+def test_candidate_path_trace_writer_preserves_complete_trace_on_runtime_replan():
+    complete = {
+        "candidate_id": "wheelchair_c0001",
+        "label": "morse_saddle_2",
+        "raw_candidate": {"point_count": 1, "points": [
+            {"index": 0, "x": 0.0, "y": 0.0}]},
+        "refinement": {"point_count": 1, "points": [
+            {"index": 0, "x": 0.0, "y": 0.0}]},
+        "safe_terminal_rebuild": {"applied": True, "points": {
+            "point_count": 1, "points": [
+                {"index": 0, "x": -0.48, "y": 0.72,
+                 "source_stage": "terminal_rebuild", "source_index": 0}]}},
+        "terminal_rebuilt_path": {"point_count": 1, "points": [
+            {"index": 0, "x": -0.48, "y": 0.72,
+             "source_stage": "terminal_rebuild", "source_index": 0}]},
+        "turn_repair": {"applied": False, "points": None},
+        "final_reference": {"point_count": 1, "points": [
+            {"index": 0, "x": -0.48, "y": 0.72}]},
+        "path_trace_complete": True,
+    }
+    incomplete = {
+        "candidate_id": "wheelchair_c0001",
+        "label": "morse_saddle_2",
+        "raw_candidate": None,
+        "refinement": None,
+        "safe_terminal_rebuild": {"applied": False, "points": None},
+        "turn_repair": {"applied": False, "points": None},
+        "final_reference": None,
+        "path_trace_complete": False,
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(os.path.join(tmp, "candidate_path_trace.json"), "w") as handle:
+            json.dump({"robot_type": "wheelchair", "candidate_count": 1,
+                       "candidates": [complete]}, handle)
+        write_failed_topology_diagnostics(
+            tmp, "wheelchair", {"refinement_attempts": [
+                {"candidate_path_trace": incomplete}]})
+        with open(os.path.join(tmp, "candidate_path_trace.json"), "r") as handle:
+            payload = json.load(handle)
+
+    saved = payload["candidates"][0]
+    assert saved["candidate_id"] == "wheelchair_c0001"
+    assert saved["path_trace_complete"]
+    assert saved["safe_terminal_rebuild"]["applied"]
+    assert saved["terminal_rebuilt_path"]["point_count"] == 1
+
+
 def test_r010_c0001_curvature_replay_uses_diagnostics_yaw_and_repairs_window():
     script = os.path.join(
         ROOT, "scripts", "analysis", "replay_c0001_safe_terminal_trials.py")

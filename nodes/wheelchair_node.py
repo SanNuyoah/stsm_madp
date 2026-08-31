@@ -4148,6 +4148,30 @@ class WheelchairNode:
             self.mpc_diagnostics_out or "")
         if not base:
             return
+        out_path = os.path.join(base, "candidate_path_trace.json")
+
+        def trace_key(trace):
+            return (str(trace.get("candidate_id", "")),
+                    str(trace.get("label", "")))
+
+        def prefer_trace(current, incoming):
+            if not current:
+                return incoming
+            if (bool(current.get("path_trace_complete", False)) and
+                    not bool(incoming.get("path_trace_complete", False))):
+                return current
+            return incoming
+
+        records_by_key = {}
+        if os.path.exists(out_path):
+            try:
+                with open(out_path, "r") as handle:
+                    existing = json.load(handle)
+                for trace in list(existing.get("candidates", []) or []):
+                    if isinstance(trace, dict):
+                        records_by_key[trace_key(trace)] = trace
+            except Exception:
+                records_by_key = {}
         records = []
         for attempt in list(refinement_attempts or []):
             if not isinstance(attempt, dict):
@@ -4164,8 +4188,26 @@ class WheelchairNode:
                     "final_reference": None,
                     "path_trace_complete": False,
                 }
-            records.append(trace)
-        with open(os.path.join(base, "candidate_path_trace.json"), "w") as handle:
+            key = trace_key(trace)
+            records_by_key[key] = prefer_trace(records_by_key.get(key), trace)
+        seen = set()
+        for attempt in list(refinement_attempts or []):
+            if not isinstance(attempt, dict):
+                continue
+            trace = dict(attempt.get("candidate_path_trace", {}) or {})
+            if not trace:
+                trace = {
+                    "candidate_id": str(attempt.get("candidate_id", "")),
+                    "label": str(attempt.get("label", "")),
+                }
+            key = trace_key(trace)
+            if key in records_by_key and key not in seen:
+                records.append(records_by_key[key])
+                seen.add(key)
+        for key, trace in records_by_key.items():
+            if key not in seen:
+                records.append(trace)
+        with open(out_path, "w") as handle:
             json.dump(_jsonable({
                 "robot_type": "wheelchair",
                 "candidate_count": int(len(records)),

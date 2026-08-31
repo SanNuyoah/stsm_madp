@@ -524,7 +524,29 @@ def write_failed_topology_diagnostics(base_dir, robot_type, debug=None,
             "failure_reason": str(failure_reason),
             "attempts": list(attempts),
         }
-    candidate_path_trace = []
+    def _trace_key(trace):
+        return (str(trace.get("candidate_id", "")),
+                str(trace.get("label", "")))
+
+    def _prefer_trace(current, incoming):
+        if not current:
+            return incoming
+        if (bool(current.get("path_trace_complete", False)) and
+                not bool(incoming.get("path_trace_complete", False))):
+            return current
+        return incoming
+
+    candidate_path_trace_by_key = {}
+    existing_trace_path = os.path.join(base_dir, "candidate_path_trace.json")
+    if os.path.exists(existing_trace_path):
+        try:
+            with open(existing_trace_path, "r") as handle:
+                existing_trace = json.load(handle)
+            for trace in list(existing_trace.get("candidates", []) or []):
+                if isinstance(trace, dict):
+                    candidate_path_trace_by_key[_trace_key(trace)] = trace
+        except Exception:
+            candidate_path_trace_by_key = {}
     for item in refinement_attempts or refinement_trace:
         if not isinstance(item, dict):
             continue
@@ -538,7 +560,27 @@ def write_failed_topology_diagnostics(base_dir, robot_type, debug=None,
                 "turn_repair": {"applied": False, "points": None},
                 "final_reference": None, "path_trace_complete": False,
             }
-        candidate_path_trace.append(trace)
+        key = _trace_key(trace)
+        candidate_path_trace_by_key[key] = _prefer_trace(
+            candidate_path_trace_by_key.get(key), trace)
+    candidate_path_trace = []
+    seen_trace_keys = set()
+    for item in refinement_attempts or refinement_trace:
+        if not isinstance(item, dict):
+            continue
+        trace = dict(item.get("candidate_path_trace", {}) or {})
+        if not trace:
+            trace = {
+                "candidate_id": str(item.get("candidate_id", "")),
+                "label": str(item.get("label", "")),
+            }
+        key = _trace_key(trace)
+        if key in candidate_path_trace_by_key and key not in seen_trace_keys:
+            candidate_path_trace.append(candidate_path_trace_by_key[key])
+            seen_trace_keys.add(key)
+    for key, trace in candidate_path_trace_by_key.items():
+        if key not in seen_trace_keys:
+            candidate_path_trace.append(trace)
 
     ranking_rows = _candidate_ranking_rows(
         debug, candidate_report, filter_report, morse_routes,
