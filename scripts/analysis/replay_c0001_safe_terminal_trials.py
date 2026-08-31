@@ -120,9 +120,14 @@ def _heading_prefix(reference):
                 p2 = ((1.0 - u) ** 3 * start + 3.0 * (1.0 - u) ** 2 * u * c1 +
                       3.0 * (1.0 - u) * u ** 2 * c2 + u ** 3 * end[:2])
                 bridge.append([p2[0], p2[1], 0.0])
-            candidates.append(np.vstack([np.asarray(bridge, float),
-                                         ref[join_idx + 1:]]))
-    def score(path):
+            candidates.append({
+                "points": np.vstack([np.asarray(bridge, float),
+                                     ref[join_idx + 1:]]),
+                "bridge_point_count": int(len(bridge)),
+                "join_index": int(join_idx),
+            })
+    def score(candidate):
+        path = candidate["points"]
         profile = wheelchair_nonholonomic_execution_profile(
             path, STATE, GOAL, min_step=0.03, initial_lookahead=0.12,
             horizon_points=min(10, max(4, len(path))))
@@ -131,6 +136,76 @@ def _heading_prefix(reference):
                 max(0.0, float(turns["max_curvature"]) - 8.0) * 4.0 +
                 float(profile["execution_profile_cost"]))
     return min(candidates, key=score)
+
+
+def _point_lineage(rebuilt_count, rebuild_start_idx, prefix_metadata=None,
+                   smoothed=False):
+    """Return analysis provenance without changing live path construction."""
+    if smoothed:
+        return [{"source_stage": "turn_repair_generated",
+                 "source_index": int(index), "source_refined_index": None}
+                for index in range(rebuilt_count)]
+    if prefix_metadata is not None:
+        bridge_count = int(prefix_metadata["bridge_point_count"])
+        join_index = int(prefix_metadata["join_index"])
+        lineage = [{"source_stage": "launch_prefix", "source_index": int(index),
+                    "source_refined_index": None}
+                   for index in range(bridge_count)]
+        for rebuilt_index in range(join_index + 1, rebuilt_count):
+            stage = ("refined_main_path" if rebuilt_index <= rebuild_start_idx
+                     else "terminal_rebuild")
+            lineage.append({"source_stage": stage,
+                            "source_index": int(rebuilt_index),
+                            "source_refined_index": (
+                                int(rebuilt_index) if stage == "refined_main_path"
+                                else int(rebuild_start_idx))})
+        return lineage
+    return [{"source_stage": ("refined_main_path"
+                              if index <= rebuild_start_idx else "terminal_rebuild"),
+             "source_index": int(index),
+             "source_refined_index": (int(index) if index <= rebuild_start_idx
+                                      else int(rebuild_start_idx))}
+            for index in range(rebuilt_count)]
+
+
+def _turn_origin_audit(reference, lineage):
+    """Locate the exact three-point turn and classify its construction stage."""
+    pts = np.asarray(reference, float)
+    audit = wheelchair_sharp_turn_audit(pts, turn_limit=TURN)
+    if len(pts) < 3:
+        return {"max_turn_index": None, "max_turn": 0.0,
+                "turn_origin": "none", "points": []}
+    entries = audit["sharp_turns"]
+    if entries:
+        maximum = max(entries, key=lambda item: item["local_turn"])
+        index = int(maximum["index"])
+    else:
+        # The audit also defines the index convention when every turn is legal.
+        index, maximum_turn = 1, -1.0
+        for candidate in range(1, len(pts) - 1):
+            before = math.atan2(pts[candidate, 1] - pts[candidate - 1, 1],
+                                pts[candidate, 0] - pts[candidate - 1, 0])
+            after = math.atan2(pts[candidate + 1, 1] - pts[candidate, 1],
+                               pts[candidate + 1, 0] - pts[candidate, 0])
+            turn = abs(math.atan2(math.sin(after - before), math.cos(after - before)))
+            if turn > maximum_turn:
+                index, maximum_turn = candidate, turn
+        maximum = {"local_turn": maximum_turn,
+                   "heading_before": math.atan2(pts[index, 1] - pts[index - 1, 1],
+                                                pts[index, 0] - pts[index - 1, 0]),
+                   "heading_after": math.atan2(pts[index + 1, 1] - pts[index, 1],
+                                               pts[index + 1, 0] - pts[index, 0])}
+    related = []
+    for point_index in (index - 1, index, index + 1):
+        related.append({"index": int(point_index), "x": float(pts[point_index, 0]),
+                        "y": float(pts[point_index, 1]),
+                        "lineage": dict(lineage[point_index])})
+    stages = {item["lineage"]["source_stage"] for item in related}
+    origin = next(iter(stages)) if len(stages) == 1 else "stage_boundary"
+    return {"max_turn_index": int(index), "max_turn": float(maximum["local_turn"]),
+            "heading_before": float(maximum["heading_before"]),
+            "heading_after": float(maximum["heading_after"]),
+            "turn_origin": origin, "points": related}
 
 
 def _execution_reference(rebuilt):
@@ -142,7 +217,8 @@ def _execution_reference(rebuilt):
                     base_profile["monotonic_regression_ratio"] > 0.18 or
                     base_profile["nonmonotonic_fraction"] > 0.30 or
                     base_profile["heading_oscillation"] > 0.50)
-    reference = _heading_prefix(rebuilt) if needs_prefix else rebuilt
+    prefix_metadata = _heading_prefix(rebuilt) if needs_prefix else None
+    reference = prefix_metadata["points"] if prefix_metadata is not None else rebuilt
     metrics = path_curvature_metrics(reference)
     if float(metrics["max_turn"]) > TURN + 0.03:
         smooth = smooth_wheelchair_corners(reference, samples_per_segment=6, passes=1)
@@ -154,7 +230,16 @@ def _execution_reference(rebuilt):
         if (float(smooth_metrics["max_turn"]) <= TURN + 0.03 and
                 float(smooth_metrics["max_curvature"]) <= 8.0):
             reference, metrics = smooth, smooth_metrics
-    return np.asarray(reference, float), dict(metrics), bool(needs_prefix)
+            prefix_metadata = None
+            smoothed = True
+        else:
+            smoothed = False
+    else:
+        smoothed = False
+    lineage = _point_lineage(len(reference), len(rebuilt) - 1,
+                             prefix_metadata=prefix_metadata, smoothed=smoothed)
+    return (np.asarray(reference, float), dict(metrics), bool(needs_prefix),
+            _turn_origin_audit(reference, lineage))
 
 
 def run(trace_path, output_path):
@@ -206,7 +291,7 @@ def run(trace_path, output_path):
                 trials.append(trial)
                 continue
             rebuilt = np.vstack([refined[:start_index + 1], suffix])
-            final, geometry, prefix_used = _execution_reference(rebuilt)
+            final, geometry, prefix_used, turn_origin = _execution_reference(rebuilt)
             final_rows = _rows(evaluator, final)
             manifold_bad = [row["index"] for row in final_rows
                             if not row["manifold_valid"]]
@@ -227,6 +312,7 @@ def run(trace_path, output_path):
                                   "refined_execution_turn_limit" if max_turn > TURN + 1e-9 else
                                   "completion_region_not_reached"),
                 "execution_geometry": geometry,
+                "turn_origin_audit": turn_origin,
             })
             trials.append(trial)
             if valid:

@@ -1963,3 +1963,18 @@ def test_r009_safe_terminal_replay_recreates_authoritative_terminal_audit():
     assert np.isclose(audit["goal_clearance"], -0.07193582655542459)
     assert np.isclose(audit["goal_risk"], 2.5016565419952275)
     assert audit["safe_terminal_candidate_count"] == 6
+
+    trace = os.path.join(ROOT, "results", "runs", "20260831_R009",
+                         "wheelchair", "stsm", "candidate_path_trace.json")
+    with tempfile.TemporaryDirectory() as tmp:
+        replayed = replay.run(trace, os.path.join(tmp, "turn_origin.json"))
+    trial = next(item for item in replayed["trials"]
+                 if item["rebuild_start_idx"] == 17 and
+                 np.allclose(item["selected_terminal"][:2],
+                             [-0.4782468564315457, 0.7232274123458663]))
+    turn = trial["turn_origin_audit"]
+    assert turn["max_turn_index"] == 1
+    assert np.isclose(turn["max_turn"], 1.688060071677089)
+    assert turn["turn_origin"] == "launch_prefix"
+    assert [point["lineage"]["source_stage"] for point in turn["points"]] == [
+        "launch_prefix", "launch_prefix", "launch_prefix"]
