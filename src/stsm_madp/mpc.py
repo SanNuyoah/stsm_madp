@@ -5105,13 +5105,24 @@ class WheelchairMPC:
             self.last_topology_constraint.get("manifold_constraint", {}) or {})
         manifold_mode = str(manifold_payload.get(
             "manifold_constraint_mode", manifold_payload.get("mode", "soft"))).lower()
-        manifold_evaluator = ManifoldConstraintEvaluator(
-            manifold_constraint=manifold_payload,
-            corridor_constraint=dict(
-                self.last_topology_constraint.get("corridor_constraint", {}) or {}),
-            risk_field=field)
         corridor_payload = dict(
             self.last_topology_constraint.get("corridor_constraint", {}) or {})
+        # Some unit/runtime callers provide only the hard-tube mode and keep
+        # geometry on the selected corridor.  Feed that existing geometry to
+        # the same SafetyEvaluator rather than falling back to a separate
+        # corridor.project() safety path.
+        if corridor is not None:
+            if not corridor_payload.get("centerline"):
+                corridor_payload["centerline"] = np.asarray(getattr(
+                    corridor, "centerline", getattr(corridor, "waypoints", [])),
+                    float).tolist()
+            if float(corridor_payload.get("radius", 0.0) or 0.0) <= 0.0:
+                corridor_payload["radius"] = float(getattr(
+                    corridor, "radius", 0.0) or 0.0)
+        manifold_evaluator = ManifoldConstraintEvaluator(
+            manifold_constraint=manifold_payload,
+            corridor_constraint=corridor_payload,
+            risk_field=field)
         tube_payload = dict(corridor_payload.get("tube_constraint", {}) or {})
         tube_mode = str(
             tube_payload.get(
