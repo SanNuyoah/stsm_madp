@@ -1979,6 +1979,9 @@ def test_r009_safe_terminal_replay_recreates_authoritative_terminal_audit():
     assert prefix["prefix_join_max_turn"] <= replay.TURN + 1e-9
     assert prefix["launch_prefix_hard_valid"]
     assert prefix["launch_prefix_min_clearance"] >= replay.CLEARANCE
-    assert turn["max_turn_index"] != 1
-    assert np.isclose(turn["max_turn"], 0.6590043705190771)
-    assert turn["turn_origin"] == "refined_main_path"
+    repair = trial["refined_main_turn_repair"]
+    assert repair["repair_applied"]
+    assert repair["inserted_point_count"] == 3
+    assert repair["repaired_local_max_turn"] <= replay.TURN + 1e-9
+    assert trial["final_reference_valid"]
+    assert trial["final_max_turn"] <= replay.TURN + 1e-9

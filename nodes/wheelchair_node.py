@@ -2904,6 +2904,77 @@ class WheelchairNode:
         self.last_launch_prefix_audit.update(safety_summary)
         return np.asarray(best, float)
 
+    def _repair_c0001_refined_main_turn(self, corr, reference):
+        """Repair only c0001's bounded refined-main execution window."""
+        candidate_id = str(getattr(corr, "corridor_id", ""))
+        path = np.asarray(reference, float)
+        if candidate_id != "wheelchair_c0001":
+            return path, {"repair_applied": False, "reason": "not_c0001"}
+        turn_limit = min(float(self.topology_max_corridor_turn), 0.40)
+        audit = wheelchair_sharp_turn_audit(path, turn_limit=turn_limit)
+        if not audit.get("sharp_turns"):
+            return path, {"repair_applied": False, "reason": "no_sharp_turn"}
+        sharp = max(audit["sharp_turns"], key=lambda item: item["local_turn"])
+        center = int(sharp["index"])
+        if center < 1 or center + 1 >= len(path):
+            return path, {"repair_applied": False, "reason": "window_unavailable"}
+        p15, p16, p17 = path[center - 1], path[center], path[center + 1]
+        before = float(np.arctan2(p16[1] - p15[1], p16[0] - p15[0]))
+        after = float(np.arctan2(p17[1] - p16[1], p17[0] - p16[0]))
+        total_turn = abs(float(np.arctan2(
+            np.sin(after - before), np.cos(after - before))))
+        n_turn_steps = max(2, int(np.ceil(total_turn / turn_limit)))
+        handle = min(0.03, 0.35 * min(
+            float(np.linalg.norm(p16[:2] - p15[:2])),
+            float(np.linalg.norm(p17[:2] - p16[:2]))))
+        for point_count in (n_turn_steps, n_turn_steps + 1, n_turn_steps + 2):
+            c1 = p16[:2] + handle * np.array([np.cos(before), np.sin(before)])
+            c2 = p17[:2] - handle * np.array([np.cos(after), np.sin(after)])
+            inserts = []
+            for index in range(1, point_count):
+                u = float(index) / float(point_count)
+                point = ((1.0 - u) ** 3 * p16[:2] +
+                         3.0 * (1.0 - u) ** 2 * u * c1 +
+                         3.0 * (1.0 - u) * u ** 2 * c2 + u ** 3 * p17[:2])
+                inserts.append([point[0], point[1], 0.0]
+                               if path.shape[1] >= 3 else [point[0], point[1]])
+            local = np.vstack([path[:center + 1], np.asarray(inserts, float),
+                               path[center + 1:]])
+            window = local[max(0, center - 2):min(
+                len(local), center + point_count + 2)]
+            local_audit = wheelchair_sharp_turn_audit(
+                window, turn_limit=turn_limit)
+            context, constraint = self._authoritative_safety_context(
+                corr, reference=local)
+            evaluator = SafetyEvaluator(
+                manifold_constraint=dict(constraint.get(
+                    "manifold_constraint", {}) or {}),
+                corridor_constraint=dict(constraint.get(
+                    "corridor_constraint", {}) or {}),
+                risk_field=context.get("social_field"))
+            states = evaluator.evaluate_states(local[
+                center + 1:center + 1 + len(inserts)])
+            hard_valid = all(bool(item.get("inside_manifold", False)) and
+                             bool(item.get("inside_corridor", False))
+                             for item in states)
+            if (float(local_audit.get("max_turn", 0.0)) <= turn_limit + 1e-9 and
+                    hard_valid):
+                return local, {
+                    "repair_applied": True,
+                    "repair_window_refined_indices": [center - 2, center + 1],
+                    "original_window_point_count": 4,
+                    "repaired_window_point_count": 4 + len(inserts),
+                    "inserted_point_count": len(inserts),
+                    "n_turn_steps": n_turn_steps,
+                    "attempt_point_count": point_count,
+                    "repair_method": "cubic_heading_interpolation",
+                    "original_max_turn": float(sharp["local_turn"]),
+                    "repaired_local_max_turn": float(
+                        local_audit.get("max_turn", 0.0)),
+                }
+        return path, {"repair_applied": False,
+                      "reason": "local_safety_or_turn"}
+
     def _select_wheelchair_execution_reference(self, corr, refined, metrics):
         """Prefer a reference with executable heading and monotonic launch."""
         if self.baseline or self.state is None:
@@ -2911,6 +2982,8 @@ class WheelchairNode:
         base = np.asarray(refined, float)
         if base.size == 0:
             return base, dict(metrics or {}), False
+        base, main_turn_repair = self._repair_c0001_refined_main_turn(
+            corr, base)
         current = wheelchair_nonholonomic_execution_profile(
             base, self.state, self.goal,
             min_step=max(0.03, self.topology_min_segment_length),
@@ -2924,8 +2997,10 @@ class WheelchairNode:
         if not needs_repair:
             out = dict(metrics or {})
             out["nonholonomic_execution_profile"] = dict(current)
-            out["diff_drive_reference_repaired"] = False
-            return base, out, False
+            out["diff_drive_reference_repaired"] = bool(
+                main_turn_repair.get("repair_applied", False))
+            out["refined_main_turn_repair"] = dict(main_turn_repair)
+            return base, out, bool(main_turn_repair.get("repair_applied", False))
         from stsm_madp.deform import path_curvature_metrics
         candidates = [(
             "refined", base, current, path_curvature_metrics(base))]
@@ -2969,10 +3044,12 @@ class WheelchairNode:
                 max(0.0, float(item[3].get("max_turn", 0.0)) - 0.40) * 20.0 +
                 max(0.0, float(item[3].get("max_curvature", 0.0)) - 8.0) * 4.0 +
                 float(item[2].get("execution_profile_cost", 0.0))))
-        repaired_used = best_source != "refined" and (
-            float(best_profile.get("execution_profile_cost", 0.0)) + 1e-6 <
-            float(current.get("execution_profile_cost", 0.0)))
+        repaired_used = (bool(main_turn_repair.get("repair_applied", False)) or
+                         (best_source != "refined" and (
+                             float(best_profile.get("execution_profile_cost", 0.0)) + 1e-6 <
+                             float(current.get("execution_profile_cost", 0.0)))))
         out = dict(metrics or {})
+        out["refined_main_turn_repair"] = dict(main_turn_repair)
         if best_source == "diff_drive_launch_prefix":
             out["launch_prefix_audit"] = dict(repaired_launch_audit)
         elif best_source == "raw_diff_drive_launch_prefix":

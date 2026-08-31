@@ -84,6 +84,64 @@ def _segment(start, terminal, step=0.03):
         for index in range(1, count + 1)], float)
 
 
+def _repair_refined_main_turn(reference, evaluator):
+    """Bounded c0001-only execution-geometry repair around one sharp turn."""
+    path = np.asarray(reference, float)
+    audit = wheelchair_sharp_turn_audit(path, turn_limit=TURN)
+    if not audit["sharp_turns"]:
+        return path, {"repair_applied": False, "reason": "no_sharp_turn"}
+    sharp = max(audit["sharp_turns"], key=lambda item: item["local_turn"])
+    center = int(sharp["index"])
+    # Keep every original point, including P16, and insert samples only
+    # between the sharp-turn center and its successor P17.
+    if center < 1 or center + 1 >= len(path):
+        return path, {"repair_applied": False, "reason": "window_unavailable"}
+    p15, p16, p17 = path[center - 1], path[center], path[center + 1]
+    heading_before = math.atan2(p16[1] - p15[1], p16[0] - p15[0])
+    heading_after = math.atan2(p17[1] - p16[1], p17[0] - p16[0])
+    total_turn = abs(math.atan2(math.sin(heading_after - heading_before),
+                                math.cos(heading_after - heading_before)))
+    n_turn_steps = max(2, int(math.ceil(total_turn / TURN)))
+    handle = min(0.03, 0.35 * min(
+        float(np.linalg.norm(p16[:2] - p15[:2])),
+        float(np.linalg.norm(p17[:2] - p16[:2]))))
+    for point_count in (n_turn_steps, n_turn_steps + 1, n_turn_steps + 2):
+        c1 = p16[:2] + handle * np.array([
+            math.cos(heading_before), math.sin(heading_before)])
+        c2 = p17[:2] - handle * np.array([
+            math.cos(heading_after), math.sin(heading_after)])
+        inserts = []
+        for index in range(1, point_count):
+            u = float(index) / float(point_count)
+            p2 = ((1.0 - u) ** 3 * p16[:2] +
+                  3.0 * (1.0 - u) ** 2 * u * c1 +
+                  3.0 * (1.0 - u) * u ** 2 * c2 + u ** 3 * p17[:2])
+            inserts.append([p2[0], p2[1], 0.0])
+        candidate = np.vstack([path[:center + 1], np.asarray(inserts, float),
+                               path[center + 1:]])
+        local = candidate[max(0, center - 2):min(
+            len(candidate), center + point_count + 2)]
+        local_turn = wheelchair_sharp_turn_audit(local, turn_limit=TURN)
+        statuses = evaluator.evaluate_states(candidate[
+            center + 1:center + 1 + len(inserts)])
+        hard_valid = all(bool(item["inside_manifold"]) and
+                         bool(item["inside_corridor"]) for item in statuses)
+        if (float(local_turn["max_turn"]) <= TURN + 1e-9 and hard_valid):
+            return candidate, {
+                "repair_applied": True,
+                "repair_window_refined_indices": [center - 2, center + 1],
+                "original_window_point_count": 4,
+                "repaired_window_point_count": 4 + len(inserts),
+                "inserted_point_count": len(inserts),
+                "n_turn_steps": n_turn_steps,
+                "attempt_point_count": point_count,
+                "repair_method": "cubic_heading_interpolation",
+                "original_max_turn": float(sharp["local_turn"]),
+                "repaired_local_max_turn": float(local_turn["max_turn"]),
+            }
+    return path, {"repair_applied": False, "reason": "local_safety_or_turn"}
+
+
 def _heading_prefix(reference):
     """Analysis-only equivalent of the bounded heading-continuous launch stage."""
     ref = np.asarray(reference, float)
@@ -349,6 +407,8 @@ def run(trace_path, output_path):
                 trials.append(trial)
                 continue
             rebuilt = np.vstack([refined[:start_index + 1], suffix])
+            rebuilt, main_turn_repair = _repair_refined_main_turn(
+                rebuilt, evaluator)
             final, geometry, prefix_used, turn_origin, prefix_audit = (
                 _execution_reference(rebuilt))
             # Mirror WheelchairNode's authoritative final-reference context:
@@ -394,6 +454,7 @@ def run(trace_path, output_path):
                 "execution_geometry": geometry,
                 "turn_origin_audit": turn_origin,
                 "launch_prefix_audit": prefix_audit,
+                "refined_main_turn_repair": main_turn_repair,
             })
             trials.append(trial)
             if valid:
