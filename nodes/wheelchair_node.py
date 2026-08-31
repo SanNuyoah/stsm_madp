@@ -3541,6 +3541,15 @@ class WheelchairNode:
             "refinement_tube_valid": bool(metrics.get(
                 "refinement_tube_valid",
                 getattr(corr, "refinement_tube_valid", False))),
+            # Keep the context identities for both accepted and rejected
+            # candidates.  Rejected candidates never populate
+            # ``refinement_output``, so that later object is not a reliable
+            # audit source for the strict SafetyContext contract.
+            "planning_safety_context_fingerprint": str(metrics.get(
+                "planning_safety_context_fingerprint",
+                getattr(corr, "planning_safety_context_fingerprint", "")) or ""),
+            "refinement_safety_context_fingerprint": str(metrics.get(
+                "refinement_safety_context_fingerprint", "") or ""),
             "topology_tracking_error": float(metrics.get(
                 "topology_tracking_error",
                 getattr(corr, "topology_tracking_error", 0.0)) or 0.0),
