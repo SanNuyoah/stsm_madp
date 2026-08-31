@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -52,7 +53,8 @@ from stsm_madp.topology_refinement import refine_topology_path
 from stsm_madp.topology_candidate_generator import (
     TopologyDrivenCandidateGenerator, candidate_topology_identity,
     rank_feasible_candidates)
-from stsm_madp.topology_diagnostics_writer import _candidate_ranking_rows
+from stsm_madp.topology_diagnostics_writer import (
+    _candidate_ranking_rows, write_failed_topology_diagnostics)
 from stsm_madp.topology_constraint import build_topology_constraint
 from stsm_madp.corridor import (
     Corridor, CorridorContractError, require_corridor_contract,
@@ -1908,3 +1910,40 @@ def test_adp_calibration_fits_real_transition_cost_to_go_targets():
     assert np.isclose(summary["target_max"], 2.0)
     assert np.isfinite(critic.theta).all()
     assert critic.critic_version.endswith("_calibrated")
+
+
+def test_failed_wheelchair_diagnostics_persist_candidate_path_trace():
+    trace = {
+        "candidate_id": "wheelchair_c0001",
+        "label": "morse_saddle_2",
+        "raw_candidate": {"point_count": 2, "points": [
+            {"index": 0, "x": 0.0, "y": 0.0,
+             "source_stage": "raw_candidate", "source_index": 0},
+            {"index": 1, "x": 1.0, "y": 0.0,
+             "source_stage": "raw_candidate", "source_index": 1},
+        ]},
+        "refinement": {"point_count": 2, "points": [
+            {"index": 0, "x": 0.0, "y": 0.0,
+             "source_stage": "raw_candidate", "source_index": 0},
+            {"index": 1, "x": 1.0, "y": 0.0,
+             "source_stage": "raw_candidate", "source_index": 1},
+        ]},
+        "safe_terminal_rebuild": {"applied": False, "points": None},
+        "turn_repair": {"applied": False, "points": None},
+        "final_reference": None,
+        "path_trace_complete": False,
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        write_failed_topology_diagnostics(
+            tmp, "wheelchair", {"refinement_attempts": [
+                {"candidate_path_trace": trace}]})
+        with open(os.path.join(tmp, "candidate_path_trace.json"), "r") as handle:
+            payload = json.load(handle)
+
+    assert payload["robot_type"] == "wheelchair"
+    assert payload["candidate_count"] == 1
+    saved = payload["candidates"][0]
+    assert saved["candidate_id"] == "wheelchair_c0001"
+    assert saved["refinement"]["points"][1]["source_index"] == 1
+    assert saved["final_reference"] is None
+    assert not saved["path_trace_complete"]

@@ -524,6 +524,21 @@ def write_failed_topology_diagnostics(base_dir, robot_type, debug=None,
             "failure_reason": str(failure_reason),
             "attempts": list(attempts),
         }
+    candidate_path_trace = []
+    for item in refinement_attempts or refinement_trace:
+        if not isinstance(item, dict):
+            continue
+        trace = dict(item.get("candidate_path_trace", {}) or {})
+        if not trace:
+            trace = {
+                "candidate_id": str(item.get("candidate_id", "")),
+                "label": str(item.get("label", "")),
+                "raw_candidate": None, "refinement": None,
+                "safe_terminal_rebuild": {"applied": False, "points": None},
+                "turn_repair": {"applied": False, "points": None},
+                "final_reference": None, "path_trace_complete": False,
+            }
+        candidate_path_trace.append(trace)
 
     ranking_rows = _candidate_ranking_rows(
         debug, candidate_report, filter_report, morse_routes,
@@ -583,6 +598,11 @@ def write_failed_topology_diagnostics(base_dir, robot_type, debug=None,
         "topology_graph.json": graph,
         "refinement_trace.json": refinement_trace,
         "topology_refinement.json": topology_refinement,
+        "candidate_path_trace.json": {
+            "robot_type": str(robot_type),
+            "candidate_count": int(len(candidate_path_trace)),
+            "candidates": candidate_path_trace,
+        },
     }
     for name, payload in outputs.items():
         with open(os.path.join(base_dir, name), "w") as f:

@@ -2448,6 +2448,68 @@ class WheelchairNode:
         audit["selection_performed"] = False
         return audit
 
+    def _path_trace_stage(self, points, stage, safety_context, constraint,
+                          source_stage=None, source_points=None):
+        """Serialize one actually-produced path and explicit nearest lineage."""
+        path = self._as_corridor_points(points)
+        evaluator = SafetyEvaluator(
+            manifold_constraint=dict(constraint.get("manifold_constraint", {}) or {}),
+            corridor_constraint=dict(constraint.get("corridor_constraint", {}) or {}),
+            risk_field=safety_context.get("social_field"))
+        states = evaluator.evaluate_states(path)
+        source = self._as_corridor_points(source_points)
+        rows = []
+        for index, (point, status) in enumerate(zip(path, states)):
+            source_index = int(index)
+            mapping_method = "identity"
+            if source_stage and len(source):
+                source_index = int(np.argmin(np.linalg.norm(
+                    source[:, :2] - point[:2], axis=1)))
+                mapping_method = "nearest_point"
+            rows.append({
+                "index": int(index), "x": float(point[0]), "y": float(point[1]),
+                "clearance": float(status.get("clearance", 0.0)),
+                "risk": float(status.get("risk", 0.0)),
+                "manifold_valid": bool(status.get("inside_manifold", False)),
+                "hard_valid": bool(status.get("inside_manifold", False) and
+                                   status.get("inside_corridor", False)),
+                "source_stage": str(source_stage or stage),
+                "source_index": int(source_index),
+                "mapping_method": mapping_method,
+            })
+        return {"points": rows, "point_count": int(len(rows))}
+
+    def _candidate_path_trace(self, corr, raw, refined, final_reference,
+                              safety_context, constraint, reference_source,
+                              turn_repair_applied=False):
+        trace = {
+            "candidate_id": str(getattr(corr, "corridor_id", "")),
+            "label": str(getattr(corr, "label", "")),
+            "raw_candidate": self._path_trace_stage(
+                raw, "raw_candidate", safety_context, constraint),
+            "refinement": self._path_trace_stage(
+                refined, "refinement", safety_context, constraint,
+                "raw_candidate", raw),
+            "safe_terminal_rebuild": {"applied": False, "points": None},
+            "turn_repair": {
+                "applied": bool(turn_repair_applied),
+                "points": (
+                    self._path_trace_stage(
+                        final_reference, "turn_repair", safety_context,
+                        constraint, "refinement", refined)
+                    if bool(turn_repair_applied) else None),
+            },
+            "final_reference": self._path_trace_stage(
+                final_reference, "final_execution_reference", safety_context,
+                constraint, "refinement", refined),
+            "final_reference_source": str(reference_source),
+        }
+        trace["path_trace_complete"] = bool(
+            trace["raw_candidate"]["point_count"] > 0 and
+            trace["refinement"]["point_count"] > 0 and
+            trace["final_reference"]["point_count"] > 0)
+        return trace
+
     def _project_points_to_corridor(self, path, corridor, margin=0.85):
         pts = np.asarray(path, float)
         if pts.size == 0:
@@ -3052,6 +3114,7 @@ class WheelchairNode:
                 int(self.max_refined_footprint_check_points))
             safety_context, refinement_constraint = (
                 self._authoritative_safety_context(corr))
+            raw_candidate = self._as_corridor_points(getattr(corr, "waypoints", []))
             corr.planning_safety_context_fingerprint = str(
                 safety_context.get("fingerprint", ""))
             corr.planning_safety_context = dict(safety_context)
@@ -3077,6 +3140,20 @@ class WheelchairNode:
                 cid, bool(ok), str(reason), time.time() - refine_t0)
             attempt = self._refinement_attempt_payload(
                 corr, metrics, reason, stage="refine_topology_path")
+            attempt["candidate_path_trace"] = {
+                "candidate_id": str(getattr(corr, "corridor_id", "")),
+                "label": str(getattr(corr, "label", "")),
+                "raw_candidate": self._path_trace_stage(
+                    raw_candidate, "raw_candidate", safety_context,
+                    refinement_constraint),
+                "refinement": self._path_trace_stage(
+                    refined, "refinement", safety_context,
+                    refinement_constraint, "raw_candidate", raw_candidate),
+                "safe_terminal_rebuild": {"applied": False, "points": None},
+                "turn_repair": {"applied": False, "points": None},
+                "final_reference": None,
+                "path_trace_complete": False,
+            }
             attempt["max_refinement_path_points"] = int(
                 self.max_refinement_path_points)
             attempt["max_refined_footprint_check_points"] = int(
@@ -3106,6 +3183,7 @@ class WheelchairNode:
             reference_source = str(metrics.get(
                 "reference_source",
                 getattr(corr, "final_reference_source", "refined")))
+            refined_before_execution = np.asarray(refined, float).copy()
             fallback_used = bool(metrics.get(
                 "refinement_fallback",
                 getattr(corr, "refinement_fallback", False)))
@@ -3184,6 +3262,18 @@ class WheelchairNode:
                         "pre_repair_nonholonomic_execution_profile", {}))
             else:
                 metrics.update(execution_metrics)
+            # The execution reference exists at this point even if the
+            # subsequent footprint/turn contracts reject it.  Record it
+            # before those fail-closed gates so diagnostics never hide an
+            # actually-produced path.
+            _audit_context, turn_audit_constraint = (
+                self._authoritative_safety_context(corr, reference=refined))
+            attempt["turn_refinement_audit"] = self._turn_refinement_audit(
+                refined, safety_context, turn_audit_constraint)
+            attempt["candidate_path_trace"] = self._candidate_path_trace(
+                corr, raw_candidate, refined_before_execution,
+                refined, safety_context, turn_audit_constraint, reference_source,
+                turn_repair_applied=execution_repaired)
             if execution_repaired and not fallback_used:
                 ok, footprint_reason = self._footprint_path_checker(refined)
                 if not ok:
@@ -3207,10 +3297,6 @@ class WheelchairNode:
                                 getattr(corr, "label", "")),
                         corr.reject_reason)
                     continue
-            _audit_context, turn_audit_constraint = (
-                self._authoritative_safety_context(corr, reference=refined))
-            attempt["turn_refinement_audit"] = self._turn_refinement_audit(
-                refined, safety_context, turn_audit_constraint)
             if (not fallback_used and
                     refined_max_curvature > executable_curvature_limit + 1e-9):
                 corr.reject_reason = "refined_execution_curvature_limit"
@@ -3622,6 +3708,40 @@ class WheelchairNode:
             "attempts": attempts,
         }
         self.manifold.last_topology_debug = dbg
+        self._write_candidate_path_trace(attempts)
+
+    def _write_candidate_path_trace(self, refinement_attempts):
+        """Persist actual Wheelchair candidate paths for offline replay only."""
+        if self.baseline:
+            return
+        base = os.path.dirname(
+            self.decision_trace_out or self.mpc_reference_out or
+            self.mpc_diagnostics_out or "")
+        if not base:
+            return
+        records = []
+        for attempt in list(refinement_attempts or []):
+            if not isinstance(attempt, dict):
+                continue
+            trace = dict(attempt.get("candidate_path_trace", {}) or {})
+            if not trace:
+                trace = {
+                    "candidate_id": str(attempt.get("candidate_id", "")),
+                    "label": str(attempt.get("label", "")),
+                    "raw_candidate": None,
+                    "refinement": None,
+                    "safe_terminal_rebuild": {"applied": False, "points": None},
+                    "turn_repair": {"applied": False, "points": None},
+                    "final_reference": None,
+                    "path_trace_complete": False,
+                }
+            records.append(trace)
+        with open(os.path.join(base, "candidate_path_trace.json"), "w") as handle:
+            json.dump(_jsonable({
+                "robot_type": "wheelchair",
+                "candidate_count": int(len(records)),
+                "candidates": records,
+            }), handle, indent=2, sort_keys=True)
 
     def _as_corridor_points(self, value):
         if value is None or isinstance(value, str):
