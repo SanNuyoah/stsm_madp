@@ -2134,6 +2134,46 @@ class WheelchairNode:
                 "join_point_source_count", 0)),
             "join_point_search_cap": int(data.get(
                 "join_point_search_cap", 0)),
+            "runtime_pose": list(data.get("runtime_pose", []) or []),
+            "runtime_yaw": float(data.get("runtime_yaw", data.get(
+                "current_yaw", 0.0))),
+            "runtime_dist_to_goal": float(data.get(
+                "runtime_dist_to_goal", 0.0)),
+            "runtime_context_fingerprint": str(data.get(
+                "runtime_context_fingerprint", "")),
+            "candidate_id": str(data.get("candidate_id", "")),
+            "candidate_label": str(data.get("candidate_label", "")),
+            "active_corridor_id": str(data.get("active_corridor_id", "")),
+            "active_corridor_label": str(data.get("active_corridor_label", "")),
+            "active_corridor_progress_index": data.get(
+                "active_corridor_progress_index", None),
+            "nearest_forward_idx": data.get("nearest_forward_idx", None),
+            "join_points_admissible": int(data.get(
+                "join_points_admissible", 0)),
+            "safe_join_points": int(data.get("safe_join_points", 0)),
+            "selected_join_idx": data.get("selected_join_idx", data.get(
+                "join_idx_selected", None)),
+            "connector_point_count": int(data.get(
+                "connector_point_count", 0)),
+            "connector_max_risk": data.get("connector_max_risk", None),
+            "connector_max_turn": data.get("connector_max_turn", None),
+            "connector_max_curvature": data.get("connector_max_curvature", None),
+            "connector_goal_progress": float(data.get(
+                "connector_goal_progress", 0.0)),
+            "critical_sequence_after_join": str(data.get(
+                "critical_sequence_after_join", "")),
+            "post_refine_max_curvature": float(data.get(
+                "post_refine_max_curvature", 0.0)),
+            "final_reference_valid": bool(data.get(
+                "final_reference_valid", False)),
+            "current_corridor_forward_join_count": int(data.get(
+                "current_corridor_forward_join_count", 0)),
+            "current_corridor_safe_join_count": int(data.get(
+                "current_corridor_safe_join_count", 0)),
+            "best_current_corridor_join_idx": data.get(
+                "best_current_corridor_join_idx", None),
+            "join_point_connector_results": list(data.get(
+                "join_point_connector_results", []) or []),
             "join_point_audit": list(data.get("join_point_audit", []) or []),
         }
 
@@ -2174,9 +2214,15 @@ class WheelchairNode:
         if progress + 1e-9 < float(self.min_progress_per_solve):
             return False, "runtime_replan_goal_progress_insufficient", progress, {}
         turn_limit = min(float(self.topology_max_corridor_turn), 0.40) + 0.03
-        max_turn = float(path_curvature_metrics(points).get("max_turn", 0.0))
+        curvature_limit = min(float(self.topology_max_corridor_curvature), 8.0)
+        metrics = path_curvature_metrics(points)
+        max_turn = float(metrics.get("max_turn", 0.0))
         if not np.isfinite(max_turn) or max_turn > turn_limit + 1e-9:
             return False, "runtime_replan_connector_turn_limit", progress, {}
+        max_curvature = float(metrics.get("max_curvature", 0.0))
+        if (not np.isfinite(max_curvature) or
+                max_curvature > curvature_limit + 1e-9):
+            return False, "runtime_replan_connector_curvature_limit", progress, {}
         safety, footprint_reason = self._runtime_replan_connector_safety(
             corridor, points)
         if not bool(safety.get("valid", False)):
@@ -2238,6 +2284,43 @@ class WheelchairNode:
                 return float(path_length(candidate[:idx + 1]))
         return float(path_length(candidate))
 
+    def _runtime_context_fingerprint(self, corridor, reference):
+        try:
+            safety_context, _constraint = self._authoritative_safety_context(
+                corridor, reference=reference)
+            return str(safety_context.get("fingerprint", ""))
+        except Exception:
+            return ""
+
+    def _current_corridor_forward_join_audit(self):
+        if self.state is None or self.goal is None:
+            return {"current_corridor_forward_join_count": 0,
+                    "current_corridor_safe_join_count": 0,
+                    "best_current_corridor_join_idx": None}
+        corridor = getattr(self, "execution_corridor", None)
+        if corridor is None:
+            corridor = getattr(self, "selected_corridor", None)
+        points = self._as_corridor_points(getattr(corridor, "waypoints", []))
+        if len(points) < 2:
+            return {"current_corridor_forward_join_count": 0,
+                    "current_corridor_safe_join_count": 0,
+                    "best_current_corridor_join_idx": None}
+        start = np.asarray(self.state[:2], float)
+        goal = np.asarray(self.goal[:2], float)
+        nearest = int(np.argmin(np.linalg.norm(
+            points[:, :2] - start.reshape(1, 2), axis=1)))
+        indices = list(range(nearest, min(len(points), nearest + 15)))
+        audit = self._runtime_replan_join_point_audit(
+            corridor, points, indices, start, goal, float(self.state[2]))
+        safe = [item for item in audit
+                if not str(item.get("pre_filter_reject_reason", ""))]
+        return {
+            "current_corridor_forward_join_count": int(len(audit)),
+            "current_corridor_safe_join_count": int(len(safe)),
+            "best_current_corridor_join_idx": (
+                int(safe[0]["index"]) if safe else None),
+        }
+
     def _audit_runtime_replan_connectability(self, corridor):
         """Make a bounded, safe connection from current pose to a replan route."""
         context = dict(self._runtime_replan_context or {})
@@ -2245,6 +2328,16 @@ class WheelchairNode:
             return True, ""
         raw = self._as_corridor_points(getattr(corridor, "waypoints", []))
         current_yaw = float(self.state[2]) if self.state is not None else 0.0
+        active_corridor = getattr(self, "execution_corridor", None)
+        if active_corridor is None:
+            active_corridor = getattr(self, "selected_corridor", None)
+        active_points = self._as_corridor_points(getattr(
+            active_corridor, "waypoints", []))
+        active_progress_index = None
+        if self.state is not None and len(active_points) > 0:
+            active_progress_index = int(np.argmin(np.linalg.norm(
+                active_points[:, :2] -
+                np.asarray(self.state[:2], float).reshape(1, 2), axis=1)))
         first_heading = self._path_yaw(raw, 0) if len(raw) > 1 else current_yaw
         heading_error = abs(float(np.arctan2(
             np.sin(first_heading - current_yaw),
@@ -2253,6 +2346,20 @@ class WheelchairNode:
         pre_turn = float(path_curvature_metrics(raw).get("max_turn", 0.0))
         data = {
             "runtime_replan": True,
+            "runtime_pose": [float(v) for v in self.state[:3]],
+            "runtime_yaw": current_yaw,
+            "runtime_dist_to_goal": float(np.linalg.norm(
+                np.asarray(self.state[:2], float) -
+                np.asarray(self.goal[:2], float))),
+            "runtime_context_fingerprint": self._runtime_context_fingerprint(
+                corridor, raw),
+            "candidate_id": str(getattr(corridor, "corridor_id", "")),
+            "candidate_label": str(getattr(corridor, "label", "")),
+            "active_corridor_id": str(getattr(
+                active_corridor, "corridor_id", "")),
+            "active_corridor_label": str(getattr(
+                active_corridor, "label", "")),
+            "active_corridor_progress_index": active_progress_index,
             "current_yaw": current_yaw,
             "candidate_first_heading": first_heading,
             "initial_heading_error": heading_error,
@@ -2269,11 +2376,25 @@ class WheelchairNode:
             "connector_search_used": False,
             "connector_search_expansions": 0,
             "connector_min_clearance": None,
+            "connector_max_risk": None,
+            "connector_max_turn": None,
+            "connector_max_curvature": None,
+            "connector_goal_progress": 0.0,
             "connector_manifold_violation_count": 0,
             "join_point_source_count": 0,
             "join_point_search_cap": 15,
+            "nearest_forward_idx": None,
+            "join_points_admissible": 0,
+            "safe_join_points": 0,
+            "selected_join_idx": None,
+            "connector_point_count": 0,
+            "critical_sequence_after_join": "not_checked",
+            "post_refine_max_curvature": 0.0,
+            "final_reference_valid": False,
+            "join_point_connector_results": [],
             "join_point_audit": [],
         }
+        data.update(self._current_corridor_forward_join_audit())
         direct_ok, direct_reason, direct_progress, direct_safety = (
             self._runtime_replan_path_status(corridor, raw))
         data["replan_goal_progress_first_N"] = float(direct_progress)
@@ -2297,7 +2418,18 @@ class WheelchairNode:
         data["connector_length"] = self._runtime_replan_connector_length(
             raw, connector)
         data["replan_goal_progress_first_N"] = float(connector_progress)
+        data["connector_goal_progress"] = float(connector_progress)
         data["connectability_safety"] = dict(connector_safety or {})
+        data["connector_point_count"] = int(len(connector))
+        data["connector_min_clearance"] = connector_safety.get(
+            "min_clearance", data.get("connector_min_clearance", None))
+        data["connector_max_risk"] = connector_safety.get("max_risk", None)
+        metrics = path_curvature_metrics(connector)
+        data["connector_max_turn"] = float(metrics.get("max_turn", 0.0))
+        data["connector_max_curvature"] = float(
+            metrics.get("max_curvature", 0.0))
+        data["connector_manifold_violation_count"] = int(
+            connector_safety.get("manifold_violation_count", 0) or 0)
         if not connector_ok:
             data["final_reject_reason"] = connector_reason
             data["connectability_status"] = "connector_rejected"
@@ -2307,6 +2439,8 @@ class WheelchairNode:
         # receives only a safe, yaw-connected execution seed.
         corridor.runtime_replan_original_waypoints = np.asarray(raw, float)
         corridor.waypoints = np.asarray(connector, float)
+        data["critical_sequence_after_join"] = "passed"
+        data["final_reference_valid"] = True
         data["connectability_status"] = "connector_accepted"
         corridor.runtime_replan_connectability = data
         return True, ""
@@ -2717,8 +2851,18 @@ class WheelchairNode:
             "connector_search_expansions": 0,
             "join_points_tested": 0,
             "join_idx_selected": None,
+            "selected_join_idx": None,
             "connector_min_clearance": None,
+            "connector_max_risk": None,
             "connector_manifold_violation_count": 0,
+            "connector_max_turn": None,
+            "connector_max_curvature": None,
+            "connector_goal_progress": 0.0,
+            "connector_point_count": 0,
+            "nearest_forward_idx": None,
+            "join_points_admissible": 0,
+            "safe_join_points": 0,
+            "join_point_connector_results": [],
         }
         corridor.runtime_replan_connector_search = search
         if self.state is None or self.goal is None:
@@ -2726,6 +2870,7 @@ class WheelchairNode:
         ref = self._as_corridor_points(reference)
         if len(ref) < 2:
             return None
+        from stsm_madp.deform import path_curvature_metrics
         start = np.asarray(self.state[:2], float)
         goal = np.asarray(self.goal[:2], float)
         d0 = float(np.linalg.norm(start - goal))
@@ -2738,8 +2883,12 @@ class WheelchairNode:
         max_depth = 15
         beam_width = 12
         join_distance = max(0.12, 1.5 * step)
-        max_join_index = min(len(ref) - 1, 15)
-        join_indices = list(range(1, max_join_index + 1))
+        nearest_idx = int(np.argmin(np.linalg.norm(
+            ref[:, :2] - start.reshape(1, 2), axis=1)))
+        nearest_forward_idx = int(min(max(nearest_idx, 1), len(ref) - 1))
+        search["nearest_forward_idx"] = int(nearest_forward_idx)
+        max_join_index = min(len(ref) - 1, nearest_forward_idx + 14)
+        join_indices = list(range(nearest_forward_idx, max_join_index + 1))
         turn_actions = (-0.16, 0.0, 0.16)
         start_yaw = float(self.state[2])
         search["join_point_source_count"] = int(len(ref))
@@ -2750,6 +2899,47 @@ class WheelchairNode:
         # contracts still make the final connectability decision.
         join_indices = [int(item["index"]) for item in join_audit
                         if not str(item.get("pre_filter_reject_reason", ""))]
+        search["join_points_admissible"] = int(len(join_indices))
+        search["safe_join_points"] = int(len(join_indices))
+        search["join_points_tested"] = int(len(join_indices))
+        heading_prefix = self._make_heading_progress_prefix(ref, corridor)
+        prefix_audit = dict(getattr(self, "last_launch_prefix_audit", {}) or {})
+        if heading_prefix is not None and len(heading_prefix) >= 2:
+            ok, reason, progress, safety = self._runtime_replan_path_status(
+                corridor, heading_prefix)
+            metrics = path_curvature_metrics(heading_prefix)
+            join_idx = prefix_audit.get("join_index", None)
+            search["join_point_connector_results"].append({
+                "join_idx": join_idx,
+                "method": "heading_progress_prefix",
+                "accepted": bool(ok),
+                "reject_reason": str(reason),
+                "connector_point_count": int(len(heading_prefix)),
+                "connector_goal_progress": float(progress),
+                "connector_min_clearance": safety.get("min_clearance", None),
+                "connector_max_risk": safety.get("max_risk", None),
+                "connector_manifold_violation_count": int(
+                    safety.get("manifold_violation_count", 0) or 0),
+                "connector_max_turn": float(metrics.get("max_turn", 0.0)),
+                "connector_max_curvature": float(
+                    metrics.get("max_curvature", 0.0)),
+            })
+            if ok:
+                search["join_idx_selected"] = join_idx
+                search["selected_join_idx"] = join_idx
+                search["connector_point_count"] = int(len(heading_prefix))
+                search["connector_goal_progress"] = float(progress)
+                search["connector_min_clearance"] = safety.get(
+                    "min_clearance", None)
+                search["connector_max_risk"] = safety.get("max_risk", None)
+                search["connector_manifold_violation_count"] = int(
+                    safety.get("manifold_violation_count", 0) or 0)
+                search["connector_max_turn"] = float(
+                    metrics.get("max_turn", 0.0))
+                search["connector_max_curvature"] = float(
+                    metrics.get("max_curvature", 0.0))
+                corridor.runtime_replan_connector_search = search
+                return np.asarray(heading_prefix, float)
         # Keep rollout samples in the same dimensionality as the selected
         # corridor.  Topology routes carry a z column while the diff-drive
         # state is planar; mixing the two previously made the final merge
@@ -2760,7 +2950,6 @@ class WheelchairNode:
         last_safety = {}
 
         for join_idx in join_indices:
-            search["join_points_tested"] += 1
             join = np.asarray(ref[join_idx, :2], float)
             states = list(frontier)
             for _depth in range(max_depth):
@@ -2802,13 +2991,41 @@ class WheelchairNode:
                     _length, candidate, candidate_safety = min(
                         completed, key=lambda item: item[0])
                     search["join_idx_selected"] = int(join_idx)
+                    search["selected_join_idx"] = int(join_idx)
+                    search["connector_point_count"] = int(len(candidate))
                     search["connector_min_clearance"] = float(
                         candidate_safety.get("min_clearance", 0.0))
+                    search["connector_max_risk"] = float(
+                        candidate_safety.get("max_risk", 0.0))
                     search["connector_manifold_violation_count"] = int(
                         candidate_safety.get("manifold_violation_count", 0) or 0)
+                    candidate_metrics = path_curvature_metrics(candidate)
+                    search["connector_max_turn"] = float(
+                        candidate_metrics.get("max_turn", 0.0))
+                    search["connector_max_curvature"] = float(
+                        candidate_metrics.get("max_curvature", 0.0))
+                    search["join_point_connector_results"].append({
+                        "join_idx": int(join_idx),
+                        "method": "bounded_rollout",
+                        "accepted": True,
+                        "reject_reason": "",
+                        "connector_point_count": int(len(candidate)),
+                        "connector_min_clearance": search["connector_min_clearance"],
+                        "connector_max_risk": search["connector_max_risk"],
+                        "connector_manifold_violation_count": int(
+                            search["connector_manifold_violation_count"]),
+                        "connector_max_turn": search["connector_max_turn"],
+                        "connector_max_curvature": search["connector_max_curvature"],
+                    })
                     corridor.runtime_replan_connector_search = search
                     return np.asarray(candidate, float)
                 if not next_states:
+                    search["join_point_connector_results"].append({
+                        "join_idx": int(join_idx),
+                        "method": "bounded_rollout",
+                        "accepted": False,
+                        "reject_reason": "connector_generation_failed",
+                    })
                     break
                 next_states.sort(key=lambda item: (
                     float(np.linalg.norm(item[0] - join)), item[3]))
@@ -2817,6 +3034,7 @@ class WheelchairNode:
             # this avoids treating an unsafe early join as a terminal failure.
 
         search["connector_min_clearance"] = last_safety.get("min_clearance", None)
+        search["connector_max_risk"] = last_safety.get("max_risk", None)
         search["connector_manifold_violation_count"] = int(
             last_safety.get("manifold_violation_count", 0) or 0)
         corridor.runtime_replan_connector_search = search
@@ -2826,6 +3044,8 @@ class WheelchairNode:
                                          join_indices, start, goal,
                                          current_yaw):
         """Audit every bounded topology join before connector rollout."""
+        from stsm_madp.deform import path_length
+
         report = []
         d0 = float(np.linalg.norm(start - goal))
         for join_idx in join_indices:
@@ -2834,30 +3054,42 @@ class WheelchairNode:
             safety, footprint_reason = self._runtime_replan_connector_safety(
                 corridor, point)
             clearance = float(safety.get("min_clearance", 0.0))
+            risk = float(safety.get("max_risk", 0.0))
             manifold_valid = bool(safety.get("valid", False)) and not bool(
                 int(safety.get("manifold_violation_count", 0) or 0))
+            hard_valid = bool(manifold_valid and clearance + 1e-9 >= 0.10 and
+                              risk <= float(self.manifold.rho) + 1e-9)
             heading = float(np.arctan2(
                 join[1] - start[1], join[0] - start[0]))
             heading_error = abs(float(np.arctan2(
                 np.sin(heading - current_yaw),
                 np.cos(heading - current_yaw))))
             goal_progress = float(d0 - np.linalg.norm(join - goal))
+            remaining = float(path_length(reference[join_idx:]))
             reject_reason = ""
-            if clearance + 1e-9 < 0.10:
-                reject_reason = "join_point_clearance"
-            elif not manifold_valid:
-                reject_reason = "join_point_manifold"
+            if not hard_valid:
+                reject_reason = "join_point_not_hard_safe"
             elif footprint_reason:
                 reject_reason = "join_point_" + str(footprint_reason)
             elif goal_progress < -0.03:
-                reject_reason = "join_point_goal_regression"
+                reject_reason = "connector_no_progress"
+            elif remaining < 0.10:
+                reject_reason = "join_insufficient_remaining_corridor"
             report.append({
-                "index": int(join_idx),
+                "index": int(join_idx), "join_idx": int(join_idx),
+                "x": float(join[0]), "y": float(join[1]),
                 "distance_from_current_pose": float(np.linalg.norm(join - start)),
+                "distance_to_goal": float(np.linalg.norm(join - goal)),
                 "clearance": clearance,
+                "risk": risk,
                 "manifold_valid": bool(manifold_valid),
+                "hard_valid": bool(hard_valid),
+                "heading_to_join": heading,
                 "goal_progress": goal_progress,
+                "heading_error_from_current_yaw": heading_error,
                 "initial_heading_error": heading_error,
+                "remaining_corridor_length": remaining,
+                "critical_points_remaining": [],
                 "pre_filter_reject_reason": reject_reason,
             })
         return report

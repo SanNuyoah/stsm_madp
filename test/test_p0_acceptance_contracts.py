@@ -2059,3 +2059,55 @@ def test_r010_c0001_curvature_replay_uses_diagnostics_yaw_and_repairs_window():
     assert terminal["final_max_turn"] <= replay.TURN + 1e-9
     assert terminal["final_max_curvature"] <= replay.CURVATURE + 1e-9
     assert full["executable_candidate_count"] == 1
+
+
+def test_r011_runtime_join_replay_finds_safe_forward_c0001_join():
+    script = os.path.join(
+        ROOT, "scripts", "analysis", "replay_runtime_join_r011.py")
+    spec = importlib.util.spec_from_file_location("r011_runtime_join_replay",
+                                                  script)
+    replay = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(replay)
+
+    run_dir = os.path.join(
+        ROOT, "results", "runs", "20260831_R011", "wheelchair", "stsm")
+    with tempfile.TemporaryDirectory() as tmp:
+        payload = replay.run(
+            run_dir, os.path.join(tmp, "runtime_join_replay.json"))
+
+    assert payload["runtime_pose_source"] == "ros_log_xy_runtime_diag_yaw"
+    assert np.allclose(
+        payload["runtime_pose"],
+        [0.6, 1.41, 3.0562007427424622])
+    assert np.isclose(payload["runtime_dist_to_goal"], 1.4360013927569846)
+    assert payload["active_corridor"]["candidate_id"] == "wheelchair_c0001"
+    assert payload["active_corridor_progress_index"] == 38
+    assert payload["current_corridor_forward_join_count"] == 15
+    assert payload["current_corridor_safe_join_count"] == 12
+    assert payload["selected_join_idx"] == 40
+    assert payload["best_current_corridor_join_idx"] == 40
+
+    audit = payload["join_point_audit"]
+    assert len(audit) == 15
+    selected = [row for row in audit if row["join_idx"] == 40][0]
+    assert selected["hard_valid"]
+    assert selected["pre_filter_reject_reason"] == ""
+    assert np.isclose(selected["distance_from_current_pose"], 0.2504451455290505)
+    assert np.isclose(selected["clearance"], 1.4166509662653621)
+    assert np.isclose(selected["risk"], 0.2586216348917077)
+
+    connector = payload["connector"]
+    assert connector["method"] == "heading_progress_prefix"
+    assert connector["point_count"] == 35
+    assert connector["manifold_violation_count"] == 0
+    assert connector["min_clearance"] >= replay.CLEARANCE
+    assert connector["max_risk"] <= replay.RISK
+    assert connector["max_turn"] <= replay.TURN + 1e-9
+    assert connector["max_curvature"] <= replay.CURVATURE + 1e-9
+    assert connector["goal_progress"] > 1.0
+
+    merged = payload["merged_route"]
+    assert merged["critical_sequence"] == "passed"
+    assert merged["final_reference_valid"]
+    assert merged["final_reject_reason"] == ""
+    assert payload["runtime_executable_candidate_count"] == 1
