@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import tempfile
+import importlib.util
 from types import SimpleNamespace
 from xml.etree import ElementTree
 
@@ -1947,3 +1948,18 @@ def test_failed_wheelchair_diagnostics_persist_candidate_path_trace():
     assert saved["refinement"]["points"][1]["source_index"] == 1
     assert saved["final_reference"] is None
     assert not saved["path_trace_complete"]
+
+
+def test_r009_safe_terminal_replay_recreates_authoritative_terminal_audit():
+    script = os.path.join(
+        ROOT, "scripts", "analysis", "replay_c0001_safe_terminal_trials.py")
+    spec = importlib.util.spec_from_file_location("r009_terminal_replay", script)
+    replay = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(replay)
+
+    audit = terminal_acceptance_preflight(
+        replay.GOAL, 0.25, replay._scene_context())
+
+    assert np.isclose(audit["goal_clearance"], -0.07193582655542459)
+    assert np.isclose(audit["goal_risk"], 2.5016565419952275)
+    assert audit["safe_terminal_candidate_count"] == 6
