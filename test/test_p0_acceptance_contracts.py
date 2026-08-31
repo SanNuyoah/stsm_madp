@@ -1973,8 +1973,12 @@ def test_r009_safe_terminal_replay_recreates_authoritative_terminal_audit():
                  np.allclose(item["selected_terminal"][:2],
                              [-0.4782468564315457, 0.7232274123458663]))
     turn = trial["turn_origin_audit"]
-    assert turn["max_turn_index"] == 1
-    assert np.isclose(turn["max_turn"], 1.688060071677089)
-    assert turn["turn_origin"] == "launch_prefix"
-    assert [point["lineage"]["source_stage"] for point in turn["points"]] == [
-        "launch_prefix", "launch_prefix", "launch_prefix"]
+    prefix = trial["launch_prefix_audit"]
+    assert prefix["launch_prefix_point_count"] > 5
+    assert prefix["launch_prefix_max_turn"] <= replay.TURN + 1e-9
+    assert prefix["prefix_join_max_turn"] <= replay.TURN + 1e-9
+    assert prefix["launch_prefix_hard_valid"]
+    assert prefix["launch_prefix_min_clearance"] >= replay.CLEARANCE
+    assert turn["max_turn_index"] != 1
+    assert np.isclose(turn["max_turn"], 0.6590043705190771)
+    assert turn["turn_origin"] == "refined_main_path"

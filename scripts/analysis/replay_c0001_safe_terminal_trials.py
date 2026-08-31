@@ -85,23 +85,67 @@ def _segment(start, terminal, step=0.03):
 
 
 def _heading_prefix(reference):
-    """Analysis-only equivalent of the existing bounded launch-prefix stage."""
+    """Analysis-only equivalent of the bounded heading-continuous launch stage."""
     ref = np.asarray(reference, float)
     start, goal = STATE[:2], GOAL[:2]
-    to_goal = goal - start
-    goal_dist = float(np.linalg.norm(to_goal))
-    heading = np.array([math.cos(STATE[2]), math.sin(STATE[2])])
-    goal_dir = to_goal / goal_dist
-    blend = heading + goal_dir
-    if np.linalg.norm(blend) <= 1e-6 or np.dot(heading, goal_dir) < 0.0:
-        blend = heading
-    launch_dir = blend / max(float(np.linalg.norm(blend)), 1e-9)
-    launch_len = min(0.55, max(0.24, 0.22 * goal_dist))
-    step = 0.06
-    prefix_count = max(3, int(math.ceil(launch_len / step)))
-    join = start + launch_dir * launch_len
-    dists = np.linalg.norm(ref[:, :2] - join.reshape(1, 2), axis=1)
-    nearest = int(np.argmin(dists))
+    turn_limit = TURN
+    min_segment = 0.06
+    radius = min_segment / turn_limit
+
+    def mod2pi(angle):
+        return float(angle) % (2.0 * math.pi)
+
+    def csc(end, target_yaw):
+        delta = end - start
+        distance = float(np.linalg.norm(delta))
+        if distance <= 1e-9:
+            return []
+        d = distance / radius
+        theta = math.atan2(delta[1], delta[0])
+        alpha = mod2pi(STATE[2] - theta)
+        beta = mod2pi(target_yaw - theta)
+        paths = []
+        lsl_p2 = (2.0 + d * d - 2.0 * math.cos(alpha - beta) +
+                  2.0 * d * (math.sin(alpha) - math.sin(beta)))
+        if lsl_p2 >= -1e-9:
+            tmp = math.atan2(math.cos(beta) - math.cos(alpha),
+                             d + math.sin(alpha) - math.sin(beta))
+            paths.append(("LSL", (mod2pi(-alpha + tmp),
+                                  math.sqrt(max(0.0, lsl_p2)),
+                                  mod2pi(beta - tmp))))
+        rsr_p2 = (2.0 + d * d - 2.0 * math.cos(alpha - beta) +
+                  2.0 * d * (math.sin(beta) - math.sin(alpha)))
+        if rsr_p2 >= -1e-9:
+            tmp = math.atan2(math.cos(alpha) - math.cos(beta),
+                             d - math.sin(alpha) + math.sin(beta))
+            paths.append(("RSR", (mod2pi(alpha - tmp),
+                                  math.sqrt(max(0.0, rsr_p2)),
+                                  mod2pi(-beta + tmp))))
+        return paths
+
+    def sample(primitive, values):
+        x, y, yaw = float(start[0]), float(start[1]), float(STATE[2])
+        points = [[x, y, 0.0]]
+        for kind, value in zip(primitive, values):
+            count = (max(1, int(math.floor(radius * value / min_segment)))
+                     if kind == "S" else
+                     max(1, int(math.ceil(value / turn_limit))))
+            increment = value / float(count)
+            for _unused in range(count):
+                if kind == "S":
+                    x += radius * increment * math.cos(yaw)
+                    y += radius * increment * math.sin(yaw)
+                else:
+                    sign = 1.0 if kind == "L" else -1.0
+                    next_yaw = yaw + sign * increment
+                    x += sign * radius * (math.sin(next_yaw) - math.sin(yaw))
+                    y -= sign * radius * (math.cos(next_yaw) - math.cos(yaw))
+                    yaw = next_yaw
+                points.append([x, y, 0.0])
+        return np.asarray(points, float)
+
+    nearest = int(np.argmin(np.linalg.norm(
+        ref[:, :2] - start.reshape(1, 2), axis=1)))
     candidates = []
     for join_idx in sorted(set(min(max(index, 1), len(ref) - 1) for index in (
             nearest, nearest + 2, min(len(ref) - 1, 8), min(len(ref) - 1, 10)))):
@@ -109,22 +153,14 @@ def _heading_prefix(reference):
         tail_vec = (ref[join_idx + 1, :2] - end[:2]
                     if join_idx + 1 < len(ref) else goal - end[:2])
         tail_dir = tail_vec / max(float(np.linalg.norm(tail_vec)), 1e-9)
-        length = float(np.linalg.norm(end[:2] - start))
-        for scale in (0.45, 0.55):
-            c1 = start + heading * length * scale
-            c2 = end[:2] - tail_dir * length * scale
-            samples = min(14, max(8, int(math.ceil(length / 0.10))))
-            bridge = []
-            for index in range(samples + 1):
-                u = float(index) / float(samples)
-                p2 = ((1.0 - u) ** 3 * start + 3.0 * (1.0 - u) ** 2 * u * c1 +
-                      3.0 * (1.0 - u) * u ** 2 * c2 + u ** 3 * end[:2])
-                bridge.append([p2[0], p2[1], 0.0])
+        target_yaw = math.atan2(tail_dir[1], tail_dir[0])
+        for primitive, values in csc(end[:2], target_yaw):
+            prefix = sample(primitive, values)
             candidates.append({
-                "points": np.vstack([np.asarray(bridge, float),
-                                     ref[join_idx + 1:]]),
-                "bridge_point_count": int(len(bridge)),
+                "points": np.vstack([prefix, ref[join_idx + 1:]]),
+                "bridge_point_count": int(len(prefix)),
                 "join_index": int(join_idx),
+                "primitive": primitive,
             })
     def score(candidate):
         path = candidate["points"]
@@ -238,8 +274,30 @@ def _execution_reference(rebuilt):
         smoothed = False
     lineage = _point_lineage(len(reference), len(rebuilt) - 1,
                              prefix_metadata=prefix_metadata, smoothed=smoothed)
+    if prefix_metadata is not None:
+        prefix_count = int(prefix_metadata["bridge_point_count"])
+        local_points = reference[:min(len(reference), prefix_count + 1)]
+        prefix_turns = wheelchair_sharp_turn_audit(
+            local_points, turn_limit=TURN)
+        join_turn = float(wheelchair_sharp_turn_audit(
+            local_points[-3:], turn_limit=TURN).get(
+                "max_turn", 0.0)) if len(local_points) >= 3 else 0.0
+        prefix_audit = {
+            "launch_prefix_point_count": prefix_count,
+            "launch_prefix_max_turn": float(prefix_turns["max_turn"]),
+            "launch_prefix_sharp_turn_indices": list(
+                prefix_turns["sharp_turn_indices"]),
+            "prefix_join_max_turn": join_turn,
+            "join_index": int(prefix_metadata["join_index"]),
+            "primitive": str(prefix_metadata.get("primitive", "")),
+        }
+    else:
+        prefix_audit = {"launch_prefix_point_count": 0,
+                        "launch_prefix_max_turn": 0.0,
+                        "launch_prefix_sharp_turn_indices": [],
+                        "prefix_join_max_turn": 0.0}
     return (np.asarray(reference, float), dict(metrics), bool(needs_prefix),
-            _turn_origin_audit(reference, lineage))
+            _turn_origin_audit(reference, lineage), prefix_audit)
 
 
 def run(trace_path, output_path):
@@ -291,8 +349,30 @@ def run(trace_path, output_path):
                 trials.append(trial)
                 continue
             rebuilt = np.vstack([refined[:start_index + 1], suffix])
-            final, geometry, prefix_used, turn_origin = _execution_reference(rebuilt)
-            final_rows = _rows(evaluator, final)
+            final, geometry, prefix_used, turn_origin, prefix_audit = (
+                _execution_reference(rebuilt))
+            # Mirror WheelchairNode's authoritative final-reference context:
+            # generated launch geometry is evaluated against the reference
+            # that would actually be handed to execution, not the obsolete
+            # pre-rebuild centerline.
+            final_evaluator = SafetyEvaluator(
+                manifold_constraint=dict(context["manifold_constraint"]),
+                corridor_constraint={"centerline": final.tolist(), "radius": 0.35},
+                risk_field=context["social_field"])
+            final_rows = _rows(final_evaluator, final)
+            prefix_count = int(prefix_audit.get("launch_prefix_point_count", 0))
+            if prefix_count:
+                prefix_rows = final_rows[:prefix_count]
+                prefix_audit.update({
+                    "launch_prefix_min_clearance": min(
+                        row["clearance"] for row in prefix_rows),
+                    "launch_prefix_max_risk": max(
+                        row["risk"] for row in prefix_rows),
+                    "launch_prefix_manifold_violation_count": int(sum(
+                        not row["manifold_valid"] for row in prefix_rows)),
+                    "launch_prefix_hard_valid": bool(all(
+                        row["hard_valid"] for row in prefix_rows)),
+                })
             manifold_bad = [row["index"] for row in final_rows
                             if not row["manifold_valid"]]
             max_turn = float(wheelchair_sharp_turn_audit(
@@ -313,6 +393,7 @@ def run(trace_path, output_path):
                                   "completion_region_not_reached"),
                 "execution_geometry": geometry,
                 "turn_origin_audit": turn_origin,
+                "launch_prefix_audit": prefix_audit,
             })
             trials.append(trial)
             if valid:

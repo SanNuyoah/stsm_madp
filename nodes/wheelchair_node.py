@@ -2710,44 +2710,91 @@ class WheelchairNode:
         goal_dist = float(np.linalg.norm(to_goal))
         if goal_dist <= 1e-6:
             return None
-        heading = np.array([
-            np.cos(float(self.state[2])),
-            np.sin(float(self.state[2]))], float)
         goal_dir = to_goal / goal_dist
-        # Build a launch prefix that the diff-drive base can actually execute
-        # from its measured yaw.  The previous reverse-facing case snapped the
-        # prefix directly toward the goal; after a runtime replan this produced
-        # references with initial_heading_error ~= pi/2 and the controller
-        # advanced while turning away from monotonic goal progress.  Keep the
-        # first short segment aligned with the chassis heading, then let the
-        # cubic bridge converge back to the Morse/topology corridor.
-        blend = heading + goal_dir
-        if float(np.linalg.norm(blend)) <= 1e-6:
-            blend = heading
-        if np.dot(heading, goal_dir) < 0.0:
-            blend = heading
-        launch_dir = blend / max(float(np.linalg.norm(blend)), 1e-9)
-        step = max(0.06, min(0.12, 4.0 * float(self.topology_min_segment_length)))
-        launch_len = min(0.55, max(0.24, 0.22 * goal_dist))
-        prefix_count = max(3, int(np.ceil(launch_len / step)))
-        prefix = []
-        for i in range(prefix_count + 1):
-            p2 = start + launch_dir * min(launch_len, step * i)
-            if ref.shape[1] >= 3:
-                prefix.append([p2[0], p2[1], 0.0])
-            else:
-                prefix.append([p2[0], p2[1]])
-        prefix = np.asarray(prefix, float)
-        join = prefix[-1, :2]
+        # Build a heading-continuous local maneuver from the measured chassis
+        # pose to the existing refined corridor.  The former cubic bridge had
+        # a correct start tangent but could reverse within two very short
+        # samples (R009: 1.688 rad at final[1]).  Here every arc is sampled
+        # with n=ceil(angle / execution_turn_limit), so the local diff-drive
+        # turn contract holds before the path can reach later final gates.
+        execution_turn_limit = min(float(self.topology_max_corridor_turn), 0.40)
+        min_segment = max(0.06, min(
+            0.12, 4.0 * float(self.topology_min_segment_length)))
+        turning_radius = min_segment / max(execution_turn_limit, 1e-6)
+
+        def mod2pi(angle):
+            return float(angle) % (2.0 * np.pi)
+
+        def dubins_csc(start_pose, end_pose):
+            dx, dy = float(end_pose[0] - start_pose[0]), float(end_pose[1] - start_pose[1])
+            distance = float(np.hypot(dx, dy))
+            if distance <= 1e-9:
+                return []
+            d = distance / turning_radius
+            theta = float(np.arctan2(dy, dx))
+            alpha = mod2pi(float(start_pose[2]) - theta)
+            beta = mod2pi(float(end_pose[2]) - theta)
+            paths = []
+            # Standard LSL / RSR CSC primitives.  Both preserve the measured
+            # start yaw and the refined-corridor tangent at the join.
+            lsl_p2 = (2.0 + d * d - 2.0 * np.cos(alpha - beta) +
+                      2.0 * d * (np.sin(alpha) - np.sin(beta)))
+            if lsl_p2 >= -1e-9:
+                tmp = float(np.arctan2(
+                    np.cos(beta) - np.cos(alpha),
+                    d + np.sin(alpha) - np.sin(beta)))
+                paths.append(("LSL", (mod2pi(-alpha + tmp),
+                                      float(np.sqrt(max(0.0, lsl_p2))),
+                                      mod2pi(beta - tmp))))
+            rsr_p2 = (2.0 + d * d - 2.0 * np.cos(alpha - beta) +
+                      2.0 * d * (np.sin(beta) - np.sin(alpha)))
+            if rsr_p2 >= -1e-9:
+                tmp = float(np.arctan2(
+                    np.cos(alpha) - np.cos(beta),
+                    d - np.sin(alpha) + np.sin(beta)))
+                paths.append(("RSR", (mod2pi(alpha - tmp),
+                                      float(np.sqrt(max(0.0, rsr_p2))),
+                                      mod2pi(-beta + tmp))))
+            return paths
+
+        def sample_dubins(start_pose, primitive, values):
+            x, y, yaw = (float(start_pose[0]), float(start_pose[1]),
+                         float(start_pose[2]))
+            points = [[x, y, 0.0] if ref.shape[1] >= 3 else [x, y]]
+            for kind, value in zip(primitive, values):
+                if kind == "S":
+                    count = max(1, int(np.floor(
+                        turning_radius * float(value) / min_segment)))
+                else:
+                    count = max(1, int(np.ceil(
+                        float(value) / execution_turn_limit)))
+                increment = float(value) / float(count)
+                for _unused in range(count):
+                    if kind == "S":
+                        x += turning_radius * increment * np.cos(yaw)
+                        y += turning_radius * increment * np.sin(yaw)
+                    else:
+                        sign = 1.0 if kind == "L" else -1.0
+                        next_yaw = yaw + sign * increment
+                        x += sign * turning_radius * (
+                            np.sin(next_yaw) - np.sin(yaw))
+                        y -= sign * turning_radius * (
+                            np.cos(next_yaw) - np.cos(yaw))
+                        yaw = next_yaw
+                    points.append([x, y, 0.0] if ref.shape[1] >= 3 else [x, y])
+            return np.asarray(points, float)
+
         candidates = []
         if len(ref) > 1:
-            dists = np.linalg.norm(ref[:, :2] - join.reshape(1, 2), axis=1)
-            nearest_idx = int(np.argmin(dists))
             # Keep this repair strictly bounded.  R002 showed that scanning a
             # large join/scale grid inside planning can stall before any
             # diagnostics are written.  These few joins cover the nearest
             # reconnection plus the empirically stable early-Morse handoff
             # region without turning refinement into another planner.
+            # They are the existing join choices; this change only replaces
+            # the unsafe launch geometry between the robot and that join.
+            nearest_idx = int(np.argmin(np.linalg.norm(
+                ref[:, :2] - start.reshape(1, 2), axis=1)))
             join_indices = []
             for idx in (
                     nearest_idx,
@@ -2758,45 +2805,75 @@ class WheelchairNode:
                 if idx not in join_indices:
                     join_indices.append(idx)
             for join_idx in sorted(join_indices):
-                bridge_end = ref[join_idx]
                 if join_idx + 1 < len(ref):
                     tail_vec = ref[join_idx + 1, :2] - ref[join_idx, :2]
                 else:
                     tail_vec = goal - ref[join_idx, :2]
                 tail_norm = float(np.linalg.norm(tail_vec))
                 tail_dir = tail_vec / tail_norm if tail_norm > 1e-9 else goal_dir
-                bridge_len = float(np.linalg.norm(bridge_end[:2] - start))
-                if bridge_len <= 1e-6:
-                    continue
-                for scale in (0.45, 0.55):
-                    c1 = start + heading * bridge_len * float(scale)
-                    c2 = bridge_end[:2] - tail_dir * bridge_len * float(scale)
-                    sample_count = min(
-                        14, max(8, int(np.ceil(bridge_len / 0.10))))
-                    bridge = []
-                    for j in range(sample_count + 1):
-                        u = float(j) / float(sample_count)
-                        p2 = (
-                            (1.0 - u) ** 3 * start +
-                            3.0 * (1.0 - u) ** 2 * u * c1 +
-                            3.0 * (1.0 - u) * u ** 2 * c2 +
-                            u ** 3 * bridge_end[:2])
-                        if ref.shape[1] >= 3:
-                            bridge.append([p2[0], p2[1], 0.0])
-                        else:
-                            bridge.append([p2[0], p2[1]])
-                    bridge = np.asarray(bridge, float)
-                    tail = (
-                        ref[join_idx + 1:]
-                        if join_idx + 1 < len(ref) else ref[-1:])
-                    repaired = np.vstack([bridge, tail])
-                    candidates.append(np.asarray(repaired, float))
-        if not candidates:
-            repaired = np.vstack([prefix, ref])
-            candidates.append(np.asarray(repaired, float))
+                target_yaw = float(np.arctan2(tail_dir[1], tail_dir[0]))
+                for primitive, values in dubins_csc(
+                        (start[0], start[1], float(self.state[2])),
+                        (ref[join_idx, 0], ref[join_idx, 1], target_yaw)):
+                    prefix = sample_dubins(
+                        (start[0], start[1], float(self.state[2])),
+                        primitive, values)
+                    tail = (ref[join_idx + 1:]
+                            if join_idx + 1 < len(ref) else ref[-1:])
+                    candidates.append({
+                        "points": np.vstack([prefix, tail]),
+                        "prefix_point_count": int(len(prefix)),
+                        "join_index": int(join_idx),
+                        "primitive": str(primitive),
+                    })
         from stsm_madp.deform import path_curvature_metrics
         scored = []
-        for candidate in candidates:
+        self.last_launch_prefix_audit = {
+            "accepted": False, "reason": "no_heading_continuous_prefix",
+            "launch_prefix_point_count": 0,
+            "launch_prefix_max_turn": float("inf"),
+            "launch_prefix_sharp_turn_indices": [],
+            "prefix_join_max_turn": float("inf"),
+            "launch_prefix_min_clearance": 0.0,
+            "launch_prefix_max_risk": float("inf"),
+            "launch_prefix_manifold_violation_count": 0,
+            "launch_prefix_hard_valid": False,
+        }
+        for candidate_info in candidates:
+            candidate = np.asarray(candidate_info["points"], float)
+            prefix_count = int(candidate_info["prefix_point_count"])
+            local_points = candidate[:min(len(candidate), prefix_count + 1)]
+            local_turns = wheelchair_sharp_turn_audit(
+                local_points, turn_limit=execution_turn_limit)
+            local_max_turn = float(local_turns.get("max_turn", 0.0))
+            join_turn = float(wheelchair_sharp_turn_audit(
+                local_points[-3:], turn_limit=execution_turn_limit).get(
+                    "max_turn", 0.0)) if len(local_points) >= 3 else 0.0
+            safety_context, constraint = self._authoritative_safety_context(
+                corridor, reference=candidate)
+            evaluator = SafetyEvaluator(
+                manifold_constraint=dict(constraint.get(
+                    "manifold_constraint", {}) or {}),
+                corridor_constraint=dict(constraint.get(
+                    "corridor_constraint", {}) or {}),
+                risk_field=safety_context.get("social_field"))
+            safety_states = evaluator.evaluate_states(candidate[:prefix_count])
+            hard_invalid = [index for index, state in enumerate(safety_states)
+                            if not (bool(state.get("inside_manifold", False)) and
+                                    bool(state.get("inside_corridor", False)))]
+            safety_summary = {
+                "launch_prefix_min_clearance": min([
+                    float(state.get("clearance", 0.0)) for state in safety_states] or [0.0]),
+                "launch_prefix_max_risk": max([
+                    float(state.get("risk", 0.0)) for state in safety_states] or [0.0]),
+                "launch_prefix_manifold_violation_count": int(sum(
+                    not bool(state.get("inside_manifold", False))
+                    for state in safety_states)),
+                "launch_prefix_hard_valid": not bool(hard_invalid),
+            }
+            if (local_max_turn > execution_turn_limit + 1e-9 or
+                    join_turn > execution_turn_limit + 1e-9 or hard_invalid):
+                continue
             profile = wheelchair_nonholonomic_execution_profile(
                 candidate, self.state, self.goal,
                 min_step=max(0.03, self.topology_min_segment_length),
@@ -2807,11 +2884,24 @@ class WheelchairNode:
                 max(0.0, float(turns.get("max_turn", 0.0)) - 0.40) * 20.0 +
                 max(0.0, float(turns.get("max_curvature", 0.0)) - 8.0) * 4.0 +
                 float(profile.get("execution_profile_cost", 0.0)))
-            scored.append((score, candidate, profile, turns))
+            scored.append((score, candidate, profile, turns, candidate_info,
+                           local_turns, join_turn, safety_summary))
         if not scored:
             return None
-        _score, best, _profile, _turns = min(
+        _score, best, _profile, _turns, best_info, prefix_turns, join_turn, safety_summary = min(
             scored, key=lambda item: item[0])
+        self.last_launch_prefix_audit = {
+            "accepted": True,
+            "reason": "",
+            "launch_prefix_point_count": int(best_info["prefix_point_count"]),
+            "launch_prefix_max_turn": float(prefix_turns.get("max_turn", 0.0)),
+            "launch_prefix_sharp_turn_indices": list(
+                prefix_turns.get("sharp_turn_indices", [])),
+            "prefix_join_max_turn": float(join_turn),
+            "join_index": int(best_info["join_index"]),
+            "primitive": str(best_info["primitive"]),
+        }
+        self.last_launch_prefix_audit.update(safety_summary)
         return np.asarray(best, float)
 
     def _select_wheelchair_execution_reference(self, corr, refined, metrics):
@@ -2840,6 +2930,8 @@ class WheelchairNode:
         candidates = [(
             "refined", base, current, path_curvature_metrics(base))]
         repaired = self._make_heading_progress_prefix(base, corr)
+        repaired_launch_audit = dict(getattr(
+            self, "last_launch_prefix_audit", {}) or {})
         if repaired is not None and len(repaired) >= 2:
             repaired_profile = wheelchair_nonholonomic_execution_profile(
                 repaired, self.state, self.goal,
@@ -2856,6 +2948,8 @@ class WheelchairNode:
             raw = np.asarray(getattr(corr, "topology_ordered_waypoints", []), float)
         if raw.size > 0 and raw.ndim == 2 and len(raw) >= 2:
             raw_repaired = self._make_heading_progress_prefix(raw, corr)
+            raw_launch_audit = dict(getattr(
+                self, "last_launch_prefix_audit", {}) or {})
             if raw_repaired is not None and len(raw_repaired) >= 2:
                 raw_profile = wheelchair_nonholonomic_execution_profile(
                     raw_repaired, self.state, self.goal,
@@ -2867,6 +2961,8 @@ class WheelchairNode:
                     raw_repaired,
                     raw_profile,
                     path_curvature_metrics(raw_repaired)))
+        else:
+            raw_launch_audit = {}
         best_source, best_path, best_profile, best_turn_metrics = min(
             candidates,
             key=lambda item: (
@@ -2877,6 +2973,10 @@ class WheelchairNode:
             float(best_profile.get("execution_profile_cost", 0.0)) + 1e-6 <
             float(current.get("execution_profile_cost", 0.0)))
         out = dict(metrics or {})
+        if best_source == "diff_drive_launch_prefix":
+            out["launch_prefix_audit"] = dict(repaired_launch_audit)
+        elif best_source == "raw_diff_drive_launch_prefix":
+            out["launch_prefix_audit"] = dict(raw_launch_audit)
         out["nonholonomic_execution_profile"] = dict(best_profile)
         out["pre_repair_nonholonomic_execution_profile"] = dict(current)
         out["diff_drive_reference_repaired"] = bool(repaired_used)
