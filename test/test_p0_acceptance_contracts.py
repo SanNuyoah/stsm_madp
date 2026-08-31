@@ -1415,6 +1415,11 @@ def test_wheelchair_beam_reuses_identical_state_safety_evaluations():
 
     assert v >= 0.02
     assert field.phi_calls < 500
+    assert mpc.last_timing["safety_eval_call_count"] > 0
+    assert mpc.last_timing["cache_miss_count"] > 0
+    assert (mpc.last_timing["cache_hit_count"] > 0 and
+            mpc.last_timing["safety_eval_call_count"] <
+            mpc.last_timing["unique_rollout_state_count"])
 
 
 def test_wheelchair_predictive_mpc_reports_phase_timing():
@@ -1428,7 +1433,10 @@ def test_wheelchair_predictive_mpc_reports_phase_timing():
     timing = mpc.last_timing
     for field in (
             "t_reference_s", "t_rollout_s", "t_safety_eval_s",
-            "t_search_s", "t_post_s", "solve_wall_s"):
+            "t_search_s", "t_post_s", "solve_wall_s",
+            "safety_eval_call_count", "unique_rollout_state_count",
+            "cache_hit_count", "cache_miss_count",
+            "hard_safety_prune_count"):
         assert field in timing
         assert timing[field] >= 0.0
     assert timing["solve_wall_s"] >= timing["t_rollout_s"]

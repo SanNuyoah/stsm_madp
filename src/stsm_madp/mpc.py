@@ -5072,6 +5072,13 @@ class WheelchairMPC:
             "t_safety_eval_s": 0.0,
             "t_search_s": 0.0,
             "t_post_s": 0.0,
+            # These counters are solve-local by construction.  A dynamic
+            # social field must never reuse a previous solve's safety truth.
+            "safety_eval_call_count": 0,
+            "unique_rollout_state_count": 0,
+            "cache_hit_count": 0,
+            "cache_miss_count": 0,
+            "hard_safety_prune_count": 0,
         }
 
         def finish_timing():
@@ -5136,7 +5143,7 @@ class WheelchairMPC:
         # every equivalent branch.
         manifold_state_cache = {}
         interest_state_cache = {}
-        corridor_projection_cache = {}
+        rollout_state_keys = set()
         beam = [{
             "cost": 0.0,
             "state": np.array(x0, float),
@@ -5188,16 +5195,24 @@ class WheelchairMPC:
                 seen_positions = set()
                 uncached_states = []
                 for _u, x_next, _state_key, position_key in step_candidates:
+                    if _state_key not in rollout_state_keys:
+                        rollout_state_keys.add(_state_key)
+                        timing["unique_rollout_state_count"] += 1
                     if (position_key not in manifold_state_cache and
                             position_key not in seen_positions):
                         seen_positions.add(position_key)
                         uncached_positions.append(position_key)
                         uncached_states.append([x_next[0], x_next[1], 0.0])
+                        timing["cache_miss_count"] += 1
+                    else:
+                        timing["cache_hit_count"] += 1
                 if uncached_states:
                     for key, status in zip(
                             uncached_positions,
                             manifold_evaluator.evaluate_states(uncached_states)):
                         manifold_state_cache[key] = status
+                    timing["safety_eval_call_count"] += int(
+                        len(uncached_states))
                 if interest_enabled:
                     uncached_interest_keys = []
                     uncached_interest_states = []
@@ -5246,9 +5261,29 @@ class WheelchairMPC:
                             step_soft_cost += 10.0 * float(
                                 manifold_violation ** 2)
                     if hard_violation:
+                        timing["hard_safety_prune_count"] += 1
                         timing["t_safety_eval_s"] += max(
                             0.0, time.time() - safety_t0)
                         continue
+                    # The SafetyEvaluator result already contains the tube
+                    # projection.  Reusing it avoids a second corridor.project
+                    # for the same predicted state and rejects a hard tube
+                    # violation before interest or any objective work.
+                    tube = 0.0
+                    if corridor is not None:
+                        distance_to_corridor = float(manifold_state.get(
+                            "corridor_distance", 0.0))
+                        active_radius = float(manifold_state.get(
+                            "corridor_radius", getattr(corridor, "radius", 0.0)))
+                        tube_violation = max(
+                            0.0, distance_to_corridor - active_radius)
+                        if tube_violation > 1e-9 and tube_mode == "hard":
+                            violation_counts["trajectory_tube"] += 1
+                            timing["hard_safety_prune_count"] += 1
+                            timing["t_safety_eval_s"] += max(
+                                0.0, time.time() - safety_t0)
+                            continue
+                        tube = self.lam_tube * float(tube_violation ** 2)
                     if interest_enabled:
                         cached_interest = interest_state_cache.get(state_key)
                         summary, hit, reason = cached_interest
@@ -5277,21 +5312,6 @@ class WheelchairMPC:
                         social_weight *= self.near_goal_social_scale
                     social = social_weight * float(
                         manifold_state.get("risk", 0.0))
-                    tube = 0.0
-                    if corridor is not None:
-                        d = corridor_projection_cache.get(position_key)
-                        if d is None:
-                            _, d = corridor.project(np.array([
-                                x_next[0], x_next[1], 0.0]))
-                            corridor_projection_cache[position_key] = float(d)
-                        tube_violation = max(
-                            0.0, float(d) - float(corridor.radius))
-                        if tube_violation > 1e-9 and tube_mode == "hard":
-                            violation_counts["trajectory_tube"] += 1
-                            timing["t_safety_eval_s"] += max(
-                                0.0, time.time() - safety_t0)
-                            continue
-                        tube = self.lam_tube * float(tube_violation ** 2)
                     timing["t_safety_eval_s"] += max(
                         0.0, time.time() - safety_t0)
                     control = self.lam_u * float(np.dot(u, u))

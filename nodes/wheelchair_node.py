@@ -6848,7 +6848,10 @@ class WheelchairNode:
         samples = list(self.mpc_timing_history or [])
         fields = (
             "t_reference_s", "t_rollout_s", "t_safety_eval_s",
-            "t_search_s", "t_post_s", "solve_wall_s")
+            "t_search_s", "t_post_s", "solve_wall_s",
+            "safety_eval_call_count", "unique_rollout_state_count",
+            "cache_hit_count", "cache_miss_count",
+            "hard_safety_prune_count")
         summary = {"sample_count": int(len(samples))}
         for field in fields:
             values = [float(item.get(field, 0.0)) for item in samples]
