@@ -592,7 +592,12 @@ def run(trace_path, output_path, include_terminal_trials=True):
     existing_final_audit = _existing_final_reference_audit(candidate)
     terminal_preflight = terminal_acceptance_preflight(GOAL, 0.25, context)
     terminals = terminal_preflight["safe_terminal_candidates"]
-    terminals = sorted(terminals, key=lambda row: (row["distance_to_goal"], row["index"]))
+    terminals = sorted(
+        terminals,
+        key=lambda row: (
+            float(row["distance_to_goal"]),
+            -float(row["clearance"]),
+            float(row["risk"])))
     trials = []
     for rank, terminal in enumerate(terminals, start=1) if include_terminal_trials else []:
         terminal_point = np.array([terminal["x"], terminal["y"], 0.0])

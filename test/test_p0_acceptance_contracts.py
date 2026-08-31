@@ -2049,7 +2049,7 @@ def test_r010_c0001_curvature_replay_uses_diagnostics_yaw_and_repairs_window():
     assert terminal["terminal_trial_count"] == 1
     assert np.allclose(
         terminal["selected_terminal"][:2],
-        [-0.4782468564315457, 0.7232274123458663])
+        [-0.55, 0.7375])
     assert terminal["selected_terminal_distance_to_goal"] <= 0.25 + 1e-9
     assert terminal["rebuild_start_index"] == 17
     assert terminal["final_reference_valid"]
