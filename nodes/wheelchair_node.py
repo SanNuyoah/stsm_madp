@@ -3830,6 +3830,8 @@ class WheelchairNode:
                     corr, "refinement_tube_valid", False)),
                 "refinement_result": dict(getattr(
                     corr, "refinement_output", {}) or {}),
+                "planning_terminal_safety_context": dict(getattr(
+                    corr, "planning_terminal_safety_context", {}) or {}),
                 "refinement_trace": list(getattr(
                     corr, "refinement_trace", [])),
                 "before_clearance": float(getattr(corr, "before_clearance", 0.0)),

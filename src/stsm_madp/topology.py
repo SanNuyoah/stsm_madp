@@ -19,6 +19,7 @@ from stsm_madp.candidate_recovery import recover_candidates
 from stsm_madp.arm_topology_validator import ArmTopologyValidator
 from stsm_madp.topology_ik_solver import TopologyIKSolver
 from stsm_madp.topology_refinement import refine_topology_path
+from stsm_madp.safety_evaluator import safety_context_audit
 from stsm_madp.interest_points import forbidden_anchor_hit, pose_interest_risk
 from stsm_madp.task_semantics import (
     evaluate_task_cost,
@@ -2993,6 +2994,20 @@ class TopologicalCorridorPlanner:
             else:
                 feasibility = evaluate_candidate(
                     corridor, manifold_constraint, risk_field=self.field)
+            points_for_audit = np.asarray(
+                getattr(corridor, "waypoints", []), float)
+            corridor.planning_terminal_safety_context = (
+                safety_context_audit(
+                    points_for_audit[-1],
+                    manifold_constraint=manifold_constraint,
+                    corridor_constraint={
+                        "centerline": points_for_audit,
+                        "radius": float(getattr(corridor, "radius", 0.0)),
+                    },
+                    risk_field=self.field,
+                    stage="planning_candidate_validation",
+                    task_context_source="TopologyPlanner.field")
+                if len(points_for_audit) else {})
             corridor.manifold_feasibility = dict(feasibility)
             corridor.manifold_feasible = bool(feasibility.get("feasible", False))
             corridor.candidate_tube_valid = bool(feasibility.get(

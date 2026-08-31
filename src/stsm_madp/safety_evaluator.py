@@ -1,6 +1,9 @@
 import sys
 sys.dont_write_bytecode = True
 
+import hashlib
+import json
+
 import numpy as np
 
 from stsm_madp.manifold_constraint import (
@@ -23,6 +26,80 @@ def _as_points(points):
     if arr.shape[1] == 2:
         arr = np.hstack([arr, np.zeros((arr.shape[0], 1), float)])
     return arr[:, :3]
+
+
+def safety_context_audit(point, manifold_constraint=None, corridor_constraint=None,
+                         risk_field=None, stage="", task_context_source=""):
+    """Return a JSON-stable, point-level snapshot of one safety context."""
+    payload = dict(manifold_constraint or {})
+    evaluator = SafetyEvaluator(
+        manifold_constraint=payload,
+        corridor_constraint=corridor_constraint,
+        risk_field=risk_field)
+    p = _as_points(point)[0]
+    task_context = dict(getattr(risk_field, "task_context", {}) or {})
+    humans = list(getattr(risk_field, "humans", []) or [])
+    anchors = list(getattr(risk_field, "anchors", []) or [])
+    weights = (dict(risk_field.get_effective_weights())
+               if risk_field is not None and
+               hasattr(risk_field, "get_effective_weights") else {})
+    phi = dict(phi_prox=0.0, phi_close=0.0, phi_dir=0.0,
+               phi_body=0.0, phi_env=0.0, phi_total=0.0)
+    if risk_field is not None:
+        for human in humans:
+            phi["phi_prox"] += float(risk_field.phi_prox(p, human))
+            phi["phi_close"] += float(risk_field.phi_close(
+                p, np.zeros_like(p), human))
+            phi["phi_dir"] += float(risk_field.phi_dir(p, human))
+            phi["phi_body"] += float(risk_field.phi_body(p, human))
+        phi["phi_env"] = float(risk_field.phi_env(p))
+        phi["phi_total"] = float(risk_field.phi_s(p))
+    status = evaluator.evaluate_state(p)
+    fingerprint_payload = {
+        "task_state": str(task_context.get("task_state", "")),
+        "humans": [{
+            "position": np.asarray(h.pos, float).round(9).tolist(),
+            "heading": None if getattr(h, "heading", None) is None else
+            round(float(h.heading), 9),
+        } for h in humans],
+        "anchors": [{
+            "type": str(a.type), "center": np.asarray(a.center, float).round(9).tolist(),
+            "half_extent": np.asarray(a.half_extent, float).round(9).tolist(),
+            "weight": round(float(a.weight), 9), "forbidden": bool(a.forbidden),
+        } for a in anchors],
+        "weights": weights,
+        "rho": payload.get("rho", payload.get(
+            "risk_threshold", getattr(risk_field, "rho", None))),
+        "risk_threshold": evaluator.risk_threshold,
+        "clearance_threshold": evaluator.required_clearance,
+    }
+    fingerprint_json = json.dumps(
+        fingerprint_payload, sort_keys=True, separators=(",", ":"))
+    return dict({
+        "stage": str(stage), "x": float(p[0]), "y": float(p[1]),
+        "task_state": str(task_context.get("task_state", "")),
+        "task_context_source": str(task_context_source),
+        "human_count": int(len(humans)),
+        "human_positions": [np.asarray(h.pos, float).tolist() for h in humans],
+        "human_headings": [getattr(h, "heading", None) for h in humans],
+        "anchor_count": int(len(anchors)),
+        "anchor_types": [str(a.type) for a in anchors],
+        "social_field_id": (None if risk_field is None else
+                            risk_field.__class__.__name__),
+        "manifold_id": str(payload.get("type", "")),
+        "rho": fingerprint_payload["rho"],
+        "risk_threshold": float(evaluator.risk_threshold),
+        "clearance_threshold": float(evaluator.required_clearance),
+        "social_field_weights": weights,
+        "safety_context_fingerprint": hashlib.sha256(
+            fingerprint_json.encode("utf-8")).hexdigest(),
+        **phi,
+        "clearance": float(status["clearance"]),
+        "risk": float(status["risk"]),
+        "manifold_valid": bool(status["inside_manifold"]),
+        "hard_valid": bool(status["inside_manifold"] and
+                           status["inside_corridor"]),
+    })
 
 
 def _polyline_project(point, centerline):

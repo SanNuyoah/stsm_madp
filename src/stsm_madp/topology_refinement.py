@@ -13,7 +13,7 @@ from stsm_madp.manifold_constraint import (
     distance_to_manifold_boundary,
     manifold_risk_value,
 )
-from stsm_madp.safety_evaluator import SafetyEvaluator
+from stsm_madp.safety_evaluator import SafetyEvaluator, safety_context_audit
 
 
 def _as_points(path):
@@ -432,6 +432,13 @@ def refine_topology_path(corridor, samples_per_segment=12,
     pre_status = check_refinement_manifold_validity(
         original, manifold_constraint=manifold_constraint,
         corridor_constraint=corridor_constraint, risk_field=risk_fn)
+    refinement_terminal_safety_context = (
+        safety_context_audit(
+            original[-1], manifold_constraint=manifold_constraint,
+            corridor_constraint=corridor_constraint, risk_field=risk_fn,
+            stage="refinement_validation",
+            task_context_source="corridor.risk_field_or_corridor.field")
+        if len(original) else {})
     wheelchair_fast_refinement = (
         max_refinement_points and
         (footprint_checker is not None or
@@ -723,6 +730,7 @@ def refine_topology_path(corridor, samples_per_segment=12,
         "safety_unchecked_indices": list(safety_unchecked_indices),
         "terminal_force_checked_indices": list(
             terminal_force_checked_indices),
+        "refinement_terminal_safety_context": refinement_terminal_safety_context,
     }
     corridor.risk_before_refinement = float(risk_before)
     corridor.risk_after_refinement = float(risk_after)
@@ -763,6 +771,8 @@ def refine_topology_path(corridor, samples_per_segment=12,
     metrics["safety_unchecked_indices"] = list(safety_unchecked_indices)
     metrics["terminal_force_checked_indices"] = list(
         terminal_force_checked_indices)
+    metrics["refinement_terminal_safety_context"] = (
+        refinement_terminal_safety_context)
     metrics["trajectory_manifold_violation_count"] = int(
         corridor.trajectory_manifold_violation_count)
     metrics["trajectory_corridor_violation_count"] = int(
