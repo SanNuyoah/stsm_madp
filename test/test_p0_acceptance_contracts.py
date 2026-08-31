@@ -1477,6 +1477,7 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "def _runtime_replan_path_status(" in wheelchair_source
     assert "runtime_replan_connectability_attempts" in wheelchair_source
     assert "runtime_replan_connectability.json" in wheelchair_source
+    assert "runtime_recovery_diagnostics.json" in wheelchair_source
     assert "runtime_replan_connector_turn_limit" in wheelchair_source
     assert "runtime_replan_goal_progress_insufficient" in wheelchair_source
     assert "def _make_runtime_safe_connector(" in wheelchair_source
@@ -1489,6 +1490,12 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "_runtime_replan_connector_safety(" in wheelchair_source
     assert "critical_point_sequence_invalid" in wheelchair_source
     assert "def _runtime_recovery(" in wheelchair_source
+    assert "def _try_runtime_corridor_suffix_repair(" in wheelchair_source
+    assert "CORRIDOR_SUFFIX_REPAIR" in wheelchair_source
+    assert "runtime_suffix_start_index" in wheelchair_source
+    assert "suffix_outside_existing_tube" in wheelchair_source
+    assert "suffix_current_pose_unsafe" in wheelchair_source
+    assert "deferred_to_existing_runtime_chain" in wheelchair_source
     assert wheelchair_source.count("_runtime_recovery(") == 6
     assert wheelchair_source.count("new_corridor = self._plan_corridor()") == 1
     assert "runtime_full_replan_count" in wheelchair_source

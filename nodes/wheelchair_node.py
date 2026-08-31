@@ -299,6 +299,20 @@ class WheelchairNode:
         self.runtime_topology_candidate_switch_count = 0
         self.runtime_replan_connectability_attempts = []
         self._runtime_replan_context = None
+        # Runtime recovery is deliberately layered.  Keep this separate from
+        # the legacy replan/connectability evidence so a failed recovery can
+        # be attributed to the exact level that exhausted its contract.
+        self.runtime_recovery_attempt_id = 0
+        self.runtime_recovery_attempts = []
+        self.runtime_recovery_diagnostics = {
+            "recovery_level": "NORMAL_EXECUTION",
+            "recovery_reason": "",
+            "recovery_attempt_id": 0,
+            "level1_attempt_count": 0,
+            "level2_attempt_count": 0,
+            "level3_attempt_count": 0,
+            "final_failure_reason": "",
+        }
         self.runtime_global_stop_summary = {}
         self._runtime_gate_scale = 1.0
         self._runtime_gate_stop = False
@@ -4611,14 +4625,59 @@ class WheelchairNode:
         """
         if self.baseline:
             return corridor, False
+        self.runtime_recovery_attempt_id += 1
+        attempt = {
+            "recovery_level": "CORRIDOR_SUFFIX_REPAIR",
+            "recovery_reason": str(reason or ""),
+            "recovery_attempt_id": int(self.runtime_recovery_attempt_id),
+            "current_corridor_id": self._corridor_id(corridor, ""),
+            "current_corridor_label": self._corridor_label(corridor, ""),
+            "suffix_start_index": None,
+            "last_progress_stale_s": float(self._runtime_progress_stale_s),
+            "near_goal": bool(self._in_final_approach(float(np.linalg.norm(
+                self.state[:2] - np.asarray(self.goal[:2], float))))),
+            "level1": {}, "level2": {}, "level3": {},
+            "final_recovered": False,
+            "final_failure_reason": "",
+        }
+        repaired, repair_ok = self._try_runtime_corridor_suffix_repair(
+            corridor, attempt)
+        attempt["suffix_start_index"] = attempt["level1"].get(
+            "suffix_start_index", None)
+        if repair_ok:
+            attempt["final_recovered"] = True
+            attempt["recovery_level"] = "CORRIDOR_SUFFIX_REPAIR"
+            self.runtime_recovery_attempts.append(dict(attempt))
+            self.runtime_recovery_diagnostics = dict(attempt)
+            return repaired, True
+        # Phase 1 ends here: only an explicit Level-1 failure may enter the
+        # pre-existing bounded recovery chain.  The latter remains unchanged
+        # until its dedicated constrained-reconnect phase is implemented.
+        attempt["level2"] = {
+            "attempted": False,
+            "failure_reason": "deferred_to_existing_runtime_chain",
+        }
         switched, did_switch = self._switch_to_ranked_topology_candidate(
             corridor, reason)
         if switched is not None and did_switch:
+            attempt["level2"] = {
+                "attempted": True,
+                "kind": "existing_ranked_candidate_precheck",
+                "recovered": True,
+                "selected_corridor_id": self._corridor_id(switched, ""),
+            }
+            attempt["recovery_level"] = "CONSTRAINED_RECONNECT"
+            attempt["final_recovered"] = True
+            self.runtime_recovery_attempts.append(dict(attempt))
+            self.runtime_recovery_diagnostics = dict(attempt)
             return switched, True
         if self.runtime_full_replan_count >= 1:
             rospy.logwarn(
                 "[wc][recovery] fail closed reason=%s full_replan_count=%d",
                 reason, self.runtime_full_replan_count)
+            attempt["final_failure_reason"] = "runtime_full_replan_budget_exhausted"
+            self.runtime_recovery_attempts.append(dict(attempt))
+            self.runtime_recovery_diagnostics = dict(attempt)
             return corridor, False
         if deadline is not None:
             remaining = float((deadline - now).to_sec())
@@ -4632,8 +4691,15 @@ class WheelchairNode:
                     "[wc][recovery] skip full replan reason=%s remaining=%.1fs required=%.1fs; keep %s",
                     reason, remaining, required,
                     self._corridor_label(corridor, ""))
+                attempt["final_failure_reason"] = "runtime_full_replan_deadline_budget"
+                self.runtime_recovery_attempts.append(dict(attempt))
+                self.runtime_recovery_diagnostics = dict(attempt)
                 return corridor, False
         self.runtime_full_replan_count += 1
+        attempt["recovery_level"] = "FULL_TOPOLOGY_REPLAN"
+        attempt["level3"] = {"attempted": True, "recovered": False,
+                             "hard_valid_candidates": 0,
+                             "failure_reason": ""}
         self._runtime_replan_context = {
             "active": True,
             "reason": str(reason),
@@ -4655,6 +4721,12 @@ class WheelchairNode:
                 raise RuntimeError("replan produced empty runtime corridor")
             if self._corridor_is_topological(new_corridor):
                 self.last_topology_replan_time = now
+            attempt["level3"]["recovered"] = True
+            attempt["level3"]["selected_corridor_id"] = self._corridor_id(
+                new_corridor, "")
+            attempt["final_recovered"] = True
+            self.runtime_recovery_attempts.append(dict(attempt))
+            self.runtime_recovery_diagnostics = dict(attempt)
             return new_corridor, True
         except Exception as exc:
             # A failed trial replan is diagnostic evidence, but it must not
@@ -4672,9 +4744,91 @@ class WheelchairNode:
             rospy.logerr(
                 "[wc][recovery] full replan failed closed reason=%s current=%s: %s",
                 reason, self._corridor_label(corridor, ""), exc)
+            attempt["level3"]["failure_reason"] = "%s:%s" % (
+                type(exc).__name__, str(exc)[:160])
+            attempt["final_failure_reason"] = attempt["level3"]["failure_reason"]
+            self.runtime_recovery_attempts.append(dict(attempt))
+            self.runtime_recovery_diagnostics = dict(attempt)
             return corridor, False
         finally:
             self._runtime_replan_context = None
+
+    def _try_runtime_corridor_suffix_repair(self, corridor, attempt):
+        """Level 1: safely resume the forward suffix of this corridor only."""
+        level = {"attempted": True, "suffix_valid": False,
+                 "suffix_start_index": None, "repair_success": False,
+                 "failure_reason": ""}
+        attempt["level1"] = level
+        if corridor is None or self.state is None:
+            level["failure_reason"] = "state_or_corridor_unavailable"
+            return corridor, False
+        points, _source = self._final_corridor_trajectory(corridor)
+        points = self._as_corridor_points(points)
+        if len(points) < 2:
+            level["failure_reason"] = "corridor_suffix_empty"
+            return corridor, False
+        current = np.asarray(self.state[:2], float)
+        nearest = int(np.argmin(np.linalg.norm(points[:, :2] - current, axis=1)))
+        if nearest >= len(points) - 1:
+            level["suffix_start_index"] = int(nearest)
+            level["failure_reason"] = "corridor_suffix_exhausted"
+            return corridor, False
+        suffix = np.asarray(points[nearest:], float)
+        level["suffix_start_index"] = int(nearest)
+        level["suffix_point_count"] = int(len(suffix))
+        level["distance_to_suffix"] = float(np.linalg.norm(
+            suffix[0, :2] - current))
+        tube_limit = float(getattr(corridor, "radius", 0.0)) + float(
+            self.replan_tube_margin)
+        if level["distance_to_suffix"] > tube_limit + 1e-9:
+            level["failure_reason"] = "suffix_outside_existing_tube"
+            return corridor, False
+        probe = copy.copy(corridor)
+        probe.waypoints = np.asarray(suffix, float)
+        probe.centerline = np.asarray(suffix, float)
+        probe.refined_waypoints = np.asarray(suffix, float)
+        probe.refinement_output = {"final_trajectory": suffix.tolist(),
+                                   "reference_source": "runtime_suffix_repair"}
+        safety, footprint_reason = self._runtime_replan_connector_safety(
+            probe, np.asarray([np.r_[current, 0.0]], float))
+        level["current_pose_safety"] = dict(safety or {})
+        if not bool(safety.get("valid", False)) or footprint_reason:
+            level["failure_reason"] = "suffix_current_pose_unsafe"
+            return corridor, False
+        path_ok, path_reason, progress, path_safety = (
+            self._runtime_replan_path_status(probe, suffix))
+        level["suffix_safety"] = dict(path_safety or {})
+        level["predicted_goal_progress"] = float(progress)
+        if not path_ok:
+            level["failure_reason"] = str(path_reason)
+            return corridor, False
+        contract = self._stsm_corridor_execution_contract_status(probe, suffix)
+        level["stsm_execution_contract"] = dict(contract)
+        if not bool(contract.get("accepted", False)):
+            level["failure_reason"] = str(contract.get(
+                "failure_reason", "suffix_execution_contract_failed"))
+            return corridor, False
+        # Preserve corridor identity and topology metadata, replacing only its
+        # already validated forward reference.  This is tracking repair, not
+        # a connector or a new global route.
+        corridor.runtime_recovery_original_trajectory = np.asarray(points, float)
+        corridor.runtime_suffix_start_index = int(nearest)
+        corridor.waypoints = np.asarray(suffix, float)
+        corridor.centerline = np.asarray(suffix, float)
+        corridor.refined_waypoints = np.asarray(suffix, float)
+        output = dict(getattr(corridor, "refinement_output", {}) or {})
+        output["final_trajectory"] = suffix.tolist()
+        output["reference_source"] = "runtime_suffix_repair"
+        output["runtime_suffix_start_index"] = int(nearest)
+        corridor.refinement_output = output
+        corridor.final_reference_source = "runtime_suffix_repair"
+        corridor.reference_index = None
+        corridor.reference_progress_corridor_id = ""
+        self.u_prev = np.zeros(2)
+        self.mpc.last_sequence_progress = 0.0
+        level["suffix_valid"] = True
+        level["repair_success"] = True
+        return corridor, True
 
     def _runtime_candidate_first_step_status(self, candidate):
         """Check whether a ranked topology candidate is executable now.
@@ -6248,6 +6402,7 @@ class WheelchairNode:
         self._write_baseline_evidence()
         self._write_mpc_diagnostics()
         self._write_runtime_replan_connectability_diagnostics()
+        self._write_runtime_recovery_diagnostics()
         self._write_decision_trace()
         self._write_candidate_recovery_diagnostics()
 
@@ -6264,6 +6419,28 @@ class WheelchairNode:
         with open(os.path.join(
                 output_dir or ".", "runtime_replan_connectability.json"), "w") as f:
             json.dump(payload, f, indent=2, sort_keys=True)
+
+    def _write_runtime_recovery_diagnostics(self):
+        """Write the layered recovery evidence without replacing legacy logs."""
+        diag, _breakdown = self._mpc_output_paths()
+        output_dir = os.path.dirname(diag)
+        if output_dir and not os.path.isdir(output_dir):
+            os.makedirs(output_dir)
+        latest = dict(self.runtime_recovery_diagnostics or {})
+        level1_count = sum(1 for item in self.runtime_recovery_attempts
+                           if dict(item.get("level1", {}) or {}).get("attempted"))
+        level2_count = sum(1 for item in self.runtime_recovery_attempts
+                           if dict(item.get("level2", {}) or {}).get("attempted"))
+        level3_count = sum(1 for item in self.runtime_recovery_attempts
+                           if dict(item.get("level3", {}) or {}).get("attempted"))
+        latest["level1_attempt_count"] = int(level1_count)
+        latest["level2_attempt_count"] = int(level2_count)
+        latest["level3_attempt_count"] = int(level3_count)
+        latest["attempts"] = list(self.runtime_recovery_attempts)
+        self.runtime_recovery_diagnostics = dict(latest)
+        with open(os.path.join(
+                output_dir or ".", "runtime_recovery_diagnostics.json"), "w") as f:
+            json.dump(latest, f, indent=2, sort_keys=True)
 
     def _baseline_corridor_follow_control(self, corridor, ref, v, w, dist):
         if not (self.baseline and
