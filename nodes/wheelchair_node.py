@@ -4789,6 +4789,20 @@ class WheelchairNode:
         probe.refined_waypoints = np.asarray(suffix, float)
         probe.refinement_output = {"final_trajectory": suffix.tolist(),
                                    "reference_source": "runtime_suffix_repair"}
+        level["original_refined_tail"] = self._runtime_suffix_point_audit(
+            corridor, points[-10:], max(0, len(points) - 10),
+            "original_refined_corridor")
+        level["runtime_suffix_tail"] = self._runtime_suffix_point_audit(
+            probe, suffix[-10:], max(nearest, len(points) - 10),
+            "runtime_suffix")
+        last_solve = max([
+            int(item.get("solve_index", -1))
+            for item in self.mpc_reference_records] or [-1])
+        level["mpc_reference_tail"] = [
+            dict(item) for item in self.mpc_reference_records
+            if int(item.get("solve_index", -1)) == last_solve][-10:]
+        level["final_approach_audit"] = dict(getattr(
+            corridor, "runtime_final_approach_reference_audit", {}) or {})
         safety, footprint_reason = self._runtime_replan_connector_safety(
             probe, np.asarray([np.r_[current, 0.0]], float))
         level["current_pose_safety"] = dict(safety or {})
@@ -4829,6 +4843,39 @@ class WheelchairNode:
         level["suffix_valid"] = True
         level["repair_success"] = True
         return corridor, True
+
+    def _runtime_suffix_point_audit(self, corridor, points, start_index, source):
+        """Diagnostic-only per-point SafetyEvaluator audit for Level 1."""
+        pts = self._as_corridor_points(points)
+        if len(pts) == 0:
+            return []
+        constraint = build_topology_constraint(
+            selected_topology_graph=dict(getattr(
+                self.manifold, "last_topology_debug", {}) or {}),
+            selected_corridor=corridor, safe_manifold=self.manifold,
+            refined_reference=pts.tolist(), safe_threshold=float(self.manifold.rho),
+            minimum_clearance=0.10, phase="navigation", robot_type="wheelchair",
+            manifold_constraint_mode=self.manifold_constraint_mode)
+        evaluator = ManifoldConstraintEvaluator(
+            manifold_constraint=dict(constraint.get("manifold_constraint", {}) or {}),
+            corridor_constraint=dict(constraint.get("corridor_constraint", {}) or {}),
+            risk_field=self.field)
+        statuses = evaluator.evaluate_states(pts)
+        goal = np.asarray(self.goal[:2], float)
+        report = []
+        for local_idx, (point, status) in enumerate(zip(pts, statuses)):
+            report.append({
+                "index": int(start_index + local_idx),
+                "x": float(point[0]), "y": float(point[1]),
+                "distance_to_goal": float(np.linalg.norm(point[:2] - goal)),
+                "clearance": float(status.get("clearance", 0.0)),
+                "risk": float(status.get("risk", 0.0)),
+                "manifold_valid": bool(status.get("inside_manifold", False)),
+                "source": str(source),
+                "original_refined_index": int(start_index + local_idx),
+                "final_approach_generated": False,
+            })
+        return report
 
     def _runtime_candidate_first_step_status(self, candidate):
         """Check whether a ranked topology candidate is executable now.
@@ -5236,16 +5283,59 @@ class WheelchairNode:
         corridor.reference_horizon_end_distance_to_goal = float(
             current_goal_dist - horizon_goal_progress)
         corridor.reference_horizon_lookahead_m = float(max(0.0, end_s - start_s))
+        input_ref = np.asarray(ref, float).copy()
+        final_approach_generated = [False] * int(len(ref))
         if self.state is not None:
             dist_goal = float(np.linalg.norm(self.state[:2] - self.goal))
             if self._in_final_approach(dist_goal):
                 goal2 = np.asarray(self.goal[:2], float)
                 if len(ref) == 0:
                     ref = np.asarray([goal2], float)
+                    input_ref = np.asarray(ref, float).copy()
+                    final_approach_generated = [True]
                 else:
+                    final_approach_generated[-1] = bool(np.linalg.norm(
+                        ref[-1, :2] - goal2[:2]) > 1e-9)
                     ref[-1] = goal2
                 corridor.reference_horizon_goal_progress = float(dist_goal)
                 corridor.reference_horizon_end_distance_to_goal = 0.0
+        # Preserve a source map for audit only.  The final-approach endpoint
+        # is the sole point generated here; all other reference samples come
+        # from interpolation of the selected final corridor trajectory.
+        reference_map = []
+        for idx, point in enumerate(np.asarray(ref, float)):
+            original_index = -1
+            if len(waypoints) > 0:
+                original_index = int(np.argmin(np.linalg.norm(
+                    waypoints[:, :2] - point[:2], axis=1)))
+            reference_map.append({
+                "reference_index": int(idx),
+                "original_refined_index": int(original_index),
+                "final_approach_generated": bool(
+                    final_approach_generated[idx]),
+                "source": ("final_approach_goal_endpoint" if
+                           final_approach_generated[idx] else
+                           "refined_corridor_interpolation"),
+                "input_point": [float(v) for v in input_ref[idx, :2]],
+                "output_point": [float(v) for v in point[:2]],
+            })
+        corridor.runtime_reference_point_map = reference_map
+        corridor.runtime_final_approach_reference_audit = {
+            "final_approach_active": bool(
+                self.state is not None and self._in_final_approach(
+                    float(np.linalg.norm(self.state[:2] - self.goal)))),
+            "final_approach_trigger_distance": float(
+                np.linalg.norm(self.state[:2] - self.goal)
+                if self.state is not None else 0.0),
+            "input_path_tail": reference_map[-10:],
+            "generated_points": [item for item in reference_map
+                                 if item["final_approach_generated"]],
+            "output_path_tail": reference_map[-10:],
+            "safety_evaluator_reexecuted": False,
+            "clearance_checked": False,
+            "manifold_checked": False,
+            "risk_checked": False,
+        }
         self._record_mpc_reference(corridor, ref)
         self._record_baseline_reference_before_mpc(corridor, ref)
         return ref
@@ -5264,6 +5354,7 @@ class WheelchairNode:
             source_raw if source_raw else "fallback")
         solve_idx = int(self._mpc_reference_solve_index)
         self._mpc_reference_solve_index += 1
+        point_map = list(getattr(corridor, "runtime_reference_point_map", []) or [])
         for idx, p in enumerate(np.asarray(ref, float)):
             global_idx = len(self.mpc_reference_records)
             self.mpc_reference_records.append({
@@ -5275,6 +5366,15 @@ class WheelchairNode:
                 "horizon_point_index": idx,
                 "trajectory_point_index": global_idx,
                 "timestamp_or_s_index": global_idx,
+                "original_refined_index": int(
+                    point_map[idx].get("original_refined_index", -1))
+                if idx < len(point_map) else -1,
+                "final_approach_generated": bool(
+                    point_map[idx].get("final_approach_generated", False))
+                if idx < len(point_map) else False,
+                "reference_point_source": str(
+                    point_map[idx].get("source", ""))
+                if idx < len(point_map) else "",
                 "x": float(p[0]),
                 "y": float(p[1]),
                 "z": 0.0,
