@@ -510,6 +510,9 @@ class WheelchairNode:
         self.last_refined_footprint_max = 0.0
         self.last_refined_footprint_mean = 0.0
         self.last_refined_footprint_checked_points = 0
+        self.last_refined_footprint_checked_indices = []
+        self.last_refined_footprint_unchecked_indices = []
+        self.last_refined_footprint_terminal_force_checked_indices = []
         self.max_refined_footprint_check_points = max(8, int(rospy.get_param(
             "~topology/max_refined_footprint_check_points", 48)))
         self.max_refinement_path_points = max(8, int(rospy.get_param(
@@ -2309,6 +2312,7 @@ class WheelchairNode:
         pts = np.asarray(path, float)
         raw_count = int(len(pts))
         self.last_refined_footprint_checked_points = raw_count
+        indices = list(range(raw_count))
         if raw_count > int(self.max_refined_footprint_check_points):
             keep = np.linspace(
                 0, raw_count - 1,
@@ -2319,6 +2323,12 @@ class WheelchairNode:
             if indices[-1] != raw_count - 1:
                 indices.append(raw_count - 1)
             pts = np.asarray([pts[i] for i in indices], float)
+        self.last_refined_footprint_checked_indices = list(indices)
+        self.last_refined_footprint_unchecked_indices = sorted(
+            set(range(raw_count)) - set(indices))
+        self.last_refined_footprint_terminal_force_checked_indices = (
+            [] if raw_count == 0 else
+            [0] if raw_count == 1 else [0, raw_count - 1])
         phi_values = []
         max_phi = 0.0
         for idx, point in enumerate(pts):
@@ -2967,6 +2977,12 @@ class WheelchairNode:
                 self.max_refined_footprint_check_points)
             attempt["refined_footprint_checked_points"] = int(
                 self.last_refined_footprint_checked_points)
+            attempt["refined_footprint_checked_indices"] = list(
+                self.last_refined_footprint_checked_indices)
+            attempt["refined_footprint_unchecked_indices"] = list(
+                self.last_refined_footprint_unchecked_indices)
+            attempt["refined_footprint_terminal_force_checked_indices"] = list(
+                self.last_refined_footprint_terminal_force_checked_indices)
             attempt.update(self._runtime_replan_connectability_payload(corr))
             if not ok:
                 corr.reject_reason = str(reason)
@@ -3159,6 +3175,14 @@ class WheelchairNode:
                 metrics.get("diff_drive_reference_repaired", False))
             refinement_output["diff_drive_reference_source"] = str(metrics.get(
                 "diff_drive_reference_source", reference_source))
+            if execution_repaired:
+                # The launch-prefix / turn-recovery path is generated after
+                # refine_topology_path's manifold pass.  Preserve that fact in
+                # diagnostics; this does not alter its existing checks.
+                refinement_output["post_generation_safety_validation_performed"] = False
+                refinement_output["post_generation_safety_checked_indices"] = []
+                refinement_output["post_generation_safety_unchecked_indices"] = list(
+                    range(len(np.asarray(refined, float))))
             refinement_output["nonholonomic_execution_profile"] = dict(
                 metrics.get("nonholonomic_execution_profile", {}))
             refinement_output["pre_repair_nonholonomic_execution_profile"] = dict(

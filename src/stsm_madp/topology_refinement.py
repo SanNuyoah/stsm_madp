@@ -31,20 +31,20 @@ def _as_points(path):
     return pts[:, :3]
 
 
-def _limit_refinement_points(points, max_points=0, protected_points=None):
-    """Bound refinement work while preserving path endpoints.
+def _refinement_sample_indices(points, max_points=0, protected_points=None):
+    """Return the source indices kept by bounded refinement.
 
-    Topology enumeration may hand refinement a dense centerline.  For
-    wheelchair execution we only need a bounded representative polyline here:
-    safety/tube validity is still checked after refinement, and the downstream
-    MPC reference is generated from the accepted geometry.
+    This is intentionally shared by the limiter and diagnostics so audit data
+    describes the exact sampling behavior rather than a reconstructed guess.
     """
     pts = _as_points(points)
+    if len(pts) == 0:
+        return []
     max_points = int(max_points or 0)
     if max_points <= 0 or len(pts) <= max_points:
-        return pts.copy(), False
+        return list(range(len(pts)))
     if max_points <= 2:
-        return np.asarray([pts[0], pts[-1]], float), True
+        return [0, len(pts) - 1]
     protected = _as_points(protected_points)
     protected_indices = []
     if len(protected):
@@ -59,7 +59,22 @@ def _limit_refinement_points(points, max_points=0, protected_points=None):
         indices.insert(0, 0)
     if indices[-1] != len(pts) - 1:
         indices.append(len(pts) - 1)
-    return np.asarray([pts[i] for i in indices], float), True
+    return indices
+
+
+def _limit_refinement_points(points, max_points=0, protected_points=None):
+    """Bound refinement work while preserving path endpoints.
+
+    Topology enumeration may hand refinement a dense centerline.  For
+    wheelchair execution we only need a bounded representative polyline here:
+    safety/tube validity is still checked after refinement, and the downstream
+    MPC reference is generated from the accepted geometry.
+    """
+    pts = _as_points(points)
+    indices = _refinement_sample_indices(
+        pts, max_points, protected_points=protected_points)
+    limited = bool(int(max_points or 0) > 0 and len(pts) > int(max_points))
+    return np.asarray([pts[i] for i in indices], float), limited
 
 
 def _boundary_points(boundary):
@@ -396,9 +411,17 @@ def refine_topology_path(corridor, samples_per_segment=12,
         values = _as_points(values)
         if len(values):
             protected_waypoints.extend(list(values))
+    safety_checked_indices = _refinement_sample_indices(
+        raw_original, max_refinement_points,
+        protected_points=protected_waypoints)
     original, refinement_points_limited = _limit_refinement_points(
         raw_original, max_refinement_points,
         protected_points=protected_waypoints)
+    safety_unchecked_indices = sorted(set(range(len(raw_original))) - set(
+        safety_checked_indices))
+    terminal_force_checked_indices = (
+        [] if len(raw_original) == 0 else
+        [0] if len(raw_original) == 1 else [0, len(raw_original) - 1])
     risk_fn = getattr(corridor, "risk_field", None)
     if risk_fn is None:
         risk_fn = getattr(corridor, "field", None)
@@ -694,6 +717,12 @@ def refine_topology_path(corridor, samples_per_segment=12,
             corridor.trajectory_manifold_violation_count),
         "trajectory_corridor_violation_count": int(
             corridor.trajectory_corridor_violation_count),
+        "refined_path_point_count": int(len(raw_original)),
+        "safety_checked_point_count": int(len(safety_checked_indices)),
+        "safety_checked_indices": list(safety_checked_indices),
+        "safety_unchecked_indices": list(safety_unchecked_indices),
+        "terminal_force_checked_indices": list(
+            terminal_force_checked_indices),
     }
     corridor.risk_before_refinement = float(risk_before)
     corridor.risk_after_refinement = float(risk_after)
@@ -728,6 +757,12 @@ def refine_topology_path(corridor, samples_per_segment=12,
     metrics["raw_reference_path_count"] = int(len(raw_original))
     metrics["bounded_reference_path_count"] = int(len(original))
     metrics["refinement_points_limited"] = bool(refinement_points_limited)
+    metrics["refined_path_point_count"] = int(len(raw_original))
+    metrics["safety_checked_point_count"] = int(len(safety_checked_indices))
+    metrics["safety_checked_indices"] = list(safety_checked_indices)
+    metrics["safety_unchecked_indices"] = list(safety_unchecked_indices)
+    metrics["terminal_force_checked_indices"] = list(
+        terminal_force_checked_indices)
     metrics["trajectory_manifold_violation_count"] = int(
         corridor.trajectory_manifold_violation_count)
     metrics["trajectory_corridor_violation_count"] = int(
