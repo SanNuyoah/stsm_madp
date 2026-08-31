@@ -31,7 +31,7 @@ from stsm_madp.mpc import _phase_constraint_diagnostics_payload
 from stsm_madp.mpc import _task_state_diagnostics_payload
 from stsm_madp.mpc import evaluate_executed_trajectory
 from stsm_madp.mpc import wheelchair_nonholonomic_execution_profile
-from stsm_madp.safety_evaluator import SafetyEvaluator
+from stsm_madp.safety_evaluator import SafetyEvaluator, build_safety_context
 from stsm_madp.interest_points import pose_interest_risk, pose_interest_risk_batch
 from stsm_madp.social_field import (
     HumanState, SemanticAnchor, SocialField, SocialFieldParams)
@@ -46,13 +46,14 @@ from stsm_madp.decision_trace import trace_from_debug
 from stsm_madp.task_semantics import infer_task_context
 from stsm_madp.topology import TopologicalCorridorPlanner
 from stsm_madp.topology_refinement import _limit_refinement_points
+from stsm_madp.topology_refinement import refine_topology_path
 from stsm_madp.topology_candidate_generator import (
     TopologyDrivenCandidateGenerator, candidate_topology_identity,
     rank_feasible_candidates)
 from stsm_madp.topology_diagnostics_writer import _candidate_ranking_rows
 from stsm_madp.topology_constraint import build_topology_constraint
 from stsm_madp.corridor import (
-    CorridorContractError, require_corridor_contract,
+    Corridor, CorridorContractError, require_corridor_contract,
     validate_corridor_contract)
 
 
@@ -76,6 +77,41 @@ class BatchRiskField(object):
     def phi_s_batch(self, points, velocities=None):
         points = np.asarray(points, float)
         return points[:, 0] ** 2 + 0.5 * points[:, 1] ** 2
+
+
+def test_strict_safety_evaluator_fails_closed_without_social_context():
+    evaluator = SafetyEvaluator(
+        manifold_constraint={"minimum_clearance": 0.10,
+                             "risk_threshold": 2.0})
+    status = evaluator.evaluate_trajectory(
+        [[0.0, 0.0, 0.0]], require_social_context=True)
+
+    assert not status["valid"]
+    assert status["failure_reason"] == "missing_safety_context"
+
+
+def test_strict_refinement_uses_explicit_context_and_rejects_unsafe_point():
+    field = SocialField(SocialFieldParams(lam_env=1.5, sigma_env=0.4))
+    field.set_scene([], [SemanticAnchor(
+        "forbidden", [0.0, 0.0, 0.0], [0.2, 0.2, 0.2],
+        weight=2.0, forbidden=True)])
+    constraint = {"boundary": [], "minimum_clearance": 0.10,
+                  "risk_threshold": 2.0, "safe_threshold": 2.0}
+    context = build_safety_context(field, constraint, strict=True)
+    corridor = Corridor([[0.5, 0.0, 0.0], [0.0, 0.0, 0.0]], radius=0.5)
+    corridor.planning_safety_context_fingerprint = context["fingerprint"]
+
+    ok, _path, metrics, reason = refine_topology_path(
+        corridor, corridor_constraint={"centerline": corridor.waypoints,
+                                       "radius": corridor.radius},
+        manifold_constraint=constraint, max_refinement_points=48,
+        safety_context=context, require_social_context=True)
+
+    assert not ok
+    assert reason in ("clearance_violation", "risk_violation",
+                      "refined_manifold_violation")
+    assert (metrics["planning_safety_context_fingerprint"] ==
+            metrics["refinement_safety_context_fingerprint"])
 
 
 def test_batched_wheelchair_footprint_risk_matches_per_pose_evaluation():

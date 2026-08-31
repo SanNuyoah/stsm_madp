@@ -13,7 +13,8 @@ from stsm_madp.manifold_constraint import (
     distance_to_manifold_boundary,
     manifold_risk_value,
 )
-from stsm_madp.safety_evaluator import SafetyEvaluator, safety_context_audit
+from stsm_madp.safety_evaluator import (
+    SafetyEvaluator, build_safety_context, safety_context_audit)
 
 
 def _as_points(path):
@@ -146,8 +147,14 @@ def _distance_to_corridor(point, corridor_constraint):
 def check_refinement_manifold_validity(refined_trajectory,
                                        manifold_constraint=None,
                                        corridor_constraint=None,
-                                       risk_field=None):
+                                       risk_field=None, safety_context=None,
+                                       require_social_context=False):
     pts = _as_points(refined_trajectory)
+    context = dict(safety_context or {})
+    if context:
+        risk_field = context.get("social_field", risk_field)
+        manifold_constraint = context.get(
+            "manifold_constraint", manifold_constraint)
     manifold = _manifold_payload(manifold_constraint, risk_field=risk_field)
     corridor_payload = _corridor_payload(corridor_constraint)
     evaluator = SafetyEvaluator(
@@ -155,7 +162,8 @@ def check_refinement_manifold_validity(refined_trajectory,
         corridor_constraint=corridor_payload,
         risk_field=risk_field,
         planning_clearance_margin=0.0)
-    status = evaluator.evaluate_trajectory(pts)
+    status = evaluator.evaluate_trajectory(
+        pts, require_social_context=require_social_context)
     tube_status = evaluator.evaluate_corridor({
         "centerline": corridor_payload.get("centerline", []),
     })
@@ -171,7 +179,7 @@ def check_refinement_manifold_validity(refined_trajectory,
     manifold_valid = bool(
         int(status.get("manifold_violation_count", 0)) == 0 and
         clearance_valid and risk_valid)
-    return {
+    result = {
         "valid": bool(manifold_valid and tube_valid),
         "manifold_valid": bool(manifold_valid),
         "tube_valid": bool(tube_valid),
@@ -188,6 +196,9 @@ def check_refinement_manifold_validity(refined_trajectory,
         "minimum_clearance": float(minimum_clearance),
         "risk_threshold": float(risk_threshold),
     }
+    if status.get("failure_reason"):
+        result["failure_reason"] = str(status["failure_reason"])
+    return result
 
 
 def _manifold_penalty(path, manifold_constraint, risk_field=None):
@@ -399,7 +410,9 @@ def refine_topology_path(corridor, samples_per_segment=12,
                          max_curvature=None, max_turn=None,
                          footprint_checker=None, corridor_constraint=None,
                          manifold_constraint=None,
-                         max_refinement_points=0):
+                         max_refinement_points=0,
+                         safety_context=None,
+                         require_social_context=False):
     raw_original = np.asarray(getattr(corridor, "waypoints", []), float)
     protected_waypoints = []
     for attr in (
@@ -422,16 +435,43 @@ def refine_topology_path(corridor, samples_per_segment=12,
     terminal_force_checked_indices = (
         [] if len(raw_original) == 0 else
         [0] if len(raw_original) == 1 else [0, len(raw_original) - 1])
-    risk_fn = getattr(corridor, "risk_field", None)
-    if risk_fn is None:
-        risk_fn = getattr(corridor, "field", None)
+    context = dict(safety_context or {})
+    risk_fn = context.get("social_field")
+    if risk_fn is None and not require_social_context:
+        risk_fn = getattr(corridor, "risk_field", None)
+        if risk_fn is None:
+            risk_fn = getattr(corridor, "field", None)
     corridor_constraint = _corridor_payload(
         corridor_constraint, corridor=corridor)
     manifold_constraint = _manifold_payload(
         manifold_constraint, corridor=corridor, risk_field=risk_fn)
+    if context:
+        context = build_safety_context(
+            social_field=risk_fn, manifold_constraint=manifold_constraint,
+            task_context=context.get("task_context"),
+            source=context.get("source", "refinement"),
+            strict=require_social_context)
+    planning_fingerprint = str(getattr(
+        corridor, "planning_safety_context_fingerprint", "") or "")
+    refinement_fingerprint = str(context.get("fingerprint", "") or "")
+    if require_social_context and (risk_fn is None or not context):
+        return False, original.copy(), {
+            "success": False, "failure_reason": "missing_safety_context",
+            "planning_safety_context_fingerprint": planning_fingerprint,
+            "refinement_safety_context_fingerprint": refinement_fingerprint,
+        }, "missing_safety_context"
+    if (require_social_context and planning_fingerprint and
+            planning_fingerprint != refinement_fingerprint):
+        return False, original.copy(), {
+            "success": False,
+            "failure_reason": "safety_context_fingerprint_mismatch",
+            "planning_safety_context_fingerprint": planning_fingerprint,
+            "refinement_safety_context_fingerprint": refinement_fingerprint,
+        }, "safety_context_fingerprint_mismatch"
     pre_status = check_refinement_manifold_validity(
         original, manifold_constraint=manifold_constraint,
-        corridor_constraint=corridor_constraint, risk_field=risk_fn)
+        corridor_constraint=corridor_constraint, risk_field=risk_fn,
+        safety_context=context, require_social_context=require_social_context)
     refinement_terminal_safety_context = (
         safety_context_audit(
             original[-1], manifold_constraint=manifold_constraint,
@@ -773,6 +813,8 @@ def refine_topology_path(corridor, samples_per_segment=12,
         terminal_force_checked_indices)
     metrics["refinement_terminal_safety_context"] = (
         refinement_terminal_safety_context)
+    metrics["planning_safety_context_fingerprint"] = planning_fingerprint
+    metrics["refinement_safety_context_fingerprint"] = refinement_fingerprint
     metrics["trajectory_manifold_violation_count"] = int(
         corridor.trajectory_manifold_violation_count)
     metrics["trajectory_corridor_violation_count"] = int(

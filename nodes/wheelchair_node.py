@@ -30,6 +30,7 @@ from stsm_madp.mpc import (
 from stsm_madp.topology_constraint import (
     build_topology_constraint, write_topology_constraint)
 from stsm_madp.manifold_constraint_evaluator import ManifoldConstraintEvaluator
+from stsm_madp.safety_evaluator import SafetyEvaluator, build_safety_context
 from stsm_madp.safety_gate import SafetyGate, SafetyGateResult
 from stsm_madp.adp import (
     ADPCritic, ADPFeatureBuilder, ADPTransitionLearner,
@@ -2355,6 +2356,63 @@ class WheelchairNode:
         self.last_refined_footprint_checked_points = int(len(pts))
         return True, ""
 
+    def _authoritative_safety_context(self, corridor, reference=None):
+        """One authoritative STSM safety world for a planning cycle."""
+        points = self._as_corridor_points(
+            reference if reference is not None else
+            getattr(corridor, "waypoints", []))
+        constraint = build_topology_constraint(
+            selected_topology_graph=dict(getattr(
+                self.manifold, "last_topology_debug", {}) or {}),
+            selected_corridor=corridor, safe_manifold=self.manifold,
+            refined_reference=points.tolist(),
+            safe_threshold=float(self.manifold.rho), minimum_clearance=0.10,
+            phase="navigation", robot_type="wheelchair",
+            manifold_constraint_mode=self.manifold_constraint_mode)
+        return build_safety_context(
+            social_field=self.field,
+            manifold_constraint=dict(constraint.get("manifold_constraint", {}) or {}),
+            task_context=self.task_context,
+            source="WheelchairNode.authoritative_safety_context", strict=True), constraint
+
+    def _final_reference_safety_status(self, corridor, reference,
+                                       safety_context, constraint):
+        """Fail closed before a geometry-modified reference reaches MPC."""
+        points = self._as_corridor_points(reference)
+        evaluator = SafetyEvaluator(
+            manifold_constraint=dict(constraint.get("manifold_constraint", {}) or {}),
+            corridor_constraint=dict(constraint.get("corridor_constraint", {}) or {}),
+            risk_field=safety_context.get("social_field"))
+        states = evaluator.evaluate_states(points)
+        hard_invalid = [idx for idx, item in enumerate(states) if not (
+            bool(item.get("inside_manifold", False)) and
+            bool(item.get("inside_corridor", False)))]
+        manifold_invalid = [idx for idx, item in enumerate(states) if not bool(
+            item.get("inside_manifold", False))]
+        min_clearance = min([float(item.get("clearance", 0.0))
+                             for item in states] or [0.0])
+        max_risk = max([float(item.get("risk", 0.0)) for item in states] or [0.0])
+        valid = bool(points.size and safety_context.get("social_field") is not None and
+                     not hard_invalid)
+        reason = ""
+        if safety_context.get("social_field") is None:
+            reason = "missing_safety_context"
+        elif hard_invalid:
+            reason = "final_reference_manifold_violation"
+        return {
+            "final_reference_valid": valid,
+            "reject_reason": reason,
+            "point_count": int(len(points)),
+            "checked_count": int(len(points)),
+            "first_hard_invalid_index": (hard_invalid[0] if hard_invalid else None),
+            "hard_invalid_indices": hard_invalid,
+            "manifold_violation_indices": manifold_invalid,
+            "min_clearance": float(min_clearance),
+            "max_risk": float(max_risk),
+            "final_reference_safety_context_fingerprint": str(
+                safety_context.get("fingerprint", "")),
+        }
+
     def _project_points_to_corridor(self, path, corridor, margin=0.85):
         pts = np.asarray(path, float)
         if pts.size == 0:
@@ -2957,6 +3015,11 @@ class WheelchairNode:
                 cid, int(index), int(self.topology_refinement_samples),
                 int(self.max_refinement_path_points),
                 int(self.max_refined_footprint_check_points))
+            safety_context, refinement_constraint = (
+                self._authoritative_safety_context(corr))
+            corr.planning_safety_context_fingerprint = str(
+                safety_context.get("fingerprint", ""))
+            corr.planning_safety_context = dict(safety_context)
             refine_t0 = time.time()
             ok, refined, metrics, reason = refine_topology_path(
                 corr,
@@ -2965,7 +3028,13 @@ class WheelchairNode:
                     float(self.topology_max_corridor_curvature), 8.0),
                 max_turn=self.topology_max_corridor_turn,
                 footprint_checker=self._footprint_path_checker,
-                max_refinement_points=self.max_refinement_path_points)
+                corridor_constraint=dict(refinement_constraint.get(
+                    "corridor_constraint", {}) or {}),
+                manifold_constraint=dict(refinement_constraint.get(
+                    "manifold_constraint", {}) or {}),
+                max_refinement_points=self.max_refinement_path_points,
+                safety_context=safety_context,
+                require_social_context=True)
             rospy.loginfo(
                 "[wc][refine] done %s ok=%s reason=%s elapsed=%.3fs",
                 cid, bool(ok), str(reason), time.time() - refine_t0)
@@ -3144,6 +3213,23 @@ class WheelchairNode:
                     getattr(corr, "corridor_id", getattr(corr, "label", "")),
                     refined_max_turn, executable_turn_limit,
                     executable_turn_tolerance)
+            _unused_context, final_constraint = self._authoritative_safety_context(
+                corr, reference=refined)
+            final_safety = self._final_reference_safety_status(
+                corr, refined, safety_context, final_constraint)
+            attempt["final_reference_safety"] = dict(final_safety)
+            if not bool(final_safety.get("final_reference_valid", False)):
+                corr.reject_reason = str(final_safety.get(
+                    "reject_reason", "final_reference_manifold_violation"))
+                attempt["accepted"] = False
+                attempt["reject_reason"] = str(corr.reject_reason)
+                refinement_attempts.append(attempt)
+                rospy.logwarn(
+                    "[wc][refine] reject %s final_reference=%s first_invalid=%s",
+                    getattr(corr, "corridor_id", getattr(corr, "label", "")),
+                    corr.reject_reason,
+                    str(final_safety.get("first_hard_invalid_index")))
+                continue
             attempt["accepted"] = True
             attempt["reject_reason"] = ""
             attempt["execution_curvature_limit"] = float(
@@ -3175,6 +3261,11 @@ class WheelchairNode:
                 metrics.get("diff_drive_reference_repaired", False))
             refinement_output["diff_drive_reference_source"] = str(metrics.get(
                 "diff_drive_reference_source", reference_source))
+            refinement_output["planning_safety_context_fingerprint"] = str(
+                safety_context.get("fingerprint", ""))
+            refinement_output["refinement_safety_context_fingerprint"] = str(
+                metrics.get("refinement_safety_context_fingerprint", ""))
+            refinement_output["final_reference_safety"] = dict(final_safety)
             if execution_repaired:
                 # The launch-prefix / turn-recovery path is generated after
                 # refine_topology_path's manifold pass.  Preserve that fact in

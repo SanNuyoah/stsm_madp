@@ -19,7 +19,8 @@ from stsm_madp.candidate_recovery import recover_candidates
 from stsm_madp.arm_topology_validator import ArmTopologyValidator
 from stsm_madp.topology_ik_solver import TopologyIKSolver
 from stsm_madp.topology_refinement import refine_topology_path
-from stsm_madp.safety_evaluator import safety_context_audit
+from stsm_madp.safety_evaluator import (
+    build_safety_context, safety_context_audit)
 from stsm_madp.interest_points import forbidden_anchor_hit, pose_interest_risk
 from stsm_madp.task_semantics import (
     evaluate_task_cost,
@@ -3080,6 +3081,12 @@ class TopologicalCorridorPlanner:
                 "type": "safe_manifold",
                 "used": True,
             }
+            planning_context = build_safety_context(
+                social_field=self.field,
+                manifold_constraint=corridor.manifold_constraint,
+                source="TopologyPlanner.field", strict=True)
+            corridor.planning_safety_context_fingerprint = str(
+                planning_context.get("fingerprint", ""))
             refine_topology_path(
                 corridor,
                 samples_per_segment=12,
@@ -3091,7 +3098,9 @@ class TopologicalCorridorPlanner:
                         getattr(corridor, "waypoints", [])), float).tolist(),
                     "radius": float(getattr(corridor, "radius", 0.0)),
                 },
-                manifold_constraint=corridor.manifold_constraint)
+                manifold_constraint=corridor.manifold_constraint,
+                safety_context=planning_context,
+                require_social_context=True)
             score = self.evaluate_corridor(
                 corridor, node_ids, base_cost, start=start, goal=goal)
             corridor.topology_cost = float(score["topology_cost"])
@@ -4128,6 +4137,12 @@ class TopologicalCorridorPlanner:
                 "type": "safe_manifold",
                 "used": True,
             }
+            planning_context = build_safety_context(
+                social_field=self.field,
+                manifold_constraint=corr.manifold_constraint,
+                source="TopologyPlanner.field", strict=True)
+            corr.planning_safety_context_fingerprint = str(
+                planning_context.get("fingerprint", ""))
             refine_topology_path(
                 corr,
                 samples_per_segment=12,
@@ -4137,7 +4152,9 @@ class TopologicalCorridorPlanner:
                     "centerline": np.asarray(corr.centerline, float).tolist(),
                     "radius": float(getattr(corr, "radius", 0.0)),
                 },
-                manifold_constraint=corr.manifold_constraint)
+                manifold_constraint=corr.manifold_constraint,
+                safety_context=planning_context,
+                require_social_context=True)
             corr.morse_induced = True
             corr.morse_forced = 0
             forced_count += 1

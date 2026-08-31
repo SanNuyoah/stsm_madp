@@ -28,6 +28,45 @@ def _as_points(points):
     return arr[:, :3]
 
 
+def build_safety_context(social_field=None, manifold_constraint=None,
+                         task_context=None, source="", strict=False):
+    """Build the explicit, serializable identity for hard social safety."""
+    payload = dict(manifold_constraint or {})
+    context = dict(task_context if task_context is not None else
+                   getattr(social_field, "task_context", {}) or {})
+    humans = list(getattr(social_field, "humans", []) or [])
+    anchors = list(getattr(social_field, "anchors", []) or [])
+    weights = (dict(social_field.get_effective_weights())
+               if social_field is not None and
+               hasattr(social_field, "get_effective_weights") else {})
+    identity = {
+        "task_state": str(context.get("task_state", "")),
+        "humans": [{"position": np.asarray(h.pos, float).round(9).tolist(),
+                    "heading": None if getattr(h, "heading", None) is None
+                    else round(float(h.heading), 9)} for h in humans],
+        "anchors": [{"type": str(a.type),
+                     "center": np.asarray(a.center, float).round(9).tolist(),
+                     "half_extent": np.asarray(a.half_extent, float).round(9).tolist(),
+                     "weight": round(float(a.weight), 9),
+                     "forbidden": bool(a.forbidden)} for a in anchors],
+        "weights": weights,
+        "rho": payload.get("rho", payload.get("risk_threshold", None)),
+        "risk_threshold": payload.get("effective_risk_threshold",
+                                      payload.get("risk_threshold", None)),
+        "clearance_threshold": payload.get("effective_minimum_clearance",
+                                            payload.get("minimum_clearance", None)),
+    }
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return {
+        "social_field": social_field,
+        "manifold_constraint": payload,
+        "task_context": context,
+        "source": str(source),
+        "strict": bool(strict),
+        "fingerprint": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+    }
+
+
 def safety_context_audit(point, manifold_constraint=None, corridor_constraint=None,
                          risk_field=None, stage="", task_context_source=""):
     """Return a JSON-stable, point-level snapshot of one safety context."""
@@ -47,13 +86,19 @@ def safety_context_audit(point, manifold_constraint=None, corridor_constraint=No
                phi_body=0.0, phi_env=0.0, phi_total=0.0)
     if risk_field is not None:
         for human in humans:
-            phi["phi_prox"] += float(risk_field.phi_prox(p, human))
-            phi["phi_close"] += float(risk_field.phi_close(
-                p, np.zeros_like(p), human))
-            phi["phi_dir"] += float(risk_field.phi_dir(p, human))
-            phi["phi_body"] += float(risk_field.phi_body(p, human))
-        phi["phi_env"] = float(risk_field.phi_env(p))
-        phi["phi_total"] = float(risk_field.phi_s(p))
+            if hasattr(risk_field, "phi_prox"):
+                phi["phi_prox"] += float(risk_field.phi_prox(p, human))
+            if hasattr(risk_field, "phi_close"):
+                phi["phi_close"] += float(risk_field.phi_close(
+                    p, np.zeros_like(p), human))
+            if hasattr(risk_field, "phi_dir"):
+                phi["phi_dir"] += float(risk_field.phi_dir(p, human))
+            if hasattr(risk_field, "phi_body"):
+                phi["phi_body"] += float(risk_field.phi_body(p, human))
+        if hasattr(risk_field, "phi_env"):
+            phi["phi_env"] = float(risk_field.phi_env(p))
+        if hasattr(risk_field, "phi_s"):
+            phi["phi_total"] = float(risk_field.phi_s(p))
     status = evaluator.evaluate_state(p)
     fingerprint_payload = {
         "task_state": str(task_context.get("task_state", "")),
@@ -343,8 +388,21 @@ class SafetyEvaluator(object):
             "phase_progress": float(phase_progress or 0.0),
         }
 
-    def evaluate_trajectory(self, traj):
+    def evaluate_trajectory(self, traj, require_social_context=False):
         pts = _as_points(traj)
+        if require_social_context and self.risk_field is None:
+            return {
+                "min_clearance": 0.0, "max_risk": 0.0,
+                "manifold_violation_count": int(len(pts)),
+                "corridor_violation_count": 0, "valid": False,
+                "minimum_clearance": float(self.minimum_clearance),
+                "nominal_minimum_clearance": float(self.nominal_minimum_clearance),
+                "effective_minimum_clearance": float(self.minimum_clearance),
+                "required_clearance": float(self.required_clearance),
+                "planning_clearance_margin": float(self.planning_clearance_margin),
+                "risk_threshold": float(self.risk_threshold),
+                "failure_reason": "missing_safety_context",
+            }
         min_clearance = float("inf")
         max_risk = 0.0
         manifold_violation_count = 0
