@@ -1950,10 +1950,10 @@ def test_failed_wheelchair_diagnostics_persist_candidate_path_trace():
     assert not saved["path_trace_complete"]
 
 
-def test_r009_safe_terminal_replay_recreates_authoritative_terminal_audit():
+def test_r010_c0001_curvature_replay_uses_diagnostics_yaw_and_repairs_window():
     script = os.path.join(
         ROOT, "scripts", "analysis", "replay_c0001_safe_terminal_trials.py")
-    spec = importlib.util.spec_from_file_location("r009_terminal_replay", script)
+    spec = importlib.util.spec_from_file_location("r010_curvature_replay", script)
     replay = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(replay)
 
@@ -1964,24 +1964,29 @@ def test_r009_safe_terminal_replay_recreates_authoritative_terminal_audit():
     assert np.isclose(audit["goal_risk"], 2.5016565419952275)
     assert audit["safe_terminal_candidate_count"] == 6
 
-    trace = os.path.join(ROOT, "results", "runs", "20260831_R009",
+    trace = os.path.join(ROOT, "results", "runs", "20260831_R010",
                          "wheelchair", "stsm", "candidate_path_trace.json")
     with tempfile.TemporaryDirectory() as tmp:
-        replayed = replay.run(trace, os.path.join(tmp, "turn_origin.json"))
-    trial = next(item for item in replayed["trials"]
-                 if item["rebuild_start_idx"] == 17 and
-                 np.allclose(item["selected_terminal"][:2],
-                             [-0.4782468564315457, 0.7232274123458663]))
-    turn = trial["turn_origin_audit"]
-    prefix = trial["launch_prefix_audit"]
-    assert prefix["launch_prefix_point_count"] > 5
-    assert prefix["launch_prefix_max_turn"] <= replay.TURN + 1e-9
-    assert prefix["prefix_join_max_turn"] <= replay.TURN + 1e-9
-    assert prefix["launch_prefix_hard_valid"]
-    assert prefix["launch_prefix_min_clearance"] >= replay.CLEARANCE
-    repair = trial["refined_main_turn_repair"]
+        replayed = replay.run(
+            trace, os.path.join(tmp, "curvature.json"),
+            include_terminal_trials=False)
+
+    assert replayed["initial_pose_source"] == "diagnostics_ros_log"
+    assert np.allclose(replayed["initial_pose"], [2.0, 1.5, -2.4])
+    existing = replayed["r010_existing_final_reference_audit"]
+    assert existing["available"]
+    assert np.isclose(
+        existing["execution_geometry"]["max_curvature"],
+        9.268526027217332)
+    assert existing["curvature_origin_audit"]["max_curvature_index"] == 46
+
+    replay_geom = replayed["execution_geometry_without_safe_terminal"]
+    repair = replay_geom["refined_main_turn_repair"]
     assert repair["repair_applied"]
+    assert repair["repair_method"] == "curvature_aware_cubic_window"
     assert repair["inserted_point_count"] == 3
     assert repair["repaired_local_max_turn"] <= replay.TURN + 1e-9
-    assert trial["final_reference_valid"]
-    assert trial["final_max_turn"] <= replay.TURN + 1e-9
+    assert repair["repaired_local_max_curvature"] <= replay.CURVATURE + 1e-9
+    assert replay_geom["execution_geometry"]["max_turn"] <= replay.TURN + 1e-9
+    assert (replay_geom["execution_geometry"]["max_curvature"] <=
+            replay.CURVATURE + 1e-9)

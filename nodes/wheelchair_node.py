@@ -2906,11 +2906,13 @@ class WheelchairNode:
 
     def _repair_c0001_refined_main_turn(self, corr, reference):
         """Repair only c0001's bounded refined-main execution window."""
+        from stsm_madp.deform import path_curvature_metrics
         candidate_id = str(getattr(corr, "corridor_id", ""))
         path = np.asarray(reference, float)
         if candidate_id != "wheelchair_c0001":
             return path, {"repair_applied": False, "reason": "not_c0001"}
         turn_limit = min(float(self.topology_max_corridor_turn), 0.40)
+        curvature_limit = min(float(self.topology_max_corridor_curvature), 8.0)
         audit = wheelchair_sharp_turn_audit(path, turn_limit=turn_limit)
         if not audit.get("sharp_turns"):
             return path, {"repair_applied": False, "reason": "no_sharp_turn"}
@@ -2924,26 +2926,74 @@ class WheelchairNode:
         total_turn = abs(float(np.arctan2(
             np.sin(after - before), np.cos(after - before))))
         n_turn_steps = max(2, int(np.ceil(total_turn / turn_limit)))
+        attempts = []
         handle = min(0.03, 0.35 * min(
             float(np.linalg.norm(p16[:2] - p15[:2])),
             float(np.linalg.norm(p17[:2] - p16[:2]))))
         for point_count in (n_turn_steps, n_turn_steps + 1, n_turn_steps + 2):
-            c1 = p16[:2] + handle * np.array([np.cos(before), np.sin(before)])
-            c2 = p17[:2] - handle * np.array([np.cos(after), np.sin(after)])
+            attempts.append({
+                "method": "cubic_heading_interpolation",
+                "left": center,
+                "right": center + 1,
+                "point_count": int(point_count),
+                "handle": float(handle),
+            })
+        # If preserving the sharp center as a fixed waypoint requires a very
+        # short first generated segment, turn can pass while curvature fails.
+        # Try one bounded replacement window using the original adjacent
+        # headings and enough chord length for the same turn/curvature gates.
+        left = max(0, center - 2)
+        right = min(len(path) - 1, center + 1)
+        chord = float(np.linalg.norm(path[right, :2] - path[left, :2]))
+        if right > left + 1 and chord > 1e-9:
+            for handle_scale in (0.25, 0.40, 0.60, 0.80, 1.00):
+                for point_count in range(4, 10):
+                    attempts.append({
+                        "method": "curvature_aware_cubic_window",
+                        "left": int(left),
+                        "right": int(right),
+                        "point_count": int(point_count),
+                        "handle": float(chord * handle_scale),
+                    })
+        for attempt in attempts:
+            method = str(attempt["method"])
+            left_idx = int(attempt["left"])
+            right_idx = int(attempt["right"])
+            point_count = int(attempt["point_count"])
+            start_pt = path[left_idx]
+            end_pt = path[right_idx]
+            if method == "cubic_heading_interpolation":
+                h_start = before
+                h_end = after
+            else:
+                h_start = float(np.arctan2(
+                    path[left_idx + 1, 1] - path[left_idx, 1],
+                    path[left_idx + 1, 0] - path[left_idx, 0]))
+                h_end = float(np.arctan2(
+                    path[right_idx, 1] - path[right_idx - 1, 1],
+                    path[right_idx, 0] - path[right_idx - 1, 0]))
+            c1 = start_pt[:2] + float(attempt["handle"]) * np.array(
+                [np.cos(h_start), np.sin(h_start)])
+            c2 = end_pt[:2] - float(attempt["handle"]) * np.array(
+                [np.cos(h_end), np.sin(h_end)])
             inserts = []
             for index in range(1, point_count):
                 u = float(index) / float(point_count)
-                point = ((1.0 - u) ** 3 * p16[:2] +
+                point = ((1.0 - u) ** 3 * start_pt[:2] +
                          3.0 * (1.0 - u) ** 2 * u * c1 +
-                         3.0 * (1.0 - u) * u ** 2 * c2 + u ** 3 * p17[:2])
+                         3.0 * (1.0 - u) * u ** 2 * c2 +
+                         u ** 3 * end_pt[:2])
                 inserts.append([point[0], point[1], 0.0]
                                if path.shape[1] >= 3 else [point[0], point[1]])
-            local = np.vstack([path[:center + 1], np.asarray(inserts, float),
-                               path[center + 1:]])
-            window = local[max(0, center - 2):min(
-                len(local), center + point_count + 2)]
+            local = np.vstack([path[:left_idx + 1], np.asarray(inserts, float),
+                               path[right_idx:]])
+            new_right_idx = left_idx + len(inserts) + 1
+            window = local[max(0, left_idx - 2):min(
+                len(local), new_right_idx + 3)]
             local_audit = wheelchair_sharp_turn_audit(
                 window, turn_limit=turn_limit)
+            local_metrics = path_curvature_metrics(window)
+            full_metrics = path_curvature_metrics(local)
             context, constraint = self._authoritative_safety_context(
                 corr, reference=local)
             evaluator = SafetyEvaluator(
@@ -2953,27 +3003,34 @@ class WheelchairNode:
                     "corridor_constraint", {}) or {}),
                 risk_field=context.get("social_field"))
             states = evaluator.evaluate_states(local[
-                center + 1:center + 1 + len(inserts)])
+                left_idx + 1:left_idx + 1 + len(inserts)])
             hard_valid = all(bool(item.get("inside_manifold", False)) and
                              bool(item.get("inside_corridor", False))
                              for item in states)
             if (float(local_audit.get("max_turn", 0.0)) <= turn_limit + 1e-9 and
-                    hard_valid):
+                    float(local_metrics.get("max_curvature", 0.0)) <=
+                    curvature_limit + 1e-9 and
+                    float(full_metrics.get("max_curvature", 0.0)) <=
+                    curvature_limit + 1e-9 and hard_valid):
                 return local, {
                     "repair_applied": True,
-                    "repair_window_refined_indices": [center - 2, center + 1],
-                    "original_window_point_count": 4,
-                    "repaired_window_point_count": 4 + len(inserts),
+                    "repair_window_refined_indices": [left_idx, right_idx],
+                    "original_window_point_count": int(right_idx - left_idx + 1),
+                    "repaired_window_point_count": int(2 + len(inserts)),
                     "inserted_point_count": len(inserts),
                     "n_turn_steps": n_turn_steps,
                     "attempt_point_count": point_count,
-                    "repair_method": "cubic_heading_interpolation",
+                    "repair_method": method,
                     "original_max_turn": float(sharp["local_turn"]),
                     "repaired_local_max_turn": float(
                         local_audit.get("max_turn", 0.0)),
+                    "repaired_local_max_curvature": float(
+                        local_metrics.get("max_curvature", 0.0)),
+                    "repaired_full_max_curvature": float(
+                        full_metrics.get("max_curvature", 0.0)),
                 }
         return path, {"repair_applied": False,
-                      "reason": "local_safety_or_turn"}
+                      "reason": "local_safety_turn_or_curvature"}
 
     def _select_wheelchair_execution_reference(self, corr, refined, metrics):
         """Prefer a reference with executable heading and monotonic launch."""

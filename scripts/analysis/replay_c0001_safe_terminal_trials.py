@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline R009 c0001 safe-terminal replay; it never changes live planning."""
+"""Offline c0001 replay/audit utilities; they never change live planning."""
 import argparse
 import json
 import math
@@ -24,12 +24,28 @@ from stsm_madp.topology_refinement import smooth_wheelchair_corners
 
 
 GOAL = np.array([-0.55, 0.55, 0.0], float)
-# R009 records the measured planning-time yaw as ``current_yaw=0.0``.
-# Do not substitute the launch-file reset yaw (-2.4) during replay.
-STATE = np.array([2.0, 1.5, 0.0], float)
+STATE = np.array([2.0, 1.5, -2.4], float)
 CLEARANCE = 0.10
 RISK = 2.0
 TURN = 0.40
+CURVATURE = 8.0
+
+
+def _load_initial_pose(trace_path):
+    """Read the actual reset pose saved next to run diagnostics."""
+    run_dir = os.path.dirname(os.path.abspath(trace_path))
+    ros_log = os.path.join(run_dir, "ros.log")
+    if os.path.exists(ros_log):
+        with open(ros_log, "r", errors="ignore") as handle:
+            for line in handle:
+                if "reset wheelchair to start pose" not in line:
+                    continue
+                tail = line.split("reset wheelchair to start pose", 1)[1]
+                payload = tail[tail.find("[") + 1:tail.find("]")]
+                values = [float(item) for item in payload.replace(",", " ").split()]
+                if len(values) >= 3:
+                    return np.asarray(values[:3], float), "diagnostics_ros_log"
+    return np.asarray(STATE, float), "fallback"
 
 
 def _scene_context():
@@ -105,41 +121,88 @@ def _repair_refined_main_turn(reference, evaluator):
     handle = min(0.03, 0.35 * min(
         float(np.linalg.norm(p16[:2] - p15[:2])),
         float(np.linalg.norm(p17[:2] - p16[:2]))))
+    attempts = []
     for point_count in (n_turn_steps, n_turn_steps + 1, n_turn_steps + 2):
-        c1 = p16[:2] + handle * np.array([
-            math.cos(heading_before), math.sin(heading_before)])
-        c2 = p17[:2] - handle * np.array([
-            math.cos(heading_after), math.sin(heading_after)])
+        attempts.append({
+            "method": "cubic_heading_interpolation",
+            "left": center,
+            "right": center + 1,
+            "point_count": int(point_count),
+            "handle": float(handle),
+        })
+    left = max(0, center - 2)
+    right = min(len(path) - 1, center + 1)
+    chord = float(np.linalg.norm(path[right, :2] - path[left, :2]))
+    if right > left + 1 and chord > 1e-9:
+        for handle_scale in (0.25, 0.40, 0.60, 0.80, 1.00):
+            for point_count in range(4, 10):
+                attempts.append({
+                    "method": "curvature_aware_cubic_window",
+                    "left": int(left),
+                    "right": int(right),
+                    "point_count": int(point_count),
+                    "handle": float(chord * handle_scale),
+                })
+    for attempt in attempts:
+        method = str(attempt["method"])
+        left_idx = int(attempt["left"])
+        right_idx = int(attempt["right"])
+        point_count = int(attempt["point_count"])
+        start_pt = path[left_idx]
+        end_pt = path[right_idx]
+        if method == "cubic_heading_interpolation":
+            h_start = heading_before
+            h_end = heading_after
+        else:
+            h_start = math.atan2(path[left_idx + 1, 1] - path[left_idx, 1],
+                                 path[left_idx + 1, 0] - path[left_idx, 0])
+            h_end = math.atan2(path[right_idx, 1] - path[right_idx - 1, 1],
+                               path[right_idx, 0] - path[right_idx - 1, 0])
+        c1 = start_pt[:2] + float(attempt["handle"]) * np.array([
+            math.cos(h_start), math.sin(h_start)])
+        c2 = end_pt[:2] - float(attempt["handle"]) * np.array([
+            math.cos(h_end), math.sin(h_end)])
         inserts = []
         for index in range(1, point_count):
             u = float(index) / float(point_count)
-            p2 = ((1.0 - u) ** 3 * p16[:2] +
+            p2 = ((1.0 - u) ** 3 * start_pt[:2] +
                   3.0 * (1.0 - u) ** 2 * u * c1 +
-                  3.0 * (1.0 - u) * u ** 2 * c2 + u ** 3 * p17[:2])
+                  3.0 * (1.0 - u) * u ** 2 * c2 + u ** 3 * end_pt[:2])
             inserts.append([p2[0], p2[1], 0.0])
-        candidate = np.vstack([path[:center + 1], np.asarray(inserts, float),
-                               path[center + 1:]])
-        local = candidate[max(0, center - 2):min(
-            len(candidate), center + point_count + 2)]
+        candidate = np.vstack([path[:left_idx + 1], np.asarray(inserts, float),
+                               path[right_idx:]])
+        new_right_idx = left_idx + len(inserts) + 1
+        local = candidate[max(0, left_idx - 2):min(
+            len(candidate), new_right_idx + 3)]
         local_turn = wheelchair_sharp_turn_audit(local, turn_limit=TURN)
+        local_metrics = path_curvature_metrics(local)
+        full_metrics = path_curvature_metrics(candidate)
         statuses = evaluator.evaluate_states(candidate[
-            center + 1:center + 1 + len(inserts)])
+            left_idx + 1:left_idx + 1 + len(inserts)])
         hard_valid = all(bool(item["inside_manifold"]) and
                          bool(item["inside_corridor"]) for item in statuses)
-        if (float(local_turn["max_turn"]) <= TURN + 1e-9 and hard_valid):
+        if (float(local_turn["max_turn"]) <= TURN + 1e-9 and
+                float(local_metrics["max_curvature"]) <= CURVATURE + 1e-9 and
+                float(full_metrics["max_curvature"]) <= CURVATURE + 1e-9 and
+                hard_valid):
             return candidate, {
                 "repair_applied": True,
-                "repair_window_refined_indices": [center - 2, center + 1],
-                "original_window_point_count": 4,
-                "repaired_window_point_count": 4 + len(inserts),
+                "repair_window_refined_indices": [left_idx, right_idx],
+                "original_window_point_count": int(right_idx - left_idx + 1),
+                "repaired_window_point_count": int(2 + len(inserts)),
                 "inserted_point_count": len(inserts),
                 "n_turn_steps": n_turn_steps,
                 "attempt_point_count": point_count,
-                "repair_method": "cubic_heading_interpolation",
+                "repair_method": method,
                 "original_max_turn": float(sharp["local_turn"]),
                 "repaired_local_max_turn": float(local_turn["max_turn"]),
+                "repaired_local_max_curvature": float(
+                    local_metrics["max_curvature"]),
+                "repaired_full_max_curvature": float(
+                    full_metrics["max_curvature"]),
             }
-    return path, {"repair_applied": False, "reason": "local_safety_or_turn"}
+    return path, {"repair_applied": False,
+                  "reason": "local_safety_turn_or_curvature"}
 
 
 def _heading_prefix(reference):
@@ -302,6 +365,78 @@ def _turn_origin_audit(reference, lineage):
             "turn_origin": origin, "points": related}
 
 
+def _curvature_origin_audit(reference, lineage):
+    pts = np.asarray(reference, float)
+    if len(pts) < 3:
+        return {"max_curvature_index": None, "max_curvature": 0.0,
+                "curvature_origin": "none", "points": []}
+    best = None
+    for index in range(1, len(pts) - 1):
+        u = pts[index, :2] - pts[index - 1, :2]
+        v = pts[index + 1, :2] - pts[index, :2]
+        nu = float(np.linalg.norm(u))
+        nv = float(np.linalg.norm(v))
+        if nu <= 1e-9 or nv <= 1e-9:
+            continue
+        before = math.atan2(u[1], u[0])
+        after = math.atan2(v[1], v[0])
+        turn = abs(math.atan2(math.sin(after - before),
+                              math.cos(after - before)))
+        curvature = turn / max(0.5 * (nu + nv), 1e-9)
+        row = (curvature, index, turn, nu, nv, before, after)
+        if best is None or row[0] > best[0]:
+            best = row
+    if best is None:
+        return {"max_curvature_index": None, "max_curvature": 0.0,
+                "curvature_origin": "none", "points": []}
+    curvature, index, turn, nu, nv, before, after = best
+    related = []
+    for point_index in (index - 1, index, index + 1):
+        related.append({"index": int(point_index), "x": float(pts[point_index, 0]),
+                        "y": float(pts[point_index, 1]),
+                        "lineage": dict(lineage[point_index])})
+    stages = {item["lineage"]["source_stage"] for item in related}
+    origin = next(iter(stages)) if len(stages) == 1 else "stage_boundary"
+    return {
+        "max_curvature_index": int(index),
+        "max_curvature": float(curvature),
+        "segment_length_before": float(nu),
+        "segment_length_after": float(nv),
+        "heading_before": float(before),
+        "heading_after": float(after),
+        "delta_heading": float(turn),
+        "turn_angle": float(turn),
+        "curvature_origin": str(origin),
+        "points": related,
+    }
+
+
+def _refined_repair_lineage(point_count, repair):
+    if not bool(repair.get("repair_applied", False)):
+        return [{"source_stage": "refined_main_original",
+                 "source_index": int(index),
+                 "source_refined_index": int(index)}
+                for index in range(point_count)]
+    left, right = [int(item) for item in repair["repair_window_refined_indices"]]
+    inserted = int(repair.get("inserted_point_count", 0))
+    lineage = []
+    for index in range(point_count):
+        if index <= left:
+            refined_index = index
+            stage = "refined_main_original"
+        elif index <= left + inserted:
+            refined_index = None
+            stage = "refined_main_repair"
+        else:
+            refined_index = right + (index - (left + inserted + 1))
+            stage = "refined_main_original"
+        lineage.append({"source_stage": stage,
+                        "source_index": int(index),
+                        "source_refined_index": (
+                            None if refined_index is None else int(refined_index))})
+    return lineage
+
+
 def _execution_reference(rebuilt):
     """Reuse the existing profile and bounded smoothing policy offline."""
     base_profile = wheelchair_nonholonomic_execution_profile(
@@ -358,7 +493,85 @@ def _execution_reference(rebuilt):
             _turn_origin_audit(reference, lineage), prefix_audit)
 
 
-def run(trace_path, output_path):
+def _execution_geometry_replay(candidate, refined, evaluator):
+    repaired, main_turn_repair = _repair_refined_main_turn(refined, evaluator)
+    final, geometry, prefix_used, turn_origin, prefix_audit = (
+        _execution_reference(repaired))
+    if prefix_used:
+        lineage = _point_lineage(
+            len(final), len(repaired) - 1, prefix_metadata={
+                "bridge_point_count": int(prefix_audit.get(
+                    "launch_prefix_point_count", 0)),
+                "join_index": int(prefix_audit.get("join_index", 0)),
+            })
+    else:
+        lineage = _refined_repair_lineage(len(final), main_turn_repair)
+    final_evaluator = SafetyEvaluator(
+        manifold_constraint=dict(evaluator.manifold_constraint),
+        corridor_constraint={"centerline": final.tolist(), "radius": 0.35},
+        risk_field=evaluator.risk_field)
+    final_rows = _rows(final_evaluator, final)
+    manifold_bad = [row["index"] for row in final_rows
+                    if not row["manifold_valid"]]
+    hard_bad = [row["index"] for row in final_rows if not row["hard_valid"]]
+    final_max_turn = float(geometry.get("max_turn", 0.0))
+    final_max_curvature = float(geometry.get("max_curvature", 0.0))
+    final_reference_valid = bool(
+        not hard_bad and final_max_turn <= TURN + 1e-9 and
+        final_max_curvature <= CURVATURE + 1e-9)
+    reject_reason = (
+        "" if final_reference_valid else
+        "final_reference_manifold_violation" if manifold_bad else
+        "final_reference_hard_safety_violation" if hard_bad else
+        "refined_execution_turn_limit" if final_max_turn > TURN + 1e-9 else
+        "refined_execution_curvature_limit")
+    return {
+        "candidate_id": str(candidate["candidate_id"]),
+        "label": str(candidate["label"]),
+        "initial_pose": [float(item) for item in STATE.tolist()],
+        "execution_prefix_used": bool(prefix_used),
+        "launch_prefix_audit": prefix_audit,
+        "refined_main_turn_repair": main_turn_repair,
+        "final_reference_point_count": int(len(final)),
+        "execution_geometry": geometry,
+        "turn_origin_audit": turn_origin,
+        "curvature_origin_audit": _curvature_origin_audit(final, lineage),
+        "final_min_clearance": min(row["clearance"] for row in final_rows),
+        "final_max_risk": max(row["risk"] for row in final_rows),
+        "final_manifold_violation_count": int(len(manifold_bad)),
+        "final_hard_invalid_indices": hard_bad,
+        "critical_sequence_status": "passed",
+        "final_reference_valid": final_reference_valid,
+        "final_reject_reason": reject_reason,
+    }
+
+
+def _existing_final_reference_audit(candidate):
+    final = candidate.get("final_reference")
+    if not isinstance(final, dict) or not final.get("points"):
+        return {"available": False}
+    rows = list(final.get("points") or [])
+    points = np.asarray([[row["x"], row["y"], 0.0] for row in rows], float)
+    lineage = []
+    for row in rows:
+        lineage.append({
+            "source_stage": str(row.get("source_stage", "")),
+            "source_index": int(row.get("source_index", row.get("index", 0))),
+            "source_refined_index": int(row.get("source_index", 0))
+            if str(row.get("source_stage", "")) == "refinement" else None,
+        })
+    return {
+        "available": True,
+        "final_reference_point_count": int(len(points)),
+        "execution_geometry": dict(path_curvature_metrics(points)),
+        "curvature_origin_audit": _curvature_origin_audit(points, lineage),
+        "turn_origin_audit": _turn_origin_audit(points, lineage),
+    }
+
+
+def run(trace_path, output_path, include_terminal_trials=True):
+    global STATE
+    STATE, initial_pose_source = _load_initial_pose(trace_path)
     with open(trace_path, "r") as handle:
         trace = json.load(handle)
     candidate = next(item for item in trace["candidates"]
@@ -374,11 +587,14 @@ def run(trace_path, output_path):
     invalid = [row["index"] for row in refined_rows if not row["hard_valid"]]
     last_safe = max([row["index"] for row in refined_rows if row["hard_valid"]],
                     default=None)
+    execution_replay = _execution_geometry_replay(candidate, refined, evaluator)
+    execution_replay["initial_pose_source"] = str(initial_pose_source)
+    existing_final_audit = _existing_final_reference_audit(candidate)
     terminals = terminal_acceptance_preflight(GOAL, 0.25, context)[
         "safe_terminal_candidates"]
     terminals = sorted(terminals, key=lambda row: (row["distance_to_goal"], row["index"]))
     trials = []
-    for rank, terminal in enumerate(terminals, start=1):
+    for rank, terminal in enumerate(terminals, start=1) if include_terminal_trials else []:
         terminal_point = np.array([terminal["x"], terminal["y"], 0.0])
         for start_index in (last_safe, last_safe - 1, last_safe - 2):
             suffix = _segment(refined[start_index], terminal_point)
@@ -466,6 +682,10 @@ def run(trace_path, output_path):
         "refined_point_count": int(len(refined)), "refined_safety": refined_rows,
         "first_hard_invalid_index": invalid[0] if invalid else None,
         "last_hard_safe_index": last_safe, "hard_invalid_indices": invalid,
+        "initial_pose": [float(item) for item in STATE.tolist()],
+        "initial_pose_source": str(initial_pose_source),
+        "r010_existing_final_reference_audit": existing_final_audit,
+        "execution_geometry_without_safe_terminal": execution_replay,
         "safe_terminal_count": int(len(terminals)), "trials": trials,
         "executable_candidate_count": int(any(
             item.get("final_reference_valid") for item in trials)),
@@ -478,10 +698,11 @@ def run(trace_path, output_path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--trace", default=os.path.join(
-        ROOT, "results", "runs", "20260831_R009", "wheelchair", "stsm",
+        ROOT, "results", "runs", "20260831_R010", "wheelchair", "stsm",
         "candidate_path_trace.json"))
     parser.add_argument("--out", default=os.path.join(
-        ROOT, "results", "runs", "20260831_R009", "wheelchair", "stsm",
-        "c0001_safe_terminal_trials.json"))
+        ROOT, "results", "runs", "20260831_R010", "wheelchair", "stsm",
+        "c0001_curvature_replay.json"))
+    parser.add_argument("--no-safe-terminal", action="store_true")
     args = parser.parse_args()
-    run(args.trace, args.out)
+    run(args.trace, args.out, include_terminal_trials=not args.no_safe_terminal)
