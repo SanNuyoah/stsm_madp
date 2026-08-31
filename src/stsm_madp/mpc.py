@@ -147,6 +147,43 @@ def wheelchair_nonholonomic_execution_profile(points, state, goal,
     }
 
 
+def wheelchair_sharp_turn_audit(points, turn_limit=0.40):
+    """Describe, but do not repair, local diff-drive turn violations."""
+    pts = np.asarray(points, float)
+    if pts.ndim == 1:
+        pts = pts.reshape((1, -1))
+    if pts.size == 0 or len(pts) < 3:
+        return {"point_count": int(len(pts)), "max_turn": 0.0,
+                "sharp_turn_indices": [], "sharp_turns": []}
+    seg = np.diff(pts[:, :2], axis=0)
+    lengths = np.linalg.norm(seg, axis=1)
+    headings = np.asarray([
+        np.arctan2(item[1], item[0]) if length > 1e-9 else np.nan
+        for item, length in zip(seg, lengths)], float)
+    sharp = []
+    max_turn = 0.0
+    for idx in range(1, len(pts) - 1):
+        before = headings[idx - 1]
+        after = headings[idx]
+        if not np.isfinite(before) or not np.isfinite(after):
+            continue
+        turn = abs(_wrap_angle(float(after - before)))
+        max_turn = max(max_turn, float(turn))
+        if turn > float(turn_limit) + 1e-9:
+            sharp.append({
+                "index": int(idx), "x": float(pts[idx, 0]),
+                "y": float(pts[idx, 1]),
+                "heading_before": float(before), "heading_after": float(after),
+                "local_turn": float(turn),
+            })
+    return {
+        "point_count": int(len(pts)), "max_turn": float(max_turn),
+        "turn_limit": float(turn_limit),
+        "sharp_turn_indices": [int(item["index"]) for item in sharp],
+        "sharp_turns": sharp,
+    }
+
+
 DEFAULT_MPC_CONFIG = {
     "enabled": True,
     "horizon": 10,

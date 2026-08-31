@@ -454,3 +454,72 @@ class SafetyEvaluator(object):
             "tube_corridor_violation_count": int(
                 status["corridor_violation_count"]),
         }
+
+
+def terminal_acceptance_preflight(goal, acceptance_radius, safety_context,
+                                 radial_samples=4, angular_samples=16):
+    """Audit the exact goal and its existing arrival region without moving it.
+
+    This is intentionally diagnostic-only.  It does not select a substitute
+    terminal point or modify any candidate geometry; later terminal repair may
+    use only the recorded hard-safe points inside this unchanged region.
+    """
+    goal = np.asarray(goal, float).reshape(-1)
+    point = np.zeros(3, float)
+    point[:min(2, len(goal))] = goal[:2]
+    radius = max(0.0, float(acceptance_radius or 0.0))
+    context = dict(safety_context or {})
+    evaluator = SafetyEvaluator(
+        manifold_constraint=dict(context.get("manifold_constraint", {}) or {}),
+        risk_field=context.get("social_field"))
+    if context.get("social_field") is None:
+        return {
+            "goal": point.tolist(),
+            "goal_acceptance_radius": float(radius),
+            "goal_hard_valid": False,
+            "failure_reason": "missing_safety_context",
+            "terminal_acceptance_candidate_count": 0,
+            "safe_terminal_candidate_count": 0,
+            "safe_terminal_candidates": [],
+            "selected_terminal_point": None,
+            "selection_performed": False,
+        }
+    candidates = [point.copy()]
+    for ring in range(1, max(1, int(radial_samples)) + 1):
+        ring_radius = radius * float(ring) / float(max(1, int(radial_samples)))
+        for sample in range(max(4, int(angular_samples))):
+            angle = 2.0 * np.pi * float(sample) / float(
+                max(4, int(angular_samples)))
+            candidates.append(np.array([
+                point[0] + ring_radius * np.cos(angle),
+                point[1] + ring_radius * np.sin(angle), point[2]], float))
+    points = np.asarray(candidates, float)
+    states = evaluator.evaluate_states(points)
+    rows = []
+    for idx, (candidate, status) in enumerate(zip(points, states)):
+        distance = float(np.linalg.norm(candidate[:2] - point[:2]))
+        hard_valid = bool(status.get("inside_manifold", False))
+        rows.append({
+            "index": int(idx), "x": float(candidate[0]),
+            "y": float(candidate[1]), "distance_to_goal": distance,
+            "clearance": float(status.get("clearance", 0.0)),
+            "risk": float(status.get("risk", 0.0)),
+            "manifold_valid": bool(status.get("inside_manifold", False)),
+            "hard_valid": bool(hard_valid),
+        })
+    safe = [row for row in rows if bool(row["hard_valid"])]
+    fixed = rows[0] if rows else {}
+    return {
+        "goal": point.tolist(),
+        "goal_acceptance_radius": float(radius),
+        "goal_clearance": float(fixed.get("clearance", 0.0)),
+        "goal_risk": float(fixed.get("risk", 0.0)),
+        "goal_manifold_valid": bool(fixed.get("manifold_valid", False)),
+        "goal_hard_valid": bool(fixed.get("hard_valid", False)),
+        "terminal_acceptance_candidate_count": int(len(rows)),
+        "safe_terminal_candidate_count": int(len(safe)),
+        "safe_terminal_candidates": safe,
+        "selected_terminal_point": None,
+        "selection_performed": False,
+        "failure_reason": "",
+    }

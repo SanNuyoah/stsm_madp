@@ -26,11 +26,13 @@ from stsm_madp.corridor import require_corridor_contract
 from stsm_madp.mpc import (
     WheelchairMPC, build_mpc_constraint_inputs, generate_topology_tube,
     run_mpc_tracking, wheelchair_nonholonomic_execution_profile,
+    wheelchair_sharp_turn_audit,
     write_mpc_outputs)
 from stsm_madp.topology_constraint import (
     build_topology_constraint, write_topology_constraint)
 from stsm_madp.manifold_constraint_evaluator import ManifoldConstraintEvaluator
-from stsm_madp.safety_evaluator import SafetyEvaluator, build_safety_context
+from stsm_madp.safety_evaluator import (
+    SafetyEvaluator, build_safety_context, terminal_acceptance_preflight)
 from stsm_madp.safety_gate import SafetyGate, SafetyGateResult
 from stsm_madp.adp import (
     ADPCritic, ADPFeatureBuilder, ADPTransitionLearner,
@@ -2413,6 +2415,39 @@ class WheelchairNode:
                 safety_context.get("fingerprint", "")),
         }
 
+    def _goal_terminal_preflight(self, safety_context):
+        """Record fixed-goal/arrival-region safety without changing geometry."""
+        return terminal_acceptance_preflight(
+            self.goal, self.execution_stop_tolerance, safety_context)
+
+    def _turn_refinement_audit(self, reference, safety_context, constraint):
+        """Attach safety state to each sharp turn; this phase never repairs it."""
+        audit = wheelchair_sharp_turn_audit(
+            reference, turn_limit=min(float(self.topology_max_corridor_turn),
+                                        0.40))
+        evaluator = SafetyEvaluator(
+            manifold_constraint=dict(constraint.get(
+                "manifold_constraint", {}) or {}),
+            corridor_constraint=dict(constraint.get(
+                "corridor_constraint", {}) or {}),
+            risk_field=safety_context.get("social_field"))
+        points = self._as_corridor_points(reference)
+        for item in audit.get("sharp_turns", []):
+            index = int(item.get("index", -1))
+            if index < 0 or index >= len(points):
+                continue
+            status = evaluator.evaluate_state(points[index])
+            item["clearance"] = float(status.get("clearance", 0.0))
+            item["risk"] = float(status.get("risk", 0.0))
+            item["manifold_valid"] = bool(status.get(
+                "inside_manifold", False))
+            item["hard_valid"] = bool(status.get("inside_manifold", False) and
+                                       status.get("inside_corridor", False))
+        audit["local_repair_attempt_count"] = 0
+        audit["repair_points_inserted"] = 0
+        audit["selection_performed"] = False
+        return audit
+
     def _project_points_to_corridor(self, path, corridor, margin=0.85):
         pts = np.asarray(path, float)
         if pts.size == 0:
@@ -3020,6 +3055,8 @@ class WheelchairNode:
             corr.planning_safety_context_fingerprint = str(
                 safety_context.get("fingerprint", ""))
             corr.planning_safety_context = dict(safety_context)
+            goal_preflight = self._goal_terminal_preflight(safety_context)
+            corr.goal_terminal_preflight = dict(goal_preflight)
             refine_t0 = time.time()
             ok, refined, metrics, reason = refine_topology_path(
                 corr,
@@ -3053,6 +3090,7 @@ class WheelchairNode:
             attempt["refined_footprint_terminal_force_checked_indices"] = list(
                 self.last_refined_footprint_terminal_force_checked_indices)
             attempt.update(self._runtime_replan_connectability_payload(corr))
+            attempt["goal_preflight"] = dict(goal_preflight)
             if not ok:
                 corr.reject_reason = str(reason)
                 attempt["accepted"] = False
@@ -3169,6 +3207,10 @@ class WheelchairNode:
                                 getattr(corr, "label", "")),
                         corr.reject_reason)
                     continue
+            _audit_context, turn_audit_constraint = (
+                self._authoritative_safety_context(corr, reference=refined))
+            attempt["turn_refinement_audit"] = self._turn_refinement_audit(
+                refined, safety_context, turn_audit_constraint)
             if (not fallback_used and
                     refined_max_curvature > executable_curvature_limit + 1e-9):
                 corr.reject_reason = "refined_execution_curvature_limit"

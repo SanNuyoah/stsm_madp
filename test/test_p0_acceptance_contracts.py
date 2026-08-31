@@ -30,8 +30,10 @@ from stsm_madp.mpc import audit_reference_safety
 from stsm_madp.mpc import _phase_constraint_diagnostics_payload
 from stsm_madp.mpc import _task_state_diagnostics_payload
 from stsm_madp.mpc import evaluate_executed_trajectory
-from stsm_madp.mpc import wheelchair_nonholonomic_execution_profile
-from stsm_madp.safety_evaluator import SafetyEvaluator, build_safety_context
+from stsm_madp.mpc import (
+    wheelchair_nonholonomic_execution_profile, wheelchair_sharp_turn_audit)
+from stsm_madp.safety_evaluator import (
+    SafetyEvaluator, build_safety_context, terminal_acceptance_preflight)
 from stsm_madp.interest_points import pose_interest_risk, pose_interest_risk_batch
 from stsm_madp.social_field import (
     HumanState, SemanticAnchor, SocialField, SocialFieldParams)
@@ -1397,6 +1399,31 @@ def test_wheelchair_nonholonomic_profile_penalizes_regressive_initial_path():
     assert bad["monotonic_regression"] > 0.0
     assert bad["initial_heading_error"] > good["initial_heading_error"]
     assert bad["heading_oscillation"] > good["heading_oscillation"]
+
+
+def test_terminal_preflight_audits_existing_goal_acceptance_region_only():
+    context = build_safety_context(
+        ZeroField(), {"minimum_clearance": 0.10, "risk_threshold": 2.0},
+        strict=True)
+    audit = terminal_acceptance_preflight(
+        [-0.55, 0.55], 0.25, context, radial_samples=2, angular_samples=8)
+
+    assert audit["goal"] == [-0.55, 0.55, 0.0]
+    assert audit["goal_acceptance_radius"] == 0.25
+    assert audit["terminal_acceptance_candidate_count"] == 17
+    assert audit["safe_terminal_candidate_count"] == 17
+    assert audit["selected_terminal_point"] is None
+    assert audit["selection_performed"] is False
+
+
+def test_wheelchair_sharp_turn_audit_reports_exact_violation_indices():
+    audit = wheelchair_sharp_turn_audit(np.asarray([
+        [0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [2.0, 1.0],
+    ]), turn_limit=0.40)
+
+    assert audit["sharp_turn_indices"] == [1, 2]
+    assert audit["max_turn"] == np.pi / 2.0
+    assert all(item["local_turn"] > 0.40 for item in audit["sharp_turns"])
 
 
 def test_wheelchair_refinement_point_limit_preserves_topology_waypoints():
