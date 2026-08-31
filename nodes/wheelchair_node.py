@@ -2481,7 +2481,12 @@ class WheelchairNode:
 
     def _candidate_path_trace(self, corr, raw, refined, final_reference,
                               safety_context, constraint, reference_source,
-                              turn_repair_applied=False):
+                              turn_repair_applied=False,
+                              terminal_rebuild_info=None):
+        terminal_info = dict(terminal_rebuild_info or {})
+        terminal_points = terminal_info.get("terminal_rebuilt_path", None)
+        terminal_applied = bool(terminal_info.get(
+            "safe_terminal_rebuild_applied", False))
         trace = {
             "candidate_id": str(getattr(corr, "corridor_id", "")),
             "label": str(getattr(corr, "label", "")),
@@ -2490,7 +2495,44 @@ class WheelchairNode:
             "refinement": self._path_trace_stage(
                 refined, "refinement", safety_context, constraint,
                 "raw_candidate", raw),
-            "safe_terminal_rebuild": {"applied": False, "points": None},
+            "safe_terminal_rebuild": {
+                "applied": terminal_applied,
+                "triggered": bool(terminal_info.get(
+                    "safe_terminal_rebuild_triggered", False)),
+                "fixed_goal_hard_valid": bool(terminal_info.get(
+                    "fixed_goal_hard_valid", True)),
+                "safe_terminal_candidate_count": int(terminal_info.get(
+                    "safe_terminal_candidate_count", 0)),
+                "terminal_trial_count": int(terminal_info.get(
+                    "terminal_trial_count", 0)),
+                "selected_terminal": terminal_info.get(
+                    "selected_terminal", None),
+                "selected_terminal_distance_to_goal": (
+                    None if terminal_info.get(
+                        "selected_terminal_distance_to_goal", None) is None
+                    else float(terminal_info.get(
+                        "selected_terminal_distance_to_goal", 0.0))),
+                "selected_terminal_clearance": (
+                    None if terminal_info.get(
+                        "selected_terminal_clearance", None) is None
+                    else float(terminal_info.get(
+                        "selected_terminal_clearance", 0.0))),
+                "selected_terminal_risk": (
+                    None if terminal_info.get(
+                        "selected_terminal_risk", None) is None
+                    else float(terminal_info.get(
+                        "selected_terminal_risk", 0.0))),
+                "rebuild_start_index": (
+                    None if terminal_info.get("rebuild_start_index", None) is None
+                    else int(terminal_info.get("rebuild_start_index", -1))),
+                "terminal_rebuild_point_count": int(terminal_info.get(
+                    "terminal_rebuild_point_count", 0)),
+                "points": (
+                    self._path_trace_stage(
+                        terminal_points, "terminal_rebuild", safety_context,
+                        constraint, "refinement", refined)
+                    if terminal_applied and terminal_points is not None else None),
+            },
             "turn_repair": {
                 "applied": bool(turn_repair_applied),
                 "points": (
@@ -2504,11 +2546,142 @@ class WheelchairNode:
                 constraint, "refinement", refined),
             "final_reference_source": str(reference_source),
         }
+        trace["terminal_rebuilt_path"] = (
+            trace["safe_terminal_rebuild"]["points"]
+            if terminal_applied else None)
         trace["path_trace_complete"] = bool(
             trace["raw_candidate"]["point_count"] > 0 and
             trace["refinement"]["point_count"] > 0 and
             trace["final_reference"]["point_count"] > 0)
         return trace
+
+    def _make_terminal_rebuild_segment(self, start, terminal, step=0.03):
+        start = np.asarray(start, float)
+        terminal = np.asarray(terminal, float)
+        distance = float(np.linalg.norm(terminal[:2] - start[:2]))
+        count = max(1, int(np.ceil(distance / max(float(step), 1e-6))))
+        rows = []
+        for index in range(1, count + 1):
+            alpha = float(index) / float(count)
+            point = start + (terminal - start) * alpha
+            rows.append(point.tolist())
+        return self._as_corridor_points(rows)
+
+    def _safe_terminal_rebuild_c0001(self, corr, refined):
+        """Replace only c0001's invalid fixed terminal inside completion radius."""
+        path = self._as_corridor_points(refined)
+        info = {
+            "safe_terminal_rebuild_triggered": False,
+            "safe_terminal_rebuild_applied": False,
+            "fixed_goal_hard_valid": True,
+            "safe_terminal_candidate_count": 0,
+            "selected_terminal": None,
+            "selected_terminal_distance_to_goal": None,
+            "selected_terminal_clearance": None,
+            "selected_terminal_risk": None,
+            "selected_terminal_manifold_valid": False,
+            "rebuild_start_index": None,
+            "terminal_rebuild_point_count": 0,
+            "terminal_trial_count": 0,
+            "terminal_rebuilt_path": None,
+            "terminal_rebuild_reject_reason": "",
+            "terminal_trials": [],
+        }
+        if str(getattr(corr, "corridor_id", "")) != "wheelchair_c0001":
+            info["terminal_rebuild_reject_reason"] = "not_c0001"
+            return path, info
+        if len(path) < 2:
+            info["terminal_rebuild_reject_reason"] = "path_too_short"
+            return path, info
+        safety_context, _constraint = self._authoritative_safety_context(
+            corr, reference=path)
+        preflight = self._goal_terminal_preflight(safety_context)
+        info["fixed_goal_hard_valid"] = bool(preflight.get(
+            "goal_hard_valid", False))
+        safe = list(preflight.get("safe_terminal_candidates", []) or [])
+        info["safe_terminal_candidate_count"] = int(len(safe))
+        if info["fixed_goal_hard_valid"]:
+            return path, info
+        info["safe_terminal_rebuild_triggered"] = True
+        if not safe:
+            info["terminal_rebuild_reject_reason"] = "no_safe_terminal_candidate"
+            return path, info
+        evaluator = SafetyEvaluator(
+            manifold_constraint=dict(safety_context.get(
+                "manifold_constraint", {}) or {}),
+            risk_field=safety_context.get("social_field"))
+        states = evaluator.evaluate_states(path)
+        safe_indices = [idx for idx, state in enumerate(states) if bool(
+            state.get("inside_manifold", False))]
+        if not safe_indices:
+            info["terminal_rebuild_reject_reason"] = "no_hard_safe_refined_point"
+            return path, info
+        last_safe = int(max(safe_indices))
+        terminals = sorted(
+            safe,
+            key=lambda row: (
+                float(row.get("distance_to_goal", float("inf"))),
+                -float(row.get("clearance", 0.0)),
+                float(row.get("risk", float("inf")))))
+        start_indices = [idx for idx in (
+            last_safe, last_safe - 1, last_safe - 2) if idx >= 0]
+        for terminal in terminals:
+            terminal_point = np.zeros(path.shape[1], float)
+            terminal_point[:2] = [float(terminal["x"]), float(terminal["y"])]
+            for start_idx in start_indices:
+                info["terminal_trial_count"] += 1
+                suffix = self._make_terminal_rebuild_segment(
+                    path[start_idx], terminal_point, step=0.03)
+                rebuilt = np.vstack([path[:start_idx + 1], suffix])
+                _ctx, constraint = self._authoritative_safety_context(
+                    corr, reference=rebuilt)
+                suffix_evaluator = SafetyEvaluator(
+                    manifold_constraint=dict(constraint.get(
+                        "manifold_constraint", {}) or {}),
+                    corridor_constraint=dict(constraint.get(
+                        "corridor_constraint", {}) or {}),
+                    risk_field=safety_context.get("social_field"))
+                suffix_states = suffix_evaluator.evaluate_states(suffix)
+                bad = [idx for idx, state in enumerate(suffix_states)
+                       if not bool(state.get("inside_manifold", False))]
+                trial = {
+                    "terminal_index": int(terminal.get("index", -1)),
+                    "rebuild_start_index": int(start_idx),
+                    "terminal_rebuild_point_count": int(len(suffix)),
+                    "selected_terminal": terminal_point.tolist(),
+                    "distance_to_fixed_goal": float(
+                        terminal.get("distance_to_goal", 0.0)),
+                    "min_clearance": min([
+                        float(state.get("clearance", 0.0))
+                        for state in suffix_states] or [0.0]),
+                    "max_risk": max([
+                        float(state.get("risk", 0.0))
+                        for state in suffix_states] or [0.0]),
+                    "manifold_violation_count": int(len(bad)),
+                    "accepted": not bool(bad),
+                }
+                info["terminal_trials"].append(trial)
+                if bad:
+                    continue
+                info.update({
+                    "safe_terminal_rebuild_applied": True,
+                    "selected_terminal": terminal_point.tolist(),
+                    "selected_terminal_distance_to_goal": float(
+                        terminal.get("distance_to_goal", 0.0)),
+                    "selected_terminal_clearance": float(
+                        terminal.get("clearance", 0.0)),
+                    "selected_terminal_risk": float(terminal.get("risk", 0.0)),
+                    "selected_terminal_manifold_valid": bool(
+                        terminal.get("manifold_valid", False)),
+                    "rebuild_start_index": int(start_idx),
+                    "terminal_rebuild_point_count": int(len(suffix)),
+                    "terminal_rebuilt_path": rebuilt.tolist(),
+                    "terminal_rebuild_reject_reason": "",
+                })
+                return rebuilt, info
+        info["terminal_rebuild_reject_reason"] = (
+            "all_safe_terminal_rebuild_trials_failed")
+        return path, info
 
     def _project_points_to_corridor(self, path, corridor, margin=0.85):
         pts = np.asarray(path, float)
@@ -3039,6 +3212,7 @@ class WheelchairNode:
         base = np.asarray(refined, float)
         if base.size == 0:
             return base, dict(metrics or {}), False
+        base, terminal_rebuild = self._safe_terminal_rebuild_c0001(corr, base)
         base, main_turn_repair = self._repair_c0001_refined_main_turn(
             corr, base)
         current = wheelchair_nonholonomic_execution_profile(
@@ -3052,12 +3226,23 @@ class WheelchairNode:
             float(current.get("nonmonotonic_fraction", 0.0)) > 0.30 or
             float(current.get("heading_oscillation", 0.0)) > 0.50)
         if not needs_repair:
+            from stsm_madp.deform import path_curvature_metrics, path_length
             out = dict(metrics or {})
+            out.update(path_curvature_metrics(base))
+            out["refined_path_length"] = float(path_length(base))
+            out["reference_path_count"] = int(len(base))
             out["nonholonomic_execution_profile"] = dict(current)
             out["diff_drive_reference_repaired"] = bool(
-                main_turn_repair.get("repair_applied", False))
+                main_turn_repair.get("repair_applied", False) or
+                terminal_rebuild.get("safe_terminal_rebuild_applied", False))
             out["refined_main_turn_repair"] = dict(main_turn_repair)
-            return base, out, bool(main_turn_repair.get("repair_applied", False))
+            out["safe_terminal_rebuild"] = dict(terminal_rebuild)
+            if bool(terminal_rebuild.get("safe_terminal_rebuild_applied", False)):
+                out["reference_source"] = "safe_terminal_rebuild"
+                out["diff_drive_reference_source"] = "safe_terminal_rebuild"
+            return base, out, bool(
+                main_turn_repair.get("repair_applied", False) or
+                terminal_rebuild.get("safe_terminal_rebuild_applied", False))
         from stsm_madp.deform import path_curvature_metrics
         candidates = [(
             "refined", base, current, path_curvature_metrics(base))]
@@ -3102,11 +3287,14 @@ class WheelchairNode:
                 max(0.0, float(item[3].get("max_curvature", 0.0)) - 8.0) * 4.0 +
                 float(item[2].get("execution_profile_cost", 0.0))))
         repaired_used = (bool(main_turn_repair.get("repair_applied", False)) or
+                         bool(terminal_rebuild.get(
+                             "safe_terminal_rebuild_applied", False)) or
                          (best_source != "refined" and (
                              float(best_profile.get("execution_profile_cost", 0.0)) + 1e-6 <
                              float(current.get("execution_profile_cost", 0.0)))))
         out = dict(metrics or {})
         out["refined_main_turn_repair"] = dict(main_turn_repair)
+        out["safe_terminal_rebuild"] = dict(terminal_rebuild)
         if best_source == "diff_drive_launch_prefix":
             out["launch_prefix_audit"] = dict(repaired_launch_audit)
         elif best_source == "raw_diff_drive_launch_prefix":
@@ -3140,6 +3328,8 @@ class WheelchairNode:
                     current.get("monotonic_regression", 0.0)),
                 "monotonic_regression_after": float(
                     best_profile.get("monotonic_regression", 0.0)),
+                "safe_terminal_rebuild_applied": bool(
+                    terminal_rebuild.get("safe_terminal_rebuild_applied", False)),
             })
             corr.refinement_trace = trace
             out["refinement_trace"] = trace
@@ -3433,6 +3623,8 @@ class WheelchairNode:
                     corr, refined, metrics))
             if execution_repaired:
                 metrics.update(execution_metrics)
+                attempt["safe_terminal_rebuild"] = dict(
+                    metrics.get("safe_terminal_rebuild", {}))
                 reference_source = str(metrics.get(
                     "reference_source", reference_source))
                 refined_max_curvature = float(metrics.get(
@@ -3496,6 +3688,8 @@ class WheelchairNode:
                         "pre_repair_nonholonomic_execution_profile", {}))
             else:
                 metrics.update(execution_metrics)
+                attempt["safe_terminal_rebuild"] = dict(
+                    metrics.get("safe_terminal_rebuild", {}))
             # The execution reference exists at this point even if the
             # subsequent footprint/turn contracts reject it.  Record it
             # before those fail-closed gates so diagnostics never hide an
@@ -3507,7 +3701,8 @@ class WheelchairNode:
             attempt["candidate_path_trace"] = self._candidate_path_trace(
                 corr, raw_candidate, refined_before_execution,
                 refined, safety_context, turn_audit_constraint, reference_source,
-                turn_repair_applied=execution_repaired)
+                turn_repair_applied=execution_repaired,
+                terminal_rebuild_info=metrics.get("safe_terminal_rebuild", {}))
             if execution_repaired and not fallback_used:
                 ok, footprint_reason = self._footprint_path_checker(refined)
                 if not ok:

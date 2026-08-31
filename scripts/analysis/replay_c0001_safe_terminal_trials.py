@@ -590,8 +590,8 @@ def run(trace_path, output_path, include_terminal_trials=True):
     execution_replay = _execution_geometry_replay(candidate, refined, evaluator)
     execution_replay["initial_pose_source"] = str(initial_pose_source)
     existing_final_audit = _existing_final_reference_audit(candidate)
-    terminals = terminal_acceptance_preflight(GOAL, 0.25, context)[
-        "safe_terminal_candidates"]
+    terminal_preflight = terminal_acceptance_preflight(GOAL, 0.25, context)
+    terminals = terminal_preflight["safe_terminal_candidates"]
     terminals = sorted(terminals, key=lambda row: (row["distance_to_goal"], row["index"]))
     trials = []
     for rank, terminal in enumerate(terminals, start=1) if include_terminal_trials else []:
@@ -651,21 +651,31 @@ def run(trace_path, output_path, include_terminal_trials=True):
                 })
             manifold_bad = [row["index"] for row in final_rows
                             if not row["manifold_valid"]]
+            hard_bad = [row["index"] for row in final_rows
+                        if not row["hard_valid"]]
             max_turn = float(wheelchair_sharp_turn_audit(
                 final, turn_limit=TURN)["max_turn"])
-            valid = bool(not manifold_bad and max_turn <= TURN + 1e-9 and
+            max_curvature = float(geometry.get("max_curvature", 0.0))
+            min_clearance = min(row["clearance"] for row in final_rows)
+            max_risk = max(row["risk"] for row in final_rows)
+            valid = bool(not hard_bad and max_turn <= TURN + 1e-9 and
+                         max_curvature <= CURVATURE + 1e-9 and
                          np.linalg.norm(final[-1, :2] - GOAL[:2]) <= 0.25 + 1e-9)
             trial.update({
                 "execution_prefix_used": bool(prefix_used),
                 "final_reference_point_count": int(len(final)),
-                "final_min_clearance": min(row["clearance"] for row in final_rows),
-                "final_max_risk": max(row["risk"] for row in final_rows),
+                "final_min_clearance": min_clearance,
+                "final_max_risk": max_risk,
                 "final_manifold_violation_count": int(len(manifold_bad)),
+                "final_hard_invalid_indices": hard_bad,
                 "final_max_turn": max_turn,
+                "final_max_curvature": max_curvature,
                 "final_reference_valid": valid,
                 "reject_reason": ("" if valid else
                                   "final_reference_manifold_violation" if manifold_bad else
+                                  "final_reference_hard_safety_violation" if hard_bad else
                                   "refined_execution_turn_limit" if max_turn > TURN + 1e-9 else
+                                  "refined_execution_curvature_limit" if max_curvature > CURVATURE + 1e-9 else
                                   "completion_region_not_reached"),
                 "execution_geometry": geometry,
                 "turn_origin_audit": turn_origin,
@@ -677,6 +687,46 @@ def run(trace_path, output_path, include_terminal_trials=True):
                 break
         if trials and trials[-1].get("final_reference_valid"):
             break
+    selected = next((item for item in trials
+                     if item.get("final_reference_valid")), None)
+    safe_terminal_pipeline = {
+        "fixed_goal_hard_valid": bool(terminal_preflight.get(
+            "goal_hard_valid", False)),
+        "safe_terminal_rebuild_triggered": bool(
+            include_terminal_trials and not terminal_preflight.get(
+                "goal_hard_valid", False)),
+        "safe_terminal_candidate_count": int(len(terminals)),
+        "terminal_trial_count": int(len(trials)),
+        "final_reference_valid": bool(selected is not None),
+        "selected_terminal": (selected.get("selected_terminal")
+                              if selected is not None else None),
+        "selected_terminal_distance_to_goal": (
+            selected.get("distance_to_fixed_goal") if selected is not None else None),
+        "rebuild_start_index": (
+            selected.get("rebuild_start_idx") if selected is not None else None),
+        "terminal_rebuild_point_count": (
+            selected.get("rebuilt_point_count") if selected is not None else 0),
+        "final_reference_point_count": (
+            selected.get("final_reference_point_count") if selected is not None else 0),
+        "final_max_turn": (
+            selected.get("final_max_turn") if selected is not None else None),
+        "final_max_curvature": (
+            selected.get("final_max_curvature") if selected is not None else None),
+        "final_min_clearance": (
+            selected.get("final_min_clearance") if selected is not None else None),
+        "final_max_risk": (
+            selected.get("final_max_risk") if selected is not None else None),
+        "final_manifold_violation_count": (
+            selected.get("final_manifold_violation_count")
+            if selected is not None else None),
+        "critical_sequence_status": (
+            selected.get("critical_sequence_status")
+            if selected is not None else "not_checked"),
+        "final_reject_reason": (
+            selected.get("reject_reason") if selected is not None else
+            (trials[-1].get("reject_reason") if trials else
+             "no_safe_terminal_trial")),
+    }
     output = {
         "candidate_id": candidate["candidate_id"], "label": candidate["label"],
         "refined_point_count": int(len(refined)), "refined_safety": refined_rows,
@@ -686,6 +736,7 @@ def run(trace_path, output_path, include_terminal_trials=True):
         "initial_pose_source": str(initial_pose_source),
         "r010_existing_final_reference_audit": existing_final_audit,
         "execution_geometry_without_safe_terminal": execution_replay,
+        "safe_terminal_pipeline": safe_terminal_pipeline,
         "safe_terminal_count": int(len(terminals)), "trials": trials,
         "executable_candidate_count": int(any(
             item.get("final_reference_valid") for item in trials)),

@@ -1990,3 +1990,25 @@ def test_r010_c0001_curvature_replay_uses_diagnostics_yaw_and_repairs_window():
     assert replay_geom["execution_geometry"]["max_turn"] <= replay.TURN + 1e-9
     assert (replay_geom["execution_geometry"]["max_curvature"] <=
             replay.CURVATURE + 1e-9)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        full = replay.run(
+            trace, os.path.join(tmp, "safe_terminal.json"),
+            include_terminal_trials=True)
+    terminal = full["safe_terminal_pipeline"]
+    assert not terminal["fixed_goal_hard_valid"]
+    assert terminal["safe_terminal_rebuild_triggered"]
+    assert terminal["safe_terminal_candidate_count"] == 6
+    assert terminal["terminal_trial_count"] == 1
+    assert np.allclose(
+        terminal["selected_terminal"][:2],
+        [-0.4782468564315457, 0.7232274123458663])
+    assert terminal["selected_terminal_distance_to_goal"] <= 0.25 + 1e-9
+    assert terminal["rebuild_start_index"] == 17
+    assert terminal["final_reference_valid"]
+    assert terminal["final_min_clearance"] >= replay.CLEARANCE
+    assert terminal["final_max_risk"] <= replay.RISK
+    assert terminal["final_manifold_violation_count"] == 0
+    assert terminal["final_max_turn"] <= replay.TURN + 1e-9
+    assert terminal["final_max_curvature"] <= replay.CURVATURE + 1e-9
+    assert full["executable_candidate_count"] == 1
