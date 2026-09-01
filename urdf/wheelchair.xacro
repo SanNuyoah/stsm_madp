@@ -77,14 +77,13 @@
   <xacro:wheel name="left_wheel" y="${sep/2}"/>
   <xacro:wheel name="right_wheel" y="${-sep/2}"/>
 
-  <!-- Passive front caster visual. This link is fixed to the chassis and has
-       no steer/roll degree of freedom; a ground collision here creates a
-       third, non-holonomic contact that physically locks diff-drive yaw.
-       The two driven wheels are the only ground-contact geometry. -->
+  <!-- passive front caster (sphere) -->
   <link name="caster">
     <inertial><mass value="0.5"/>
       <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/></inertial>
     <visual><geometry><sphere radius="0.06"/></geometry><material name="dark"/></visual>
+    <collision><geometry><sphere radius="0.06"/></geometry>
+      <surface><friction><ode><mu>0.0</mu><mu2>0.0</mu2></ode></friction></surface></collision>
   </link>
   <joint name="caster_joint" type="fixed">
     <parent link="base_link"/>
@@ -92,6 +91,7 @@
     <origin xyz="${base_x/2 - 0.1} 0 ${-base_z/2 - wheel_r + 0.06}"/>
   </joint>
 
+  <gazebo reference="caster"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
   <gazebo reference="left_wheel"><mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
   <gazebo reference="right_wheel"><mu1>1.0</mu1><mu2>1.0</mu2></gazebo>
 

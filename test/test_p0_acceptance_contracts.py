@@ -1701,15 +1701,6 @@ def test_wheelchair_diff_drive_probe_is_isolated_from_stsm_and_captures_actuatio
     assert "wheelchair_diff_drive_physical_actuation_probe_v1" in source
 
 
-def test_wheelchair_fixed_caster_does_not_add_a_ground_collision_constraint():
-    root = ElementTree.parse(os.path.join(ROOT, "urdf", "wheelchair.xacro"))
-    caster = root.find("link[@name='caster']")
-    assert caster is not None
-    assert caster.find("collision") is None
-    assert 'reference="caster"' not in open(
-        os.path.join(ROOT, "urdf", "wheelchair.xacro"), "r").read()
-
-
 def test_wheelchair_watchdog_hold_covers_measured_control_update_gap():
     launch = open(os.path.join(ROOT, "launch", "wheelchair_action.launch"),
                   "r").read()
