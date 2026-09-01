@@ -335,6 +335,8 @@ class WheelchairNode:
         self.mpc_reference_records = []
         self.mpc_executed_records = []
         self.mpc_runtime_records = []
+        self.no_progress_execution_records = []
+        self.no_progress_execution_trigger = None
         self.baseline_reference_records = []
         self.baseline_mpc_output_records = []
         self._baseline_reference_solve_index = 0
@@ -7543,10 +7545,37 @@ class WheelchairNode:
         self._write_mpc_reference_path()
         self._write_baseline_evidence()
         self._write_mpc_diagnostics()
+        self._write_no_progress_execution_audit()
         self._write_runtime_replan_connectability_diagnostics()
         self._write_runtime_recovery_diagnostics()
         self._write_decision_trace()
         self._write_candidate_recovery_diagnostics()
+
+    def _write_no_progress_execution_audit(self):
+        """Persist execution-chain evidence for post-run no-progress analysis."""
+        diag, _breakdown = self._mpc_output_paths()
+        output_dir = os.path.dirname(diag)
+        if output_dir and not os.path.isdir(output_dir):
+            os.makedirs(output_dir)
+        trigger = dict(self.no_progress_execution_trigger or {})
+        cycle = int(trigger.get("cycle_id", len(self.no_progress_execution_records)))
+        records = list(self.no_progress_execution_records)
+        payload = {
+            "triggered": bool(trigger),
+            "trigger": trigger,
+            "window": records[max(0, cycle - 10):cycle + 1] if trigger else records[-10:],
+            "summary": {
+                "record_count": len(records),
+                "active_corridor_id": self._corridor_id(
+                    self.execution_corridor or self.selected_corridor),
+                "primary_cause": "unknown",
+                "supporting_metrics": {},
+            },
+            "contract": "diagnostics_only_no_progress_execution_audit",
+        }
+        with open(os.path.join(output_dir or ".",
+                               "no_progress_execution_audit.json"), "w") as f:
+            json.dump(payload, f, indent=2, sort_keys=True)
 
     def _write_runtime_replan_connectability_diagnostics(self):
         diag, _breakdown = self._mpc_output_paths()
@@ -8077,6 +8106,10 @@ class WheelchairNode:
         last_replan_time = run_start
         replan_progress_time = run_start
         last_replan_dist = float("inf")
+        audit_previous_state = np.asarray(self.state, float).copy()
+        audit_previous_dist = float(np.linalg.norm(
+            audit_previous_state[:2] - self.goal[:2]))
+        audit_previous_ref_idx = -1
         while not rospy.is_shutdown():
             if self.state is not None:
                 self.mpc_executed_records.append({
@@ -8206,6 +8239,15 @@ class WheelchairNode:
                     replan_progress_time = now
                 elif ((now - replan_progress_time).to_sec() >=
                       self.no_progress_replan_time):
+                    self.no_progress_execution_trigger = {
+                        "cycle_id": int(len(self.no_progress_execution_records)),
+                        "trigger_reason": "reference_or_goal_progress_stall",
+                        "dist_to_goal": float(dist),
+                        "active_corridor_id": self._corridor_id(corridor),
+                        "reference_global_idx": int(getattr(
+                            corridor, "reference_index", -1)),
+                        "stale_s": float((now - replan_progress_time).to_sec()),
+                    }
                     recovered, did_recover = self._runtime_recovery(
                         corridor, now, "no_progress", deadline=run_deadline)
                     if recovered is None or not did_recover:
@@ -8521,6 +8563,50 @@ class WheelchairNode:
                 progress_floor_value)
             runtime_record["stsm_liveness_active"] = bool(liveness_active)
             runtime_record["stsm_liveness_w_limit"] = float(liveness_w_limit)
+            audit_state = np.asarray(self.state, float).copy()
+            audit_dist = float(np.linalg.norm(audit_state[:2] - self.goal[:2]))
+            audit_ref_idx = int(getattr(corridor, "reference_index", -1))
+            raw_cmd = runtime_record.get("raw_mpc_cmd", [0.0, 0.0])
+            self.no_progress_execution_records.append({
+                "cycle_id": int(len(self.no_progress_execution_records)),
+                "robot_x": float(audit_state[0]), "robot_y": float(audit_state[1]),
+                "robot_yaw": float(audit_state[2]),
+                "dist_to_goal": audit_dist,
+                "reference_global_idx": audit_ref_idx,
+                "reference_progress_s": float(audit_ref_idx),
+                "nearest_reference_idx": int(getattr(
+                    corridor, "reference_nearest_index", -1)),
+                "lookahead_reference_idx": int(getattr(
+                    corridor, "reference_next_index", -1)),
+                "tracking_error_xy": float(getattr(
+                    corridor, "reference_distance", 0.0)),
+                "mpc_raw_v": float(raw_cmd[0]), "mpc_raw_w": float(raw_cmd[1]),
+                "post_safety_v": float(v_mpc_raw), "post_safety_w": float(w_mpc_raw),
+                "final_published_v": float(v), "final_published_w": float(w),
+                "actual_delta_xy": float(np.linalg.norm(
+                    audit_state[:2] - audit_previous_state[:2])),
+                "actual_delta_yaw": float(np.arctan2(
+                    np.sin(audit_state[2] - audit_previous_state[2]),
+                    np.cos(audit_state[2] - audit_previous_state[2]))),
+                "actual_forward_progress": float(np.dot(
+                    audit_state[:2] - audit_previous_state[:2],
+                    [np.cos(audit_state[2]), np.sin(audit_state[2])])),
+                "goal_progress": float(audit_previous_dist - audit_dist),
+                "reference_progress_delta": float(audit_ref_idx - audit_previous_ref_idx)
+                if audit_previous_ref_idx >= 0 else 0.0,
+                "risk": float(getattr(gate, "risk", 0.0)),
+                "manifold_valid": bool(not getattr(gate, "stop", False)),
+                "watchdog_zero_stop": bool(self.last_watchdog_zero_stop),
+                "watchdog_command_age_s": float(self.last_watchdog_command_age_s),
+                "command_suppression_stage": (
+                    "watchdog" if self.last_watchdog_zero_stop else
+                    "safety_gate" if float(v) < float(v_mpc_raw) - 1e-9 else "none"),
+                "no_progress_counter": float((now - replan_progress_time).to_sec()),
+                "no_progress_reason": "",
+            })
+            audit_previous_state = audit_state
+            audit_previous_dist = audit_dist
+            audit_previous_ref_idx = audit_ref_idx
             self._record_baseline_mpc_output(
                 corridor, ref, v_mpc_raw, w_mpc_raw, v, w, gate, adp_scale,
                 topology_constraint_for_mpc)
