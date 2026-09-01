@@ -17,7 +17,8 @@ import time
 import rospy
 from gazebo_msgs.msg import ContactsState, ModelState, ModelStates
 from gazebo_msgs.srv import (GetLinkProperties, GetLinkState, GetPhysicsProperties,
-                             SetLinkProperties, SetModelState)
+                             SetLinkProperties, SetModelState,
+                             SetPhysicsProperties)
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState
@@ -286,6 +287,29 @@ class DiffDriveProbe(object):
             },
         }
 
+    def set_ode_sor_pgs_iterations(self, iterations):
+        """Override only ODE SOR-PGS iterations for this probe process."""
+        get_physics = rospy.ServiceProxy("/gazebo/get_physics_properties",
+                                         GetPhysicsProperties)
+        set_physics = rospy.ServiceProxy("/gazebo/set_physics_properties",
+                                         SetPhysicsProperties)
+        rospy.wait_for_service("/gazebo/get_physics_properties", timeout=15.0)
+        rospy.wait_for_service("/gazebo/set_physics_properties", timeout=15.0)
+        before = get_physics()
+        if not before.success:
+            raise RuntimeError("get_physics_properties failed: %s" %
+                               before.status_message)
+        ode = before.ode_config
+        original = int(ode.sor_pgs_iters)
+        ode.sor_pgs_iters = int(iterations)
+        result = set_physics(before.time_step, before.max_update_rate,
+                             before.gravity, ode)
+        if not result.success:
+            raise RuntimeError("set_physics_properties failed: %s" %
+                               result.status_message)
+        return {"parameter": "sor_pgs_iters", "before": original,
+                "requested": int(iterations), "after": self.physics_audit()}
+
     def idle(self, duration_s, rate_hz):
         samples = []
         rate = rospy.Rate(rate_hz)
@@ -354,12 +378,16 @@ def main():
     wheel_contact_max_vel_enabled = bool(rospy.get_param(
         "~wheel_contact_max_vel_enabled", False))
     wheel_contact_max_vel = float(rospy.get_param("~wheel_contact_max_vel", 0.1))
+    ode_sor_pgs_iterations = int(rospy.get_param("~ode_sor_pgs_iterations", 0))
     deadline = time.time() + 15.0
     while not rospy.is_shutdown() and not probe.ready() and time.time() < deadline:
         time.sleep(0.05)
     if not probe.ready():
         raise RuntimeError("probe topics were not ready")
     suspended_links = probe._set_suspended() if suspended else []
+    physics_before = probe.physics_audit()
+    physics_override = (probe.set_ode_sor_pgs_iterations(ode_sor_pgs_iterations)
+                        if ode_sor_pgs_iterations > 0 else None)
     time.sleep(0.5)
     payload = {
         "contract": "wheelchair_diff_drive_physical_actuation_probe_v1",
@@ -379,7 +407,8 @@ def main():
         "probe_wheel_contact_max_vel_enabled": wheel_contact_max_vel_enabled,
         "probe_wheel_contact_max_vel": wheel_contact_max_vel,
         "wheel_contact_direction_audit": wheel_contact_direction_audit(),
-        "physics_audit": probe.physics_audit(),
+        "physics_audit": physics_before,
+        "physics_override": physics_override,
         "suspended_links": suspended_links,
         "wheel_height_audit": probe.wheel_height_audit(),
         "idle": probe.idle(2.5, rate_hz),

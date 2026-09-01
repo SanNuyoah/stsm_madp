@@ -16,6 +16,7 @@
   <arg name="wheel_contact_min_depth" default="0.001"/>
   <arg name="wheel_contact_max_vel_enabled" default="false"/>
   <arg name="wheel_contact_max_vel" default="0.1"/>
+  <arg name="ode_sor_pgs_iterations" default="0"/>
   <arg name="output_path" default="/tmp/wheelchair_diff_drive_probe.json"/>
 
   <include file="$(find stsm_madp)/launch/wheelchair_eldercare.launch">
@@ -50,6 +51,7 @@
     <param name="wheel_contact_min_depth" value="$(arg wheel_contact_min_depth)"/>
     <param name="wheel_contact_max_vel_enabled" value="$(arg wheel_contact_max_vel_enabled)"/>
     <param name="wheel_contact_max_vel" value="$(arg wheel_contact_max_vel)"/>
+    <param name="ode_sor_pgs_iterations" value="$(arg ode_sor_pgs_iterations)"/>
     <param name="output_path" value="$(arg output_path)"/>
   </node>
 </launch>
