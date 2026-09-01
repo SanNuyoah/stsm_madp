@@ -16,7 +16,7 @@ import time
 
 import rospy
 from gazebo_msgs.msg import ContactsState, ModelState, ModelStates
-from gazebo_msgs.srv import (GetLinkProperties, GetLinkState,
+from gazebo_msgs.srv import (GetLinkProperties, GetLinkState, GetPhysicsProperties,
                              SetLinkProperties, SetModelState)
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
@@ -256,6 +256,36 @@ class DiffDriveProbe(object):
                            "wheel_bottom_z": center_z - self.radius}
         return rows
 
+    def physics_audit(self):
+        """Capture the live Gazebo ODE configuration before solver trials."""
+        get_physics = rospy.ServiceProxy("/gazebo/get_physics_properties",
+                                         GetPhysicsProperties)
+        rospy.wait_for_service("/gazebo/get_physics_properties", timeout=15.0)
+        response = get_physics()
+        if not response.success:
+            raise RuntimeError("get_physics_properties failed: %s" %
+                               response.status_message)
+        ode = response.ode_config
+        return {
+            "time_step": float(response.time_step),
+            "max_update_rate": float(response.max_update_rate),
+            "paused": bool(response.pause),
+            "gravity": [float(response.gravity.x), float(response.gravity.y),
+                        float(response.gravity.z)],
+            "ode": {
+                "auto_disable_bodies": bool(ode.auto_disable_bodies),
+                "sor_pgs_precon_iters": int(ode.sor_pgs_precon_iters),
+                "sor_pgs_iters": int(ode.sor_pgs_iters),
+                "sor_pgs_w": float(ode.sor_pgs_w),
+                "sor_pgs_rms_error_tol": float(ode.sor_pgs_rms_error_tol),
+                "contact_surface_layer": float(ode.contact_surface_layer),
+                "contact_max_correcting_vel": float(
+                    ode.contact_max_correcting_vel),
+                "cfm": float(ode.cfm), "erp": float(ode.erp),
+                "max_contacts": int(ode.max_contacts),
+            },
+        }
+
     def idle(self, duration_s, rate_hz):
         samples = []
         rate = rospy.Rate(rate_hz)
@@ -349,6 +379,7 @@ def main():
         "probe_wheel_contact_max_vel_enabled": wheel_contact_max_vel_enabled,
         "probe_wheel_contact_max_vel": wheel_contact_max_vel,
         "wheel_contact_direction_audit": wheel_contact_direction_audit(),
+        "physics_audit": probe.physics_audit(),
         "suspended_links": suspended_links,
         "wheel_height_audit": probe.wheel_height_audit(),
         "idle": probe.idle(2.5, rate_hz),

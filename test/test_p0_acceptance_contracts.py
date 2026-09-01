@@ -1713,6 +1713,8 @@ def test_wheelchair_diff_drive_probe_is_isolated_from_stsm_and_captures_actuatio
     assert "wheel_contact_min_depth" in source
     assert "wheel_contact_max_vel" in launch
     assert "wheel_contact_max_vel" in source
+    assert "physics_audit" in source
+    assert "get_physics_properties" in source
     assert "wheelchair_diff_drive_physical_actuation_probe_v1" in source
 
 
