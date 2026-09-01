@@ -15,8 +15,9 @@ import os
 import time
 
 import rospy
-from gazebo_msgs.msg import ModelState, ModelStates
-from gazebo_msgs.srv import GetLinkProperties, SetLinkProperties, SetModelState
+from gazebo_msgs.msg import ContactsState, ModelState, ModelStates
+from gazebo_msgs.srv import (GetLinkProperties, GetLinkState,
+                             SetLinkProperties, SetModelState)
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState
@@ -31,6 +32,10 @@ WHEEL_LINKS = ("wheelchair::base_footprint", "wheelchair::left_wheel",
 CMD_TOPIC = "/wheelchair/diff_drive_controller/cmd_vel"
 ODOM_TOPIC = "/wheelchair/diff_drive_controller/odom"
 JOINT_TOPIC = "/wheelchair/joint_states"
+CONTACT_TOPICS = {
+    "left_wheel_joint": "/wheelchair/left_wheel/contact",
+    "right_wheel_joint": "/wheelchair/right_wheel/contact",
+}
 
 
 def _yaw(q):
@@ -47,6 +52,8 @@ class DiffDriveProbe(object):
         self.joint = {}
         self.model = None
         self.odom = None
+        self.contacts = dict((name, {"contact_count": 0, "contacts": []})
+                             for name in WHEEL_JOINTS)
         self.radius = float(rospy.get_param(
             "/wheelchair/diff_drive_controller/wheel_radius", 0.15))
         self.separation = float(rospy.get_param(
@@ -56,6 +63,9 @@ class DiffDriveProbe(object):
         rospy.Subscriber("/gazebo/model_states", ModelStates, self._model_cb,
                          queue_size=20)
         rospy.Subscriber(ODOM_TOPIC, Odometry, self._odom_cb, queue_size=20)
+        for joint, topic in CONTACT_TOPICS.items():
+            rospy.Subscriber(topic, ContactsState, self._contact_cb,
+                             callback_args=joint, queue_size=50)
 
     def _joint_cb(self, msg):
         velocity = dict(zip(msg.name, msg.velocity))
@@ -81,6 +91,59 @@ class DiffDriveProbe(object):
                      "y": float(pose.position.y),
                      "yaw": float(_yaw(pose.orientation))}
 
+    @staticmethod
+    def _other_collision(joint, first, second):
+        own = "left_wheel_collision" if joint == "left_wheel_joint" else "right_wheel_collision"
+        if own in first:
+            return second
+        if own in second:
+            return first
+        return second
+
+    @staticmethod
+    def _contact_kind(name):
+        lowered = str(name).lower()
+        if "ground_plane" in lowered:
+            return "ground"
+        if "wheelchair" in lowered and "wheel" not in lowered:
+            return "chassis_or_caster"
+        if "wheelchair" in lowered:
+            return "other_wheel"
+        return "unknown"
+
+    def _contact_cb(self, msg, joint):
+        rows = []
+        for state in msg.states:
+            force = state.total_wrench.force
+            normal = state.contact_normals[0] if state.contact_normals else None
+            fx, fy, fz = float(force.x), float(force.y), float(force.z)
+            normal_force = None
+            tangential_force = None
+            if normal is not None:
+                dot = fx * normal.x + fy * normal.y + fz * normal.z
+                normal_force = abs(float(dot))
+                tangential_force = math.sqrt(max(0.0, fx * fx + fy * fy + fz * fz - dot * dot))
+            other = self._other_collision(joint, state.collision1_name,
+                                          state.collision2_name)
+            rows.append({
+                "collision1": str(state.collision1_name),
+                "collision2": str(state.collision2_name),
+                "other_collision_name": str(other),
+                "other_kind": self._contact_kind(other),
+                "contact_position": ([float(state.contact_positions[0].x),
+                                      float(state.contact_positions[0].y),
+                                      float(state.contact_positions[0].z)]
+                                     if state.contact_positions else None),
+                "contact_normal": ([float(normal.x), float(normal.y), float(normal.z)]
+                                   if normal is not None else None),
+                "penetration_depth": (max([float(depth) for depth in state.depths])
+                                      if state.depths else 0.0),
+                "force": [fx, fy, fz],
+                "normal_force": normal_force,
+                "tangential_force": tangential_force,
+            })
+        self.contacts[joint] = {"contact_count": len(rows), "contacts": rows}
+
     def ready(self):
         return self.model is not None and self.odom is not None and all(
             name in self.joint for name in WHEEL_JOINTS)
@@ -91,6 +154,8 @@ class DiffDriveProbe(object):
             "gazebo_pose": dict(self.model or {}),
             "odom": dict(self.odom or {}),
             "wheel_actual": dict(self.joint),
+            "wheel_contact": dict((name, dict(self.contacts.get(name, {})))
+                                 for name in WHEEL_JOINTS),
         }
         if target is not None:
             item["wheel_target"] = dict(target)
@@ -140,6 +205,32 @@ class DiffDriveProbe(object):
             raise RuntimeError("set_model_state failed: %s" % result.status_message)
         return applied
 
+    def wheel_height_audit(self):
+        get_state = rospy.ServiceProxy("/gazebo/get_link_state", GetLinkState)
+        rospy.wait_for_service("/gazebo/get_link_state", timeout=15.0)
+        rows = {}
+        for joint, link in (("left_wheel_joint", "wheelchair::left_wheel"),
+                            ("right_wheel_joint", "wheelchair::right_wheel")):
+            response = get_state(link, "world")
+            if not response.success:
+                raise RuntimeError("get_link_state failed for %s: %s" %
+                                   (link, response.status_message))
+            center_z = float(response.link_state.pose.position.z)
+            rows[joint] = {"link": link, "center_z": center_z,
+                           "radius": self.radius,
+                           "ground_z": 0.0,
+                           "wheel_bottom_z": center_z - self.radius}
+        return rows
+
+    def idle(self, duration_s, rate_hz):
+        samples = []
+        rate = rospy.Rate(rate_hz)
+        deadline = time.time() + duration_s
+        while not rospy.is_shutdown() and time.time() < deadline:
+            samples.append(self.snapshot())
+            rate.sleep()
+        return {"duration_wall_s": float(duration_s), "samples": samples}
+
     def run(self, name, v, w, duration_s, rate_hz):
         target = self.targets(v, w)
         before = self.snapshot(target)
@@ -182,6 +273,8 @@ def main():
     rate_hz = float(rospy.get_param("~rate_hz", 20.0))
     output_path = rospy.get_param("~output_path",
                                   "/tmp/wheelchair_diff_drive_probe.json")
+    spawn_z = float(rospy.get_param("~spawn_z", 0.05))
+    wheel_mu = float(rospy.get_param("~wheel_mu", 1.0))
     deadline = time.time() + 15.0
     while not rospy.is_shutdown() and not probe.ready() and time.time() < deadline:
         time.sleep(0.05)
@@ -195,7 +288,10 @@ def main():
         "cmd_topic": CMD_TOPIC, "joint_state_topic": JOINT_TOPIC,
         "odom_topic": ODOM_TOPIC, "wheel_radius": probe.radius,
         "wheel_separation": probe.separation,
+        "probe_spawn_z": spawn_z, "probe_wheel_mu": wheel_mu,
         "suspended_links": suspended_links,
+        "wheel_height_audit": probe.wheel_height_audit(),
+        "idle": probe.idle(2.5, rate_hz),
         "straight": probe.run("straight", 0.2, 0.0, duration_s, rate_hz),
         "rotate": probe.run("rotate", 0.0, 0.5, duration_s, rate_hz),
     }

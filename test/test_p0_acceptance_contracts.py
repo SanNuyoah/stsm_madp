@@ -1698,6 +1698,10 @@ def test_wheelchair_diff_drive_probe_is_isolated_from_stsm_and_captures_actuatio
     assert "wheel_velocity_error" in source
     assert "wheel_actual" in source
     assert "wheel_target" in source
+    assert "wheel_contact" in source
+    assert "penetration_depth" in source
+    assert "normal_force" in source
+    assert "tangential_force" in source
     assert "wheelchair_diff_drive_physical_actuation_probe_v1" in source
 
 

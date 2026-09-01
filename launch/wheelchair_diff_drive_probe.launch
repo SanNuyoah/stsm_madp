@@ -4,17 +4,22 @@
   <arg name="gui" default="false"/>
   <arg name="suspended" default="false"/>
   <arg name="duration_s" default="4.0"/>
+  <arg name="spawn_z" default="0.05"/>
+  <arg name="wheel_mu" default="1.0"/>
   <arg name="output_path" default="/tmp/wheelchair_diff_drive_probe.json"/>
 
   <include file="$(find stsm_madp)/launch/wheelchair_eldercare.launch">
     <arg name="gui" value="$(arg gui)"/>
-    <arg name="spawn_z" value="0.50" if="$(arg suspended)"/>
+    <arg name="spawn_z" value="$(arg spawn_z)"/>
+    <arg name="wheel_mu" value="$(arg wheel_mu)"/>
   </include>
 
   <node pkg="stsm_madp" type="wheelchair_diff_drive_probe.py"
         name="wheelchair_diff_drive_probe" output="screen">
     <param name="suspended" value="$(arg suspended)"/>
     <param name="duration_s" value="$(arg duration_s)"/>
+    <param name="spawn_z" value="$(arg spawn_z)"/>
+    <param name="wheel_mu" value="$(arg wheel_mu)"/>
     <param name="output_path" value="$(arg output_path)"/>
   </node>
 </launch>

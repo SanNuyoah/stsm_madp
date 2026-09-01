@@ -5,6 +5,7 @@
   <!-- Kept at the production value by default.  The diff-drive probe uses a
        raised spawn only while it isolates wheel-joint actuation. -->
   <arg name="spawn_z" default="0.05"/>
+  <arg name="wheel_mu" default="1.0"/>
 
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
     <arg name="world_name" value="$(find stsm_madp)/worlds/eldercare_room.world"/>
@@ -13,7 +14,7 @@
   </include>
 
   <param name="wheelchair/robot_description"
-         command="$(find xacro)/xacro '$(find stsm_madp)/urdf/wheelchair.xacro'"/>
+         command="$(find xacro)/xacro '$(find stsm_madp)/urdf/wheelchair.xacro' wheel_mu:=$(arg wheel_mu)"/>
 
   <node name="wc_spawner" pkg="gazebo_ros" type="spawn_model" respawn="false"
         output="screen"
