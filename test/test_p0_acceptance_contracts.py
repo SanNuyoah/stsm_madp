@@ -1695,6 +1695,9 @@ def test_wheelchair_watchdog_hold_covers_measured_control_update_gap():
                   "r").read()
     assert 'name="command_hold_s" default="1.0"' in launch
     assert "command_hold_s: 1.0" in config
+    experiment = open(os.path.join(ROOT, "scripts", "run_experiments.sh"),
+                      "r").read()
+    assert 'wc_command_hold_s="${WC_COMMAND_HOLD_S:-1.0}"' in experiment
 
 
 def test_adp_terminal_td_target_does_not_bootstrap_next_value():
