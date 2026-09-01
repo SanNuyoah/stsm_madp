@@ -22,6 +22,8 @@
   <xacro:arg name="wheel_contact_kd" default="1.0"/>
   <xacro:arg name="wheel_contact_min_depth_enabled" default="false"/>
   <xacro:arg name="wheel_contact_min_depth" default="0.001"/>
+  <xacro:arg name="wheel_contact_max_vel_enabled" default="false"/>
+  <xacro:arg name="wheel_contact_max_vel" default="0.1"/>
 
   <material name="chair"><color rgba="0.2 0.3 0.4 1"/></material>
   <material name="dark"><color rgba="0.1 0.1 0.1 1"/></material>
@@ -124,6 +126,9 @@
     <xacro:if value="$(arg wheel_contact_min_depth_enabled)">
       <minDepth>$(arg wheel_contact_min_depth)</minDepth>
     </xacro:if>
+    <xacro:if value="$(arg wheel_contact_max_vel_enabled)">
+      <maxVel>$(arg wheel_contact_max_vel)</maxVel>
+    </xacro:if>
     <sensor name="left_wheel_contact_sensor" type="contact">
       <always_on>true</always_on><update_rate>100</update_rate>
       <contact><collision>left_wheel_collision</collision></contact>
@@ -146,6 +151,9 @@
     </xacro:if>
     <xacro:if value="$(arg wheel_contact_min_depth_enabled)">
       <minDepth>$(arg wheel_contact_min_depth)</minDepth>
+    </xacro:if>
+    <xacro:if value="$(arg wheel_contact_max_vel_enabled)">
+      <maxVel>$(arg wheel_contact_max_vel)</maxVel>
     </xacro:if>
     <sensor name="right_wheel_contact_sensor" type="contact">
       <always_on>true</always_on><update_rate>100</update_rate>
