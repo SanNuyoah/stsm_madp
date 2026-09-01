@@ -2111,3 +2111,31 @@ def test_r011_runtime_join_replay_finds_safe_forward_c0001_join():
     assert merged["final_reference_valid"]
     assert merged["final_reject_reason"] == ""
     assert payload["runtime_executable_candidate_count"] == 1
+
+
+def test_r001_mpc_reference_lineage_audit_preserves_flattened_index_semantics():
+    script = os.path.join(
+        ROOT, "scripts", "analysis", "audit_mpc_reference_lineage_r001.py")
+    spec = importlib.util.spec_from_file_location("r001_reference_lineage", script)
+    audit = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(audit)
+
+    run_dir = os.path.join(
+        ROOT, "results", "runs", "20260901_R001", "wheelchair", "stsm")
+    with tempfile.TemporaryDirectory() as tmp:
+        payload = audit.run(run_dir, os.path.join(tmp, "lineage.json"))
+
+    planning = payload["planning_final"]
+    assert planning["point_count"] == 54
+    assert planning["min_clearance"] >= 0.10
+    assert planning["manifold_violation_count"] == 0
+    assert payload["first_invalid_stage"] == "formal_reference_safety_audit_input"
+    worst = payload["worst_runtime_point"]
+    assert worst["flat_index"] == 2249
+    assert worst["cycle_id"] == 374
+    assert worst["horizon_index"] == 5
+    assert worst["global_reference_index"] == 53
+    assert np.allclose([worst["x"], worst["y"]], [-0.55, 0.7375])
+    assert np.isclose(worst["clearance"], 0.011571238099605809)
+    assert worst["lineage"]["generated_by"] == "identity"
+    assert not worst["lineage"]["coordinate_changed"]

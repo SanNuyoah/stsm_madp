@@ -6348,6 +6348,7 @@ class WheelchairNode:
         point_map = list(getattr(corridor, "runtime_reference_point_map", []) or [])
         for idx, p in enumerate(np.asarray(ref, float)):
             global_idx = len(self.mpc_reference_records)
+            point_meta = (point_map[idx] if idx < len(point_map) else {})
             self.mpc_reference_records.append({
                 "robot": "wheelchair",
                 "corridor_id": cid,
@@ -6357,15 +6358,24 @@ class WheelchairNode:
                 "horizon_point_index": idx,
                 "trajectory_point_index": global_idx,
                 "timestamp_or_s_index": global_idx,
+                # These fields make the CSV a per-cycle horizon trace rather
+                # than an ambiguous flattened path.  They are diagnostics only:
+                # the reference passed to the MPC is not changed here.
+                "robot_x": float(self.state[0]) if self.state is not None else 0.0,
+                "robot_y": float(self.state[1]) if self.state is not None else 0.0,
+                "robot_yaw": float(self.state[2]) if self.state is not None else 0.0,
+                "global_reference_index": int(point_meta.get(
+                    "original_refined_index", -1)),
+                "reference_nearest_index": int(getattr(
+                    corridor, "reference_nearest_index", -1)),
+                "reference_progress_index": int(getattr(
+                    corridor, "reference_index", -1)),
                 "original_refined_index": int(
-                    point_map[idx].get("original_refined_index", -1))
-                if idx < len(point_map) else -1,
+                    point_meta.get("original_refined_index", -1)),
                 "final_approach_generated": bool(
-                    point_map[idx].get("final_approach_generated", False))
-                if idx < len(point_map) else False,
+                    point_meta.get("final_approach_generated", False)),
                 "reference_point_source": str(
-                    point_map[idx].get("source", ""))
-                if idx < len(point_map) else "",
+                    point_meta.get("source", "")),
                 "x": float(p[0]),
                 "y": float(p[1]),
                 "z": 0.0,
@@ -6465,7 +6475,10 @@ class WheelchairNode:
         fields = [
             "robot", "corridor_id", "reference_source", "phase", "solve_index",
             "horizon_point_index", "trajectory_point_index",
-            "timestamp_or_s_index", "x", "y", "z",
+            "timestamp_or_s_index", "robot_x", "robot_y", "robot_yaw",
+            "global_reference_index", "reference_nearest_index",
+            "reference_progress_index", "original_refined_index",
+            "final_approach_generated", "reference_point_source", "x", "y", "z",
         ]
         with open(self.mpc_reference_out, "w") as f:
             writer = csv.DictWriter(f, fieldnames=fields)
