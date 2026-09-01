@@ -310,6 +310,9 @@ def main():
     spawn_z = float(rospy.get_param("~spawn_z", 0.05))
     wheel_mu = float(rospy.get_param("~wheel_mu", 1.0))
     wheel_fdir1_enabled = bool(rospy.get_param("~wheel_fdir1_enabled", False))
+    wheel_lateral_slip_enabled = bool(rospy.get_param(
+        "~wheel_lateral_slip_enabled", False))
+    wheel_lateral_slip = float(rospy.get_param("~wheel_lateral_slip", 0.0))
     deadline = time.time() + 15.0
     while not rospy.is_shutdown() and not probe.ready() and time.time() < deadline:
         time.sleep(0.05)
@@ -325,6 +328,8 @@ def main():
         "wheel_separation": probe.separation,
         "probe_spawn_z": spawn_z, "probe_wheel_mu": wheel_mu,
         "probe_wheel_fdir1_enabled": wheel_fdir1_enabled,
+        "probe_wheel_lateral_slip_enabled": wheel_lateral_slip_enabled,
+        "probe_wheel_lateral_slip": wheel_lateral_slip,
         "wheel_contact_direction_audit": wheel_contact_direction_audit(),
         "suspended_links": suspended_links,
         "wheel_height_audit": probe.wheel_height_audit(),

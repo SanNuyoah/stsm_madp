@@ -1705,6 +1705,8 @@ def test_wheelchair_diff_drive_probe_is_isolated_from_stsm_and_captures_actuatio
     assert "wheel_contact_direction_audit" in source
     assert "wheel_fdir1_enabled" in launch
     assert "wheel_fdir1_enabled" in source
+    assert "wheel_lateral_slip" in launch
+    assert "wheel_lateral_slip" in source
     assert "wheelchair_diff_drive_physical_actuation_probe_v1" in source
 
 
@@ -1714,6 +1716,7 @@ def test_wheelchair_fdir1_probe_is_explicit_and_disabled_in_production_baseline(
                   "r").read()
     assert 'name="wheel_fdir1_enabled" default="false"' in xacro
     assert xacro.count("<fdir1>1 0 0</fdir1>") == 2
+    assert xacro.count("<slip2>$(arg wheel_lateral_slip)</slip2>") == 2
     assert "rolling_direction_collision" in open(
         os.path.join(ROOT, "scripts", "analysis",
                      "wheelchair_diff_drive_probe.py"), "r").read()

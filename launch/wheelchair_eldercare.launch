@@ -7,6 +7,8 @@
   <arg name="spawn_z" default="0.05"/>
   <arg name="wheel_mu" default="1.0"/>
   <arg name="wheel_fdir1_enabled" default="false"/>
+  <arg name="wheel_lateral_slip_enabled" default="false"/>
+  <arg name="wheel_lateral_slip" default="0.0"/>
 
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
     <arg name="world_name" value="$(find stsm_madp)/worlds/eldercare_room.world"/>
@@ -15,7 +17,7 @@
   </include>
 
   <param name="wheelchair/robot_description"
-         command="$(find xacro)/xacro '$(find stsm_madp)/urdf/wheelchair.xacro' wheel_mu:=$(arg wheel_mu) wheel_fdir1_enabled:=$(arg wheel_fdir1_enabled)"/>
+         command="$(find xacro)/xacro '$(find stsm_madp)/urdf/wheelchair.xacro' wheel_mu:=$(arg wheel_mu) wheel_fdir1_enabled:=$(arg wheel_fdir1_enabled) wheel_lateral_slip_enabled:=$(arg wheel_lateral_slip_enabled) wheel_lateral_slip:=$(arg wheel_lateral_slip)"/>
 
   <node name="wc_spawner" pkg="gazebo_ros" type="spawn_model" respawn="false"
         output="screen"
