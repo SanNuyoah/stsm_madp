@@ -1688,6 +1688,15 @@ def test_wheelchair_diff_drive_timeout_exceeds_node_watchdog_hold():
     assert "cmd_vel_timeout: 1.0" in control
 
 
+def test_wheelchair_watchdog_hold_covers_measured_control_update_gap():
+    launch = open(os.path.join(ROOT, "launch", "wheelchair_action.launch"),
+                  "r").read()
+    config = open(os.path.join(ROOT, "config", "wheelchair.yaml"),
+                  "r").read()
+    assert 'name="command_hold_s" default="1.0"' in launch
+    assert "command_hold_s: 1.0" in config
+
+
 def test_adp_terminal_td_target_does_not_bootstrap_next_value():
     critic = ADPCritic(
         feature_names=["bias"], theta=[2.0], mean=[0.0], std=[1.0],

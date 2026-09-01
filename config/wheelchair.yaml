@@ -14,7 +14,7 @@ outputs:
   trajectory: results/run/wheelchair/trajectory.csv
   metrics: results/run/metrics/wheelchair_metrics.csv
 
-command_hold_s: 0.6
+command_hold_s: 1.0
 mpc_solve_deadline_s: 0.6
 
 mpc:
