@@ -23,9 +23,11 @@ from sensor_msgs.msg import JointState
 
 
 WHEEL_JOINTS = ("left_wheel_joint", "right_wheel_joint")
-WHEEL_LINKS = ("wheelchair::base_link", "wheelchair::left_wheel",
-               "wheelchair::right_wheel", "wheelchair::seat_back",
-               "wheelchair::caster")
+# Gazebo lumps fixed children (base_link, caster and seat_back) into the
+# model's base_footprint body.  These are the scoped dynamic bodies reported
+# by /gazebo/get_model_properties, not merely the URDF link names.
+WHEEL_LINKS = ("wheelchair::base_footprint", "wheelchair::left_wheel",
+               "wheelchair::right_wheel")
 CMD_TOPIC = "/wheelchair/diff_drive_controller/cmd_vel"
 ODOM_TOPIC = "/wheelchair/diff_drive_controller/odom"
 JOINT_TOPIC = "/wheelchair/joint_states"
