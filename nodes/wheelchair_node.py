@@ -12,6 +12,7 @@ import rospy
 from std_msgs.msg import Bool, Float64, Float64MultiArray, String
 from geometry_msgs.msg import Twist, PointStamped
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import JointState
 from gazebo_msgs.msg import ModelState, ModelStates
 from gazebo_msgs.srv import SetModelState
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
@@ -552,7 +553,22 @@ class WheelchairNode:
         self.wc_ip_labels = list(WC_LABELS)
         self.wc_local_points = dict(DEFAULT_WC_LOCAL_POINTS)
         ns = "/wheelchair/diff_drive_controller"
-        self.cmd_pub = rospy.Publisher(ns + "/cmd_vel", Twist, queue_size=1)
+        self.cmd_topic = ns + "/cmd_vel"
+        self.odom_topic = ns + "/odom"
+        self.joint_state_topic = "/wheelchair/joint_states"
+        self.diff_drive_wheel_radius = float(rospy.get_param(
+            "/wheelchair/diff_drive_controller/wheel_radius", 0.15))
+        self.diff_drive_wheel_separation = float(rospy.get_param(
+            "/wheelchair/diff_drive_controller/wheel_separation", 0.62))
+        self.diff_drive_cmd_timeout = float(rospy.get_param(
+            "/wheelchair/diff_drive_controller/cmd_vel_timeout", 0.5))
+        self.last_cmd_publish_ros_s = 0.0
+        self.last_cmd_publish_wall_s = 0.0
+        self.diff_drive_audit_odom = None
+        self.diff_drive_audit_odom_ros_s = 0.0
+        self.diff_drive_audit_joint_states = {}
+        self.diff_drive_audit_joint_ros_s = 0.0
+        self.cmd_pub = rospy.Publisher(self.cmd_topic, Twist, queue_size=1)
         self.phi_pub = rospy.Publisher("/stsm/wc_phi_s", Float64, queue_size=10)
         self.risk_components_pub = rospy.Publisher(
             "/stsm/wc_risk_components", Float64MultiArray, queue_size=10)
@@ -593,7 +609,14 @@ class WheelchairNode:
             rospy.Subscriber("/gazebo/model_states", ModelStates,
                              self._model_cb, queue_size=1)
         else:
-            rospy.Subscriber(ns + "/odom", Odometry, self._odom_cb)
+            rospy.Subscriber(self.odom_topic, Odometry, self._odom_cb)
+        # The audit subscriptions never feed back into planning state when
+        # world pose is authoritative; they only preserve the real execution
+        # chain alongside Gazebo model feedback.
+        rospy.Subscriber(self.odom_topic, Odometry, self._audit_odom_cb,
+                         queue_size=10)
+        rospy.Subscriber(self.joint_state_topic, JointState,
+                         self._joint_state_audit_cb, queue_size=10)
         self._build_scene()
         self._load_adp()
 
@@ -1117,6 +1140,25 @@ class WheelchairNode:
         v = float(msg.twist.twist.linear.x)
         self.world_vel = np.array([v * np.cos(yaw), v * np.sin(yaw), 0.0])
         self.velocity_valid = True
+
+    def _audit_odom_cb(self, msg):
+        p = msg.pose.pose.position
+        q = msg.pose.pose.orientation
+        _, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
+        self.diff_drive_audit_odom = {
+            "x": float(p.x), "y": float(p.y), "yaw": float(yaw),
+            "linear_x": float(msg.twist.twist.linear.x),
+            "angular_z": float(msg.twist.twist.angular.z),
+        }
+        self.diff_drive_audit_odom_ros_s = float(msg.header.stamp.to_sec())
+
+    def _joint_state_audit_cb(self, msg):
+        velocities = {}
+        for name, velocity in zip(msg.name, msg.velocity):
+            if name in ("left_wheel_joint", "right_wheel_joint"):
+                velocities[str(name)] = float(velocity)
+        self.diff_drive_audit_joint_states = velocities
+        self.diff_drive_audit_joint_ros_s = float(msg.header.stamp.to_sec())
 
     def _model_cb(self, msg):
         if self.model_name not in msg.name:
@@ -7566,6 +7608,7 @@ class WheelchairNode:
         self._write_mpc_diagnostics()
         self._write_no_progress_execution_audit()
         self._write_wheelchair_execution_diagnostics()
+        self._write_wheelchair_diff_drive_chain_audit()
         self._write_runtime_replan_connectability_diagnostics()
         self._write_runtime_recovery_diagnostics()
         self._write_decision_trace()
@@ -7626,6 +7669,48 @@ class WheelchairNode:
         }
         with open(os.path.join(output_dir or ".",
                                "wheelchair_execution_state.json"), "w") as f:
+            json.dump(payload, f, indent=2, sort_keys=True)
+
+    def _write_wheelchair_diff_drive_chain_audit(self):
+        diag, _breakdown = self._mpc_output_paths()
+        output_dir = os.path.dirname(diag)
+        if output_dir and not os.path.isdir(output_dir):
+            os.makedirs(output_dir)
+        cycles = []
+        for record in self.no_progress_execution_records:
+            row = dict(record)
+            subscriber_count = int(row.get("cmd_subscriber_count", 0))
+            if subscriber_count <= 0:
+                row["mismatch_origin"] = "controller_input_missing"
+            elif not row.get("wheel_actual", {}):
+                row["mismatch_origin"] = "wheel_actual_unobserved"
+            else:
+                row["mismatch_origin"] = "unclassified"
+            cycles.append(row)
+        payload = {
+            "contract": "wheelchair_cmd_vel_to_diff_drive_chain_audit",
+            "run_metadata": {
+                "cmd_topic": str(self.cmd_topic),
+                "odom_topic": str(self.odom_topic),
+                "joint_state_topic": str(self.joint_state_topic),
+                "node_state_source": str(self.state_source),
+                "use_sim_time": bool(rospy.get_param("/use_sim_time", False)),
+            },
+            "controller_config": {
+                "controller_type": "diff_drive_controller/DiffDriveController",
+                "controller_name": "/wheelchair/diff_drive_controller",
+                "left_wheel_joint": "left_wheel_joint",
+                "right_wheel_joint": "right_wheel_joint",
+                "wheel_radius": float(self.diff_drive_wheel_radius),
+                "wheel_separation": float(self.diff_drive_wheel_separation),
+                "cmd_vel_timeout": float(self.diff_drive_cmd_timeout),
+                "publish_rate": int(rospy.get_param(
+                    "/wheelchair/diff_drive_controller/publish_rate", 50)),
+            },
+            "cycles": cycles,
+        }
+        with open(os.path.join(output_dir or ".",
+                               "wheelchair_diff_drive_chain_audit.json"), "w") as f:
             json.dump(payload, f, indent=2, sort_keys=True)
 
     def _write_runtime_replan_connectability_diagnostics(self):
@@ -8148,7 +8233,20 @@ class WheelchairNode:
 
     def _publish_zero_command(self):
         self._set_command_keepalive(0.0, 0.0, active=False)
-        self.cmd_pub.publish(Twist())
+        self._publish_cmd_vel(Twist())
+
+    def _publish_cmd_vel(self, twist):
+        self.cmd_pub.publish(twist)
+        self.last_cmd_publish_ros_s = float(rospy.Time.now().to_sec())
+        self.last_cmd_publish_wall_s = float(time.time())
+
+    def _diff_drive_target_wheel_speeds(self, v, w):
+        radius = max(float(self.diff_drive_wheel_radius), 1e-9)
+        half_sep = 0.5 * float(self.diff_drive_wheel_separation)
+        return {
+            "left_target_estimated": float((float(v) - float(w) * half_sep) / radius),
+            "right_target_estimated": float((float(v) + float(w) * half_sep) / radius),
+        }
 
     def _command_keepalive_cb(self, _event):
         if (not self.command_keepalive_enabled or self.stop_triggered or
@@ -8160,7 +8258,7 @@ class WheelchairNode:
         if age < 0.0 or age > self.command_hold_s:
             self.last_cmd_twist = Twist()
             self.last_cmd_time = rospy.Time(0)
-            self.cmd_pub.publish(Twist())
+            self._publish_cmd_vel(Twist())
             self.stale_command_stop_count += 1
             self.last_watchdog_command_age_s = max(0.0, float(age))
             self.last_watchdog_zero_stop = True
@@ -8175,7 +8273,7 @@ class WheelchairNode:
             return
         self.last_watchdog_command_age_s = max(0.0, float(age))
         self.last_watchdog_zero_stop = False
-        self.cmd_pub.publish(self.last_cmd_twist)
+        self._publish_cmd_vel(self.last_cmd_twist)
         self.command_keepalive_publish_count += 1
 
     def run(self):
@@ -8777,7 +8875,26 @@ class WheelchairNode:
             tw.linear.x = v
             tw.angular.z = w
             self._set_command_keepalive(v, w, active=(not gate.stop))
-            self.cmd_pub.publish(tw)
+            self._publish_cmd_vel(tw)
+            if self.no_progress_execution_records:
+                self.no_progress_execution_records[-1].update({
+                    "cmd_topic": str(self.cmd_topic),
+                    "cmd_subscriber_count": int(self.cmd_pub.get_num_connections()),
+                    "cmd_publish_ros_s": float(self.last_cmd_publish_ros_s),
+                    "cmd_publish_wall_s": float(self.last_cmd_publish_wall_s),
+                    "odom": dict(self.diff_drive_audit_odom or {}),
+                    "odom_ros_s": float(self.diff_drive_audit_odom_ros_s),
+                    "wheel_actual": dict(self.diff_drive_audit_joint_states),
+                    "wheel_actual_ros_s": float(self.diff_drive_audit_joint_ros_s),
+                    "wheel_target": self._diff_drive_target_wheel_speeds(v, w),
+                    "controller_received_v": None,
+                    "controller_received_w": None,
+                    "gazebo_pose": {
+                        "x": float(audit_state[0]),
+                        "y": float(audit_state[1]),
+                        "yaw": float(audit_state[2]),
+                    },
+                })
             self._record_adp_transition(
                 gate=gate, interest_eval=interest_eval, corridor=corridor)
             rospy.loginfo_throttle(

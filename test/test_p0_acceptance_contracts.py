@@ -1677,6 +1677,17 @@ def test_wheelchair_execution_state_contracts_are_explicit_and_fail_safe():
     assert "execution_response_stall" in source
 
 
+def test_wheelchair_diff_drive_timeout_exceeds_node_watchdog_hold():
+    source = open(os.path.join(ROOT, "nodes", "wheelchair_node.py"),
+                  "r").read()
+    control = open(os.path.join(ROOT, "config", "wheelchair_control.yaml"),
+                   "r").read()
+    assert 'self.cmd_topic = ns + "/cmd_vel"' in source
+    assert "wheelchair_diff_drive_chain_audit.json" in source
+    assert "_diff_drive_target_wheel_speeds" in source
+    assert "cmd_vel_timeout: 1.0" in control
+
+
 def test_adp_terminal_td_target_does_not_bootstrap_next_value():
     critic = ADPCritic(
         feature_names=["bias"], theta=[2.0], mean=[0.0], std=[1.0],

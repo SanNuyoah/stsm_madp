@@ -17,7 +17,10 @@ wheelchair:
     twist_covariance_diagonal: [0.001, 0.001, 1000000.0, 1000000.0, 1000000.0, 0.03]
     wheel_separation: 0.62
     wheel_radius: 0.15
-    cmd_vel_timeout: 0.5
+    # R004 observed a 0.851 s maximum control-update interval.  Keep the
+    # controller target alive beyond the Node's 0.6 s watchdog hold, while
+    # retaining a bounded timeout if command publication genuinely stops.
+    cmd_vel_timeout: 1.0
     base_frame_id: base_footprint
     odom_frame_id: odom
     enable_odom_tf: true
