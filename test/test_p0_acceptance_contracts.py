@@ -1688,6 +1688,19 @@ def test_wheelchair_diff_drive_timeout_exceeds_node_watchdog_hold():
     assert "cmd_vel_timeout: 1.0" in control
 
 
+def test_wheelchair_diff_drive_probe_is_isolated_from_stsm_and_captures_actuation():
+    launch = open(os.path.join(ROOT, "launch",
+                         "wheelchair_diff_drive_probe.launch"), "r").read()
+    source = open(os.path.join(ROOT, "scripts", "analysis",
+                               "wheelchair_diff_drive_probe.py"), "r").read()
+    assert "wheelchair_node.py" not in launch
+    assert "suspended" in launch
+    assert "wheel_velocity_error" in source
+    assert "wheel_actual" in source
+    assert "wheel_target" in source
+    assert "wheelchair_diff_drive_physical_actuation_probe_v1" in source
+
+
 def test_wheelchair_watchdog_hold_covers_measured_control_update_gap():
     launch = open(os.path.join(ROOT, "launch", "wheelchair_action.launch"),
                   "r").read()

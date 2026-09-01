@@ -2,6 +2,9 @@
   <!-- STSM-MADP wheelchair bedside berthing scenario -->
   <arg name="gui" default="true"/>
   <arg name="paused" default="false"/>
+  <!-- Kept at the production value by default.  The diff-drive probe uses a
+       raised spawn only while it isolates wheel-joint actuation. -->
+  <arg name="spawn_z" default="0.05"/>
 
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
     <arg name="world_name" value="$(find stsm_madp)/worlds/eldercare_room.world"/>
@@ -14,7 +17,7 @@
 
   <node name="wc_spawner" pkg="gazebo_ros" type="spawn_model" respawn="false"
         output="screen"
-        args="-urdf -model wheelchair -param wheelchair/robot_description -x 2.0 -y 1.5 -z 0.05 -Y -2.4"/>
+        args="-urdf -model wheelchair -param wheelchair/robot_description -x 2.0 -y 1.5 -z $(arg spawn_z) -Y -2.4"/>
 
   <node pkg="robot_state_publisher" type="robot_state_publisher"
         name="wc_state_publisher" ns="wheelchair">

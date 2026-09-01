@@ -28,6 +28,7 @@ catkin_install_python(PROGRAMS
   scripts/visualization/generate_results_figures.py
   scripts/analysis/results_manager.py
   scripts/analysis/train_adp_critic.py
+  scripts/analysis/wheelchair_diff_drive_probe.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
