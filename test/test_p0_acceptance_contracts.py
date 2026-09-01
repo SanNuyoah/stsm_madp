@@ -1662,6 +1662,21 @@ def test_baseline_failure_stage_is_execution_not_refinement():
     assert 'if variant_name == "baseline":\n                failure_stage = "execution"' in source
 
 
+def test_wheelchair_execution_state_contracts_are_explicit_and_fail_safe():
+    source = open(os.path.join(ROOT, "nodes", "wheelchair_node.py"),
+                  "r").read()
+    assert '"ALIGN"' in source and '"TRACK"' in source and '"ARRIVE"' in source
+    assert "align_enter_threshold" in source
+    assert "align_exit_threshold" in source
+    assert "_wheelchair_reacquire_forward_reference" in source
+    assert "selected = max(current + 1, next_idx)" in source
+    assert "_wheelchair_execution_command" in source
+    assert "v, w = 0.0, w_align" in source
+    assert "local_recovery_max_attempts" in source
+    assert "wheelchair_execution_state.json" in source
+    assert "execution_response_stall" in source
+
+
 def test_adp_terminal_td_target_does_not_bootstrap_next_value():
     critic = ADPCritic(
         feature_names=["bias"], theta=[2.0], mean=[0.0], std=[1.0],

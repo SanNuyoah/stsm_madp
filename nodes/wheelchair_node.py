@@ -337,6 +337,25 @@ class WheelchairNode:
         self.mpc_runtime_records = []
         self.no_progress_execution_records = []
         self.no_progress_execution_trigger = None
+        # Explicit diff-drive execution state.  Planning, safety thresholds,
+        # and the MPC solver remain unchanged; this only gates how an
+        # accepted reference is approached and tracked.
+        self.align_enter_threshold = float(rospy.get_param(
+            "~align_enter_threshold", 0.45))
+        self.align_exit_threshold = float(rospy.get_param(
+            "~align_exit_threshold", 0.25))
+        if self.align_exit_threshold >= self.align_enter_threshold:
+            self.align_exit_threshold = min(0.25, 0.5 * self.align_enter_threshold)
+        self.local_recovery_max_attempts = int(rospy.get_param(
+            "~local_recovery_max_attempts", 3))
+        self.execution_mode = "TRACK"
+        self.local_recovery_attempt = 0
+        self.local_reacquire_count = 0
+        self.execution_mode_counts = {"ALIGN": 0, "TRACK": 0, "ARRIVE": 0}
+        self.steering_stall_count = 0
+        self.execution_response_stall_count = 0
+        self.angular_response_stall_count = 0
+        self.execution_state_records = []
         self.baseline_reference_records = []
         self.baseline_mpc_output_records = []
         self._baseline_reference_solve_index = 0
@@ -7546,6 +7565,7 @@ class WheelchairNode:
         self._write_baseline_evidence()
         self._write_mpc_diagnostics()
         self._write_no_progress_execution_audit()
+        self._write_wheelchair_execution_diagnostics()
         self._write_runtime_replan_connectability_diagnostics()
         self._write_runtime_recovery_diagnostics()
         self._write_decision_trace()
@@ -7569,12 +7589,43 @@ class WheelchairNode:
                 "active_corridor_id": self._corridor_id(
                     self.execution_corridor or self.selected_corridor),
                 "primary_cause": "unknown",
+                "mode_counts": dict(self.execution_mode_counts),
+                "local_reacquire_count": int(self.local_reacquire_count),
+                "local_recovery_attempt": int(self.local_recovery_attempt),
+                "execution_response_stall_count": int(
+                    self.execution_response_stall_count),
+                "angular_response_stall_count": int(
+                    self.angular_response_stall_count),
                 "supporting_metrics": {},
             },
             "contract": "diagnostics_only_no_progress_execution_audit",
         }
         with open(os.path.join(output_dir or ".",
                                "no_progress_execution_audit.json"), "w") as f:
+            json.dump(payload, f, indent=2, sort_keys=True)
+
+    def _write_wheelchair_execution_diagnostics(self):
+        diag, _breakdown = self._mpc_output_paths()
+        output_dir = os.path.dirname(diag)
+        if output_dir and not os.path.isdir(output_dir):
+            os.makedirs(output_dir)
+        payload = {
+            "contract": "wheelchair_execution_state_align_track_arrive",
+            "align_enter_threshold": float(self.align_enter_threshold),
+            "align_exit_threshold": float(self.align_exit_threshold),
+            "local_recovery_max_attempts": int(self.local_recovery_max_attempts),
+            "mode_counts": dict(self.execution_mode_counts),
+            "local_reacquire_count": int(self.local_reacquire_count),
+            "local_recovery_attempt": int(self.local_recovery_attempt),
+            "steering_stall_count": int(self.steering_stall_count),
+            "execution_response_stall_count": int(
+                self.execution_response_stall_count),
+            "angular_response_stall_count": int(
+                self.angular_response_stall_count),
+            "records": list(self.no_progress_execution_records),
+        }
+        with open(os.path.join(output_dir or ".",
+                               "wheelchair_execution_state.json"), "w") as f:
             json.dump(payload, f, indent=2, sort_keys=True)
 
     def _write_runtime_replan_connectability_diagnostics(self):
@@ -7660,6 +7711,67 @@ class WheelchairNode:
                              target[0] - self.state[0])
         return float(np.arctan2(np.sin(desired - self.state[2]),
                                 np.cos(desired - self.state[2])))
+
+    def _wheelchair_selected_safe_terminal(self, corridor):
+        """Return the selected safe terminal, when the corridor records one."""
+        output = dict(getattr(corridor, "refinement_output", {}) or {})
+        rebuild = dict(output.get("safe_terminal_rebuild", {}) or {})
+        terminal = (rebuild.get("selected_terminal") or
+                    output.get("selected_safe_terminal") or
+                    getattr(corridor, "selected_safe_terminal", None))
+        if terminal is None:
+            return None
+        try:
+            point = np.asarray(terminal, float).reshape(-1)
+            return point[:2].copy() if point.size >= 2 else None
+        except Exception:
+            return None
+
+    def _wheelchair_reacquire_forward_reference(self, corridor):
+        """Advance only inside the existing local reference window."""
+        if corridor is None:
+            return False
+        current = int(getattr(corridor, "reference_index", -1))
+        if current < 0:
+            return False
+        next_idx = int(getattr(corridor, "reference_next_index", current + 1))
+        selected = max(current + 1, next_idx)
+        # _horizon_ref clamps this to the actual path length on the next cycle;
+        # at most one look-ahead step is taken here, so no topology point is
+        # skipped by local recovery.
+        corridor.reference_index = selected
+        self.local_reacquire_count += 1
+        return True
+
+    def _wheelchair_execution_command(self, v, w, ref, gate_stop=False,
+                                      actual_forward_progress=0.0,
+                                      reference_progress_delta=0.0):
+        """Apply ALIGN/TRACK state management after the existing MPC output."""
+        heading_error = self._stsm_reference_heading_error(ref)
+        abs_heading = abs(float(heading_error))
+        if self.execution_mode == "ALIGN":
+            if abs_heading <= self.align_exit_threshold:
+                self.execution_mode = "TRACK"
+        elif abs_heading > self.align_enter_threshold:
+            self.execution_mode = "ALIGN"
+
+        high_turn = abs(float(w)) >= 0.85 * float(self.mpc.w_max)
+        if (self.execution_mode == "TRACK" and not gate_stop and high_turn and
+                float(reference_progress_delta) <= 1e-9 and
+                float(actual_forward_progress) <= self.no_progress_epsilon):
+            self.steering_stall_count += 1
+        else:
+            self.steering_stall_count = 0
+        if self.execution_mode == "TRACK" and self.steering_stall_count >= 5:
+            self.execution_mode = "ALIGN"
+        if self.execution_mode == "ALIGN" and not gate_stop:
+            w_align = float(np.clip(
+                self.final_heading_gain * heading_error,
+                -float(self.mpc.w_max), float(self.mpc.w_max)))
+            v, w = 0.0, w_align
+        elif self.execution_mode == "ARRIVE" or gate_stop:
+            v, w = 0.0, 0.0
+        return float(v), float(w), float(heading_error), self.execution_mode
 
     def _apply_stsm_progress_floor(self, corridor, ref, v, w, dist, gate,
                                    adp_scale, interest_eval=None,
@@ -8106,6 +8218,11 @@ class WheelchairNode:
         last_replan_time = run_start
         replan_progress_time = run_start
         last_replan_dist = float("inf")
+        self.execution_mode = "TRACK"
+        self.local_recovery_attempt = 0
+        self.local_reacquire_count = 0
+        self.execution_mode_counts = {"ALIGN": 0, "TRACK": 0, "ARRIVE": 0}
+        self.steering_stall_count = 0
         audit_previous_state = np.asarray(self.state, float).copy()
         audit_previous_dist = float(np.linalg.norm(
             audit_previous_state[:2] - self.goal[:2]))
@@ -8216,7 +8333,12 @@ class WheelchairNode:
             completion_radius = (
                 self.goal_tolerance if self.strict_goal_completion else
                 self.completion_tolerance)
-            if dist < completion_radius:
+            selected_terminal = self._wheelchair_selected_safe_terminal(corridor)
+            terminal_dist = (float(np.linalg.norm(self.state[:2] - selected_terminal))
+                             if selected_terminal is not None else dist)
+            if (terminal_dist < completion_radius and
+                    dist < self.completion_tolerance):
+                self.execution_mode = "ARRIVE"
                 self._publish_zero_command()
                 self.u_prev = np.zeros(2)
                 if near_goal_since is None:
@@ -8248,6 +8370,22 @@ class WheelchairNode:
                             corridor, "reference_index", -1)),
                         "stale_s": float((now - replan_progress_time).to_sec()),
                     }
+                    recovered, did_recover = corridor, False
+                    if self.local_recovery_attempt < self.local_recovery_max_attempts:
+                        did_recover = self._wheelchair_reacquire_forward_reference(
+                            corridor)
+                        if did_recover:
+                            self.local_recovery_attempt += 1
+                            self.execution_mode = "ALIGN"
+                            replan_progress_time = now
+                            last_progress_time = now
+                            rospy.logwarn(
+                                "[wc][recovery] local execution recovery %d/%d "
+                                "forward reacquire ref_idx=%s",
+                                self.local_recovery_attempt,
+                                self.local_recovery_max_attempts,
+                                str(getattr(corridor, "reference_index", -1)))
+                            continue
                     recovered, did_recover = self._runtime_recovery(
                         corridor, now, "no_progress", deadline=run_deadline)
                     if recovered is None or not did_recover:
@@ -8550,6 +8688,29 @@ class WheelchairNode:
                 ref=ref, gate=gate, interest_eval=interest_eval,
                 progress_stale_s=progress_stale_s,
                 measured_speed=measured_speed)
+            audit_state = np.asarray(self.state, float).copy()
+            actual_delta_xy = float(np.linalg.norm(
+                audit_state[:2] - audit_previous_state[:2]))
+            actual_delta_yaw = float(np.arctan2(
+                np.sin(audit_state[2] - audit_previous_state[2]),
+                np.cos(audit_state[2] - audit_previous_state[2])))
+            actual_forward_progress = float(np.dot(
+                audit_state[:2] - audit_previous_state[:2],
+                [np.cos(audit_state[2]), np.sin(audit_state[2])]))
+            audit_ref_idx = int(getattr(corridor, "reference_index", -1))
+            ref_delta = (float(audit_ref_idx - audit_previous_ref_idx)
+                         if audit_previous_ref_idx >= 0 else 0.0)
+            v, w, heading_error, execution_mode = (
+                self._wheelchair_execution_command(
+                    v, w, ref, gate_stop=bool(gate.stop),
+                    actual_forward_progress=actual_forward_progress,
+                    reference_progress_delta=ref_delta))
+            self.execution_mode_counts[execution_mode] = (
+                self.execution_mode_counts.get(execution_mode, 0) + 1)
+            if (abs(float(v_mpc_raw)) > 0.02 and actual_delta_xy < 1.0e-4):
+                self.execution_response_stall_count += 1
+            if (abs(float(w_mpc_raw)) > 0.05 and abs(actual_delta_yaw) < 1.0e-4):
+                self.angular_response_stall_count += 1
             runtime_record["published_control"] = [float(v), float(w)]
             runtime_record["published_cmd"] = [float(v), float(w)]
             runtime_record["final_direct_override_active"] = False
@@ -8563,9 +8724,7 @@ class WheelchairNode:
                 progress_floor_value)
             runtime_record["stsm_liveness_active"] = bool(liveness_active)
             runtime_record["stsm_liveness_w_limit"] = float(liveness_w_limit)
-            audit_state = np.asarray(self.state, float).copy()
             audit_dist = float(np.linalg.norm(audit_state[:2] - self.goal[:2]))
-            audit_ref_idx = int(getattr(corridor, "reference_index", -1))
             raw_cmd = runtime_record.get("raw_mpc_cmd", [0.0, 0.0])
             self.no_progress_execution_records.append({
                 "cycle_id": int(len(self.no_progress_execution_records)),
@@ -8583,14 +8742,9 @@ class WheelchairNode:
                 "mpc_raw_v": float(raw_cmd[0]), "mpc_raw_w": float(raw_cmd[1]),
                 "post_safety_v": float(v_mpc_raw), "post_safety_w": float(w_mpc_raw),
                 "final_published_v": float(v), "final_published_w": float(w),
-                "actual_delta_xy": float(np.linalg.norm(
-                    audit_state[:2] - audit_previous_state[:2])),
-                "actual_delta_yaw": float(np.arctan2(
-                    np.sin(audit_state[2] - audit_previous_state[2]),
-                    np.cos(audit_state[2] - audit_previous_state[2]))),
-                "actual_forward_progress": float(np.dot(
-                    audit_state[:2] - audit_previous_state[:2],
-                    [np.cos(audit_state[2]), np.sin(audit_state[2])])),
+                "actual_delta_xy": actual_delta_xy,
+                "actual_delta_yaw": actual_delta_yaw,
+                "actual_forward_progress": actual_forward_progress,
                 "goal_progress": float(audit_previous_dist - audit_dist),
                 "reference_progress_delta": float(audit_ref_idx - audit_previous_ref_idx)
                 if audit_previous_ref_idx >= 0 else 0.0,
@@ -8603,6 +8757,14 @@ class WheelchairNode:
                     "safety_gate" if float(v) < float(v_mpc_raw) - 1e-9 else "none"),
                 "no_progress_counter": float((now - replan_progress_time).to_sec()),
                 "no_progress_reason": "",
+                "mode": str(execution_mode),
+                "heading_error": float(heading_error),
+                "steering_stall": bool(self.steering_stall_count >= 5),
+                "execution_response_stall": bool(
+                    abs(float(v_mpc_raw)) > 0.02 and actual_delta_xy < 1.0e-4),
+                "angular_response_stall": bool(
+                    abs(float(w_mpc_raw)) > 0.05 and abs(actual_delta_yaw) < 1.0e-4),
+                "local_recovery_attempt": int(self.local_recovery_attempt),
             })
             audit_previous_state = audit_state
             audit_previous_dist = audit_dist
