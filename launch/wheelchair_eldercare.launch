@@ -6,6 +6,7 @@
        raised spawn only while it isolates wheel-joint actuation. -->
   <arg name="spawn_z" default="0.05"/>
   <arg name="wheel_mu" default="1.0"/>
+  <arg name="wheel_fdir1_enabled" default="false"/>
 
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
     <arg name="world_name" value="$(find stsm_madp)/worlds/eldercare_room.world"/>
@@ -14,7 +15,7 @@
   </include>
 
   <param name="wheelchair/robot_description"
-         command="$(find xacro)/xacro '$(find stsm_madp)/urdf/wheelchair.xacro' wheel_mu:=$(arg wheel_mu)"/>
+         command="$(find xacro)/xacro '$(find stsm_madp)/urdf/wheelchair.xacro' wheel_mu:=$(arg wheel_mu) wheel_fdir1_enabled:=$(arg wheel_fdir1_enabled)"/>
 
   <node name="wc_spawner" pkg="gazebo_ros" type="spawn_model" respawn="false"
         output="screen"

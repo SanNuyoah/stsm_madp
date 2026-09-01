@@ -38,6 +38,40 @@ CONTACT_TOPICS = {
 }
 
 
+def wheel_contact_direction_audit():
+    """Return the fixed geometry derivation used by the fdir1-only probe.
+
+    Gazebo Classic / ODE interprets fdir1 in the collision-fixed frame.  A
+    URDF cylinder is along local +z; the collision rpy rotates that axis onto
+    link -y, collinear with the joint +y axle.  Collision +x is unchanged by
+    that rotation and is tangential to ground in the link rolling direction.
+    The sign of a friction direction is immaterial, so +x is used for both
+    mirrored drive wheels and gives them the same physical meaning.
+    """
+    row = {
+        "joint_axis_link": [0.0, 1.0, 0.0],
+        "cylinder_axis_collision": [0.0, 0.0, 1.0],
+        "collision_rpy": [1.5708, 0.0, 0.0],
+        "cylinder_axis_link": [0.0, -1.0, 0.0],
+        "rolling_direction_link": [1.0, 0.0, 0.0],
+        "lateral_direction_link": [0.0, 1.0, 0.0],
+        "rolling_direction_collision": [1.0, 0.0, 0.0],
+        "lateral_direction_collision": [0.0, 0.0, -1.0],
+        "candidate_fdir1": [1.0, 0.0, 0.0],
+        "candidate_fdir1_semantic": "rolling_direction_collision",
+    }
+    return {
+        "contract": "wheelchair_ode_contact_direction_audit_v1",
+        "fdir1_frame": "collision_fixed",
+        "mu1_direction": "fdir1",
+        "mu2_direction": "contact_normal_cross_fdir1",
+        "slip1_direction": "fdir1",
+        "slip2_direction": "contact_normal_cross_fdir1",
+        "left": dict(row),
+        "right": dict(row),
+    }
+
+
 def _yaw(q):
     return math.atan2(2.0 * (q.w * q.z + q.x * q.y),
                       1.0 - 2.0 * (q.y * q.y + q.z * q.z))
@@ -275,6 +309,7 @@ def main():
                                   "/tmp/wheelchair_diff_drive_probe.json")
     spawn_z = float(rospy.get_param("~spawn_z", 0.05))
     wheel_mu = float(rospy.get_param("~wheel_mu", 1.0))
+    wheel_fdir1_enabled = bool(rospy.get_param("~wheel_fdir1_enabled", False))
     deadline = time.time() + 15.0
     while not rospy.is_shutdown() and not probe.ready() and time.time() < deadline:
         time.sleep(0.05)
@@ -289,6 +324,8 @@ def main():
         "odom_topic": ODOM_TOPIC, "wheel_radius": probe.radius,
         "wheel_separation": probe.separation,
         "probe_spawn_z": spawn_z, "probe_wheel_mu": wheel_mu,
+        "probe_wheel_fdir1_enabled": wheel_fdir1_enabled,
+        "wheel_contact_direction_audit": wheel_contact_direction_audit(),
         "suspended_links": suspended_links,
         "wheel_height_audit": probe.wheel_height_audit(),
         "idle": probe.idle(2.5, rate_hz),
@@ -300,6 +337,11 @@ def main():
         os.makedirs(parent)
     with open(output_path, "w") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
+    direction_path = os.path.join(
+        os.path.dirname(output_path) or ".", "wheel_contact_direction_audit.json")
+    with open(direction_path, "w") as handle:
+        json.dump(payload["wheel_contact_direction_audit"], handle,
+                  indent=2, sort_keys=True)
     rospy.loginfo("[wheelchair_diff_drive_probe] wrote %s", output_path)
 
 

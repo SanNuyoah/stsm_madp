@@ -1702,7 +1702,22 @@ def test_wheelchair_diff_drive_probe_is_isolated_from_stsm_and_captures_actuatio
     assert "penetration_depth" in source
     assert "normal_force" in source
     assert "tangential_force" in source
+    assert "wheel_contact_direction_audit" in source
+    assert "wheel_fdir1_enabled" in launch
+    assert "wheel_fdir1_enabled" in source
     assert "wheelchair_diff_drive_physical_actuation_probe_v1" in source
+
+
+def test_wheelchair_fdir1_probe_is_explicit_and_disabled_in_production_baseline():
+    xacro = open(os.path.join(ROOT, "urdf", "wheelchair.xacro"), "r").read()
+    launch = open(os.path.join(ROOT, "launch", "wheelchair_eldercare.launch"),
+                  "r").read()
+    assert 'name="wheel_fdir1_enabled" default="false"' in xacro
+    assert xacro.count("<fdir1>1 0 0</fdir1>") == 2
+    assert "rolling_direction_collision" in open(
+        os.path.join(ROOT, "scripts", "analysis",
+                     "wheelchair_diff_drive_probe.py"), "r").read()
+    assert 'name="wheel_fdir1_enabled" default="false"' in launch
 
 
 def test_wheelchair_watchdog_hold_covers_measured_control_update_gap():

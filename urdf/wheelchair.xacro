@@ -8,6 +8,9 @@
   <xacro:property name="wheel_w" value="0.05"/>
   <xacro:property name="sep" value="0.62"/>
   <xacro:arg name="wheel_mu" default="1.0"/>
+  <!-- Disabled by default: the probe can enable an explicit ODE friction
+       direction without changing the production isotropic-contact baseline. -->
+  <xacro:arg name="wheel_fdir1_enabled" default="false"/>
 
   <material name="chair"><color rgba="0.2 0.3 0.4 1"/></material>
   <material name="dark"><color rgba="0.1 0.1 0.1 1"/></material>
@@ -95,6 +98,12 @@
   <gazebo reference="caster"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
   <gazebo reference="left_wheel">
     <mu1>$(arg wheel_mu)</mu1><mu2>$(arg wheel_mu)</mu2>
+    <!-- fdir1 is expressed in the collision-fixed frame.  The cylinder's
+         local +z is its axle and the collision rpy maps it to link -y;
+         collision +x therefore remains the wheel rolling tangent. -->
+    <xacro:if value="$(arg wheel_fdir1_enabled)">
+      <fdir1>1 0 0</fdir1>
+    </xacro:if>
     <sensor name="left_wheel_contact_sensor" type="contact">
       <always_on>true</always_on><update_rate>100</update_rate>
       <contact><collision>left_wheel_collision</collision></contact>
@@ -106,6 +115,9 @@
   </gazebo>
   <gazebo reference="right_wheel">
     <mu1>$(arg wheel_mu)</mu1><mu2>$(arg wheel_mu)</mu2>
+    <xacro:if value="$(arg wheel_fdir1_enabled)">
+      <fdir1>1 0 0</fdir1>
+    </xacro:if>
     <sensor name="right_wheel_contact_sensor" type="contact">
       <always_on>true</always_on><update_rate>100</update_rate>
       <contact><collision>right_wheel_collision</collision></contact>
