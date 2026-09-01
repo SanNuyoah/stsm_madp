@@ -1709,6 +1709,8 @@ def test_wheelchair_diff_drive_probe_is_isolated_from_stsm_and_captures_actuatio
     assert "wheel_lateral_slip" in source
     assert "wheel_contact_stiffness" in launch
     assert "wheel_contact_stiffness" in source
+    assert "wheel_contact_min_depth" in launch
+    assert "wheel_contact_min_depth" in source
     assert "wheelchair_diff_drive_physical_actuation_probe_v1" in source
 
 
@@ -1720,6 +1722,7 @@ def test_wheelchair_fdir1_probe_is_explicit_and_disabled_in_production_baseline(
     assert xacro.count("<fdir1>1 0 0</fdir1>") == 2
     assert xacro.count("<slip2>$(arg wheel_lateral_slip)</slip2>") == 2
     assert xacro.count("<kp>$(arg wheel_contact_kp)</kp><kd>$(arg wheel_contact_kd)</kd>") == 2
+    assert xacro.count("<minDepth>$(arg wheel_contact_min_depth)</minDepth>") == 2
     assert "rolling_direction_collision" in open(
         os.path.join(ROOT, "scripts", "analysis",
                      "wheelchair_diff_drive_probe.py"), "r").read()

@@ -317,6 +317,10 @@ def main():
         "~wheel_contact_stiffness_enabled", False))
     wheel_contact_kp = float(rospy.get_param("~wheel_contact_kp", 10000000.0))
     wheel_contact_kd = float(rospy.get_param("~wheel_contact_kd", 1.0))
+    wheel_contact_min_depth_enabled = bool(rospy.get_param(
+        "~wheel_contact_min_depth_enabled", False))
+    wheel_contact_min_depth = float(rospy.get_param(
+        "~wheel_contact_min_depth", 0.001))
     deadline = time.time() + 15.0
     while not rospy.is_shutdown() and not probe.ready() and time.time() < deadline:
         time.sleep(0.05)
@@ -337,6 +341,8 @@ def main():
         "probe_wheel_contact_stiffness_enabled": wheel_contact_stiffness_enabled,
         "probe_wheel_contact_kp": wheel_contact_kp,
         "probe_wheel_contact_kd": wheel_contact_kd,
+        "probe_wheel_contact_min_depth_enabled": wheel_contact_min_depth_enabled,
+        "probe_wheel_contact_min_depth": wheel_contact_min_depth,
         "wheel_contact_direction_audit": wheel_contact_direction_audit(),
         "suspended_links": suspended_links,
         "wheel_height_audit": probe.wheel_height_audit(),

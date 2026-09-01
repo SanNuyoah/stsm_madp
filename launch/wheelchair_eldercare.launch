@@ -12,6 +12,8 @@
   <arg name="wheel_contact_stiffness_enabled" default="false"/>
   <arg name="wheel_contact_kp" default="10000000.0"/>
   <arg name="wheel_contact_kd" default="1.0"/>
+  <arg name="wheel_contact_min_depth_enabled" default="false"/>
+  <arg name="wheel_contact_min_depth" default="0.001"/>
 
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
     <arg name="world_name" value="$(find stsm_madp)/worlds/eldercare_room.world"/>
@@ -20,7 +22,7 @@
   </include>
 
   <param name="wheelchair/robot_description"
-         command="$(find xacro)/xacro '$(find stsm_madp)/urdf/wheelchair.xacro' wheel_mu:=$(arg wheel_mu) wheel_fdir1_enabled:=$(arg wheel_fdir1_enabled) wheel_lateral_slip_enabled:=$(arg wheel_lateral_slip_enabled) wheel_lateral_slip:=$(arg wheel_lateral_slip) wheel_contact_stiffness_enabled:=$(arg wheel_contact_stiffness_enabled) wheel_contact_kp:=$(arg wheel_contact_kp) wheel_contact_kd:=$(arg wheel_contact_kd)"/>
+         command="$(find xacro)/xacro '$(find stsm_madp)/urdf/wheelchair.xacro' wheel_mu:=$(arg wheel_mu) wheel_fdir1_enabled:=$(arg wheel_fdir1_enabled) wheel_lateral_slip_enabled:=$(arg wheel_lateral_slip_enabled) wheel_lateral_slip:=$(arg wheel_lateral_slip) wheel_contact_stiffness_enabled:=$(arg wheel_contact_stiffness_enabled) wheel_contact_kp:=$(arg wheel_contact_kp) wheel_contact_kd:=$(arg wheel_contact_kd) wheel_contact_min_depth_enabled:=$(arg wheel_contact_min_depth_enabled) wheel_contact_min_depth:=$(arg wheel_contact_min_depth)"/>
 
   <node name="wc_spawner" pkg="gazebo_ros" type="spawn_model" respawn="false"
         output="screen"

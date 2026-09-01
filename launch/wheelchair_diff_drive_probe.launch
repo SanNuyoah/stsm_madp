@@ -12,6 +12,8 @@
   <arg name="wheel_contact_stiffness_enabled" default="false"/>
   <arg name="wheel_contact_kp" default="10000000.0"/>
   <arg name="wheel_contact_kd" default="1.0"/>
+  <arg name="wheel_contact_min_depth_enabled" default="false"/>
+  <arg name="wheel_contact_min_depth" default="0.001"/>
   <arg name="output_path" default="/tmp/wheelchair_diff_drive_probe.json"/>
 
   <include file="$(find stsm_madp)/launch/wheelchair_eldercare.launch">
@@ -24,6 +26,8 @@
     <arg name="wheel_contact_stiffness_enabled" value="$(arg wheel_contact_stiffness_enabled)"/>
     <arg name="wheel_contact_kp" value="$(arg wheel_contact_kp)"/>
     <arg name="wheel_contact_kd" value="$(arg wheel_contact_kd)"/>
+    <arg name="wheel_contact_min_depth_enabled" value="$(arg wheel_contact_min_depth_enabled)"/>
+    <arg name="wheel_contact_min_depth" value="$(arg wheel_contact_min_depth)"/>
   </include>
 
   <node pkg="stsm_madp" type="wheelchair_diff_drive_probe.py"
@@ -38,6 +42,8 @@
     <param name="wheel_contact_stiffness_enabled" value="$(arg wheel_contact_stiffness_enabled)"/>
     <param name="wheel_contact_kp" value="$(arg wheel_contact_kp)"/>
     <param name="wheel_contact_kd" value="$(arg wheel_contact_kd)"/>
+    <param name="wheel_contact_min_depth_enabled" value="$(arg wheel_contact_min_depth_enabled)"/>
+    <param name="wheel_contact_min_depth" value="$(arg wheel_contact_min_depth)"/>
     <param name="output_path" value="$(arg output_path)"/>
   </node>
 </launch>
