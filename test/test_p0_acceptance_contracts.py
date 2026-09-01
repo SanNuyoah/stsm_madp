@@ -1607,6 +1607,9 @@ def test_runtime_sources_preserve_p0_execution_contracts():
         os.path.join(ROOT, "src", "stsm_madp", "mpc.py"), "r").read()
     assert "reference_progress_corridor_id" in wheelchair_source
     assert "reference_nearest_index" in wheelchair_source
+    assert "reused_planning_authoritative_context" in wheelchair_source
+    assert "fixed_point_safety_context_audit" in wheelchair_source
+    assert "safety_context_audit" in wheelchair_source
     assert "mpc_reference_min_lookahead_m" in wheelchair_source
     assert "mpc_reference_min_goal_progress_m" in wheelchair_source
     assert "reference_horizon_goal_progress" in wheelchair_source

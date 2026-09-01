@@ -32,7 +32,8 @@ from stsm_madp.topology_constraint import (
     build_topology_constraint, write_topology_constraint)
 from stsm_madp.manifold_constraint_evaluator import ManifoldConstraintEvaluator
 from stsm_madp.safety_evaluator import (
-    SafetyEvaluator, build_safety_context, terminal_acceptance_preflight)
+    SafetyEvaluator, build_safety_context, safety_context_audit,
+    terminal_acceptance_preflight)
 from stsm_madp.safety_gate import SafetyGate, SafetyGateResult
 from stsm_madp.adp import (
     ADPCritic, ADPFeatureBuilder, ADPTransitionLearner,
@@ -6641,6 +6642,19 @@ class WheelchairNode:
                 manifold_constraint_mode=self.manifold_constraint_mode,
                 strict_stsm=bool(not self.baseline),
                 expected_corridor_id=cid))
+        # Reuse the exact authoritative Final-Gate context/constraint.  The
+        # formal diagnostics pass must not silently rebuild a second manifold
+        # from the flattened rolling-reference points.
+        formal_safety_context, authoritative_constraint = (
+            self._authoritative_safety_context(corridor,
+                                                reference=final_trajectory))
+        authoritative_manifold = dict(
+            authoritative_constraint.get("manifold_constraint", {}) or {})
+        manifold_info = dict(manifold_info or {})
+        manifold_info.update(authoritative_manifold)
+        manifold_info["manifold_constraint"] = authoritative_manifold
+        manifold_info["safety_context_fingerprint"] = str(
+            formal_safety_context.get("fingerprint", ""))
         if len(final_trajectory) > 0:
             corridor_info["centerline"] = final_trajectory.tolist()
         dbg = dict(getattr(self.manifold, "last_topology_debug", {}) or {})
@@ -6669,6 +6683,30 @@ class WheelchairNode:
                     row["phase"] for row in self.mpc_executed_records],
                 "executed_evidence_required": True,
             })
+        fixed_point = (np.asarray(final_trajectory[-1], float)
+                       if len(final_trajectory) else np.zeros(3, float))
+        fixed_context_audit = safety_context_audit(
+            fixed_point, formal_safety_context.get("manifold_constraint", {}),
+            corridor_info, self.field, stage="planning_final_gate")
+        fixed_context_audit["context_source"] = (
+            "WheelchairNode.authoritative_safety_context")
+        fixed_context_audit["constraint_source"] = (
+            "WheelchairNode.authoritative_safety_context")
+        formal_fixed_audit = dict(fixed_context_audit)
+        formal_fixed_audit["stage"] = "formal_reference_safety_audit"
+        formal_fixed_audit["context_source"] = (
+            "reused_planning_authoritative_context")
+        formal_fixed_audit["constraint_source"] = (
+            "reused_planning_authoritative_constraint")
+        result["fixed_point_safety_context_audit"] = {
+            "planning_final_gate": fixed_context_audit,
+            "formal_reference_safety_audit": formal_fixed_audit,
+            "same_context_fingerprint": bool(
+                fixed_context_audit["safety_context_fingerprint"] ==
+                formal_fixed_audit["safety_context_fingerprint"]),
+            "constraint_source": "reused_planning_authoritative_constraint",
+            "context_source": "reused_planning_authoritative_context",
+        }
         result["task_success"] = bool(self.task_completed)
         result["overall_success"] = bool(
             result.get("task_success", False) and
