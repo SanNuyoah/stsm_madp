@@ -1717,6 +1717,8 @@ def test_wheelchair_diff_drive_probe_is_isolated_from_stsm_and_captures_actuatio
     assert "get_physics_properties" in source
     assert "ode_sor_pgs_iterations" in launch
     assert "set_physics_properties" in source
+    assert "ode_contact_surface_layer" in launch
+    assert "only one ODE probe parameter may change per run" in source
     assert "wheelchair_diff_drive_physical_actuation_probe_v1" in source
 
 
