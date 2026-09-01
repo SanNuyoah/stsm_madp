@@ -9,6 +9,9 @@
   <arg name="wheel_fdir1_enabled" default="false"/>
   <arg name="wheel_lateral_slip_enabled" default="false"/>
   <arg name="wheel_lateral_slip" default="0.0"/>
+  <arg name="wheel_contact_stiffness_enabled" default="false"/>
+  <arg name="wheel_contact_kp" default="10000000.0"/>
+  <arg name="wheel_contact_kd" default="1.0"/>
   <arg name="output_path" default="/tmp/wheelchair_diff_drive_probe.json"/>
 
   <include file="$(find stsm_madp)/launch/wheelchair_eldercare.launch">
@@ -18,6 +21,9 @@
     <arg name="wheel_fdir1_enabled" value="$(arg wheel_fdir1_enabled)"/>
     <arg name="wheel_lateral_slip_enabled" value="$(arg wheel_lateral_slip_enabled)"/>
     <arg name="wheel_lateral_slip" value="$(arg wheel_lateral_slip)"/>
+    <arg name="wheel_contact_stiffness_enabled" value="$(arg wheel_contact_stiffness_enabled)"/>
+    <arg name="wheel_contact_kp" value="$(arg wheel_contact_kp)"/>
+    <arg name="wheel_contact_kd" value="$(arg wheel_contact_kd)"/>
   </include>
 
   <node pkg="stsm_madp" type="wheelchair_diff_drive_probe.py"
@@ -29,6 +35,9 @@
     <param name="wheel_fdir1_enabled" value="$(arg wheel_fdir1_enabled)"/>
     <param name="wheel_lateral_slip_enabled" value="$(arg wheel_lateral_slip_enabled)"/>
     <param name="wheel_lateral_slip" value="$(arg wheel_lateral_slip)"/>
+    <param name="wheel_contact_stiffness_enabled" value="$(arg wheel_contact_stiffness_enabled)"/>
+    <param name="wheel_contact_kp" value="$(arg wheel_contact_kp)"/>
+    <param name="wheel_contact_kd" value="$(arg wheel_contact_kd)"/>
     <param name="output_path" value="$(arg output_path)"/>
   </node>
 </launch>

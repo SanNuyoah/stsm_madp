@@ -15,6 +15,11 @@
        rolling fdir1 below, this is the lateral-only probe parameter. -->
   <xacro:arg name="wheel_lateral_slip_enabled" default="false"/>
   <xacro:arg name="wheel_lateral_slip" default="0.0"/>
+  <!-- Disabled by default: this is the next isolated ODE contact-stiffness
+       experiment after fdir1 and lateral slip have been ruled out. -->
+  <xacro:arg name="wheel_contact_stiffness_enabled" default="false"/>
+  <xacro:arg name="wheel_contact_kp" default="10000000.0"/>
+  <xacro:arg name="wheel_contact_kd" default="1.0"/>
 
   <material name="chair"><color rgba="0.2 0.3 0.4 1"/></material>
   <material name="dark"><color rgba="0.1 0.1 0.1 1"/></material>
@@ -111,6 +116,9 @@
     <xacro:if value="$(arg wheel_lateral_slip_enabled)">
       <slip2>$(arg wheel_lateral_slip)</slip2>
     </xacro:if>
+    <xacro:if value="$(arg wheel_contact_stiffness_enabled)">
+      <kp>$(arg wheel_contact_kp)</kp><kd>$(arg wheel_contact_kd)</kd>
+    </xacro:if>
     <sensor name="left_wheel_contact_sensor" type="contact">
       <always_on>true</always_on><update_rate>100</update_rate>
       <contact><collision>left_wheel_collision</collision></contact>
@@ -127,6 +135,9 @@
     </xacro:if>
     <xacro:if value="$(arg wheel_lateral_slip_enabled)">
       <slip2>$(arg wheel_lateral_slip)</slip2>
+    </xacro:if>
+    <xacro:if value="$(arg wheel_contact_stiffness_enabled)">
+      <kp>$(arg wheel_contact_kp)</kp><kd>$(arg wheel_contact_kd)</kd>
     </xacro:if>
     <sensor name="right_wheel_contact_sensor" type="contact">
       <always_on>true</always_on><update_rate>100</update_rate>
