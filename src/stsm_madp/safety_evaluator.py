@@ -294,9 +294,42 @@ class SafetyEvaluator(object):
                            closest - points[:, None, :]), axis=1)))
         return distances, distances <= radius + 1e-9
 
-    def evaluate_state(self, state, risk=None, corridor=None):
+    def _boundary_distances_batch(self, states, boundary=None):
+        """Vectorized equivalent of distance_to_manifold_boundary."""
+        points = _as_points(states)
+        boundary = self._boundary() if boundary is None else boundary
+        if len(points) == 0:
+            return np.zeros(0, float)
+        if isinstance(boundary, dict):
+            parts = [self._boundary_distances_batch(points, boundary.get(key, []))
+                     for key in ("left", "right", "boundary", "points")
+                     if boundary.get(key, [])]
+            return np.min(np.vstack(parts), axis=0) if parts else np.full(
+                len(points), float("inf"))
+        pts = _as_points(boundary)
+        if len(pts) == 0:
+            return np.full(len(points), float("inf"))
+        if len(pts) == 1:
+            return np.linalg.norm(points - pts[0], axis=1)
+        starts = pts[:-1]
+        segments = pts[1:] - starts
+        denom = np.einsum("ij,ij->i", segments, segments)
+        offsets = points[:, None, :] - starts[None, :, :]
+        projection = np.zeros((len(points), len(segments)), float)
+        valid = denom > 1e-12
+        if np.any(valid):
+            projection[:, valid] = np.einsum(
+                "nmi,mi->nm", offsets[:, valid], segments[valid]) / denom[valid]
+        projection = np.clip(projection, 0.0, 1.0)
+        closest = starts[None, :, :] + projection[:, :, None] * segments[None, :, :]
+        return np.sqrt(np.maximum(0.0, np.min(
+            np.einsum("nmi,nmi->nm", closest - points[:, None, :],
+                       closest - points[:, None, :]), axis=1)))
+
+    def evaluate_state(self, state, risk=None, corridor=None, clearance=None):
         point = np.asarray(state, float)[:3]
-        clearance = distance_to_manifold_boundary(point, self._boundary())
+        if clearance is None:
+            clearance = distance_to_manifold_boundary(point, self._boundary())
         risk = (manifold_risk_value(point, self.risk_field)
                 if risk is None else float(risk))
         clearance_source = "risk_manifold_boundary"
@@ -347,11 +380,12 @@ class SafetyEvaluator(object):
         else:
             risks = [None] * len(points)
         distances, inside = self._corridor_distances_batch(points)
+        clearances = self._boundary_distances_batch(points)
         return [self.evaluate_state(
             point, risk=risk,
-            corridor=(float(distance), bool(valid)))
-                for point, risk, distance, valid in zip(
-                    points, risks, distances, inside)]
+            corridor=(float(distance), bool(valid)), clearance=float(clearance))
+                for point, risk, distance, valid, clearance in zip(
+                    points, risks, distances, inside, clearances)]
 
     def evaluate_state_or_points(self, state=None, interest_points=None,
                                  robot_type="", task_phase="",
