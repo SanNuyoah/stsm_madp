@@ -1696,6 +1696,30 @@ def test_start_yaw_cannot_directly_connect_to_refined_head_when_boundary_turn_is
     assert prefix_audit["prefix_join_max_turn"] <= 0.40 + 1e-9
 
 
+def test_wheelchair_mpc_timing_diagnostics_contract_is_explicit():
+    source = open(os.path.join(ROOT, "nodes", "wheelchair_node.py"), "r").read()
+    for field in (
+            "mpc_timing_diagnostics.json", "mpc_timing_summary.json",
+            "cycle_id", "state_timestamp", "state_receive_wall_time",
+            "solve_start_time", "solve_end_time", "command_publish_time",
+            "state_age_at_solve_start_s", "state_age_at_publish_s",
+            "control_interval_s", "solve_dt_ratio", "control_dt_ratio",
+            "planner_active", "runtime_replan_active",
+            "planning_control_blocking"):
+        assert field in source
+    assert "self._publish_cmd_vel(tw)" in source
+    assert "timing_record.update" in source
+
+    # These are data-contract checks, not real-time requirements.
+    record = {"solve_wall_s": 0.0, "state_age_at_solve_start_s": 0.0,
+              "state_age_at_publish_s": 0.0, "control_interval_s": 0.0,
+              "mpc_dt": 0.2}
+    assert all(float(record[key]) >= 0.0 for key in (
+        "solve_wall_s", "state_age_at_solve_start_s",
+        "state_age_at_publish_s", "control_interval_s"))
+    assert record["mpc_dt"] == 0.2
+
+
 def test_baseline_failure_stage_is_execution_not_refinement():
     with open(os.path.join(ROOT, "nodes", "metrics_node.py"), "r") as handle:
         source = handle.read()

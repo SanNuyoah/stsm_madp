@@ -233,6 +233,12 @@ class WheelchairNode:
         self.reset_on_start = rospy.get_param("~reset_on_start", True)
         self.start_pose = _pt(rospy.get_param("~start_pose", [2.0, 1.5, -2.4]))
         self.state = None
+        # /gazebo/model_states has no per-model header stamp.  Keep its wall
+        # receive time separate from an optional ROS sensor stamp so timing
+        # diagnostics never manufacture a sensor timestamp.
+        self.state_receive_wall_time = None
+        self.state_timestamp_ros_s = None
+        self.state_timestamp_source = "unavailable"
         self.world_vel = np.zeros(3)
         self.velocity_valid = False
         self.u_prev = np.zeros(2)
@@ -255,9 +261,16 @@ class WheelchairNode:
             "~mpc_solve_deadline_s", 0.6))
         self.mpc_solve_wall_history = []
         self.mpc_timing_history = []
+        self.mpc_timing_records = []
         self.control_update_interval_history = []
         self.mpc_solve_overrun_count = 0
         self._last_control_update_wall = None
+        self._last_mpc_command_publish_wall = None
+        self.planner_timing_events = []
+        # The next MPC command can be separated from the previous one by a
+        # synchronous runtime replan.  Keep that event for diagnostics only;
+        # it must never affect command generation or recovery decisions.
+        self._runtime_replan_timing_since_last_command = None
         self.stop_triggered = False
         self.stop_reason = ""
         self.task_completed = False
@@ -1140,6 +1153,11 @@ class WheelchairNode:
         v = float(msg.twist.twist.linear.x)
         self.world_vel = np.array([v * np.cos(yaw), v * np.sin(yaw), 0.0])
         self.velocity_valid = True
+        self.state_receive_wall_time = float(time.time())
+        stamp = float(msg.header.stamp.to_sec())
+        self.state_timestamp_ros_s = stamp if stamp > 0.0 else None
+        self.state_timestamp_source = (
+            "odom_header" if stamp > 0.0 else "odom_header_unavailable")
 
     def _audit_odom_cb(self, msg):
         p = msg.pose.pose.position
@@ -1171,6 +1189,9 @@ class WheelchairNode:
         tw = msg.twist[i].linear
         self.world_vel = np.array([tw.x, tw.y, tw.z], float)
         self.velocity_valid = True
+        self.state_receive_wall_time = float(time.time())
+        self.state_timestamp_ros_s = None
+        self.state_timestamp_source = "gazebo_model_states_no_header"
 
     def _direct_baseline_corridor(self, start):
         label = "baseline_%s" % self.baseline_type
@@ -5824,7 +5845,18 @@ class WheelchairNode:
             rospy.loginfo("[wc][recovery] full replan reason=%s current=%s count=%d",
                           reason, self._corridor_label(corridor, ""),
                           self.runtime_full_replan_count)
+            replan_t0 = time.time()
             new_corridor = self._plan_corridor()
+            replan_t1 = time.time()
+            replan_event = {
+                "kind": "runtime_full_replan", "runtime_replan": True,
+                "reason": str(reason),
+                "planner_wall_s": float(replan_t1 - replan_t0),
+                "start_wall_time": float(replan_t0),
+                "end_wall_time": float(replan_t1),
+            }
+            self.planner_timing_events.append(replan_event)
+            self._runtime_replan_timing_since_last_command = replan_event
             new_corridor = self._ensure_corridor_runtime_contract(
                 new_corridor,
                 fallback_id="wheelchair_replan_c%04d" % (
@@ -7664,6 +7696,7 @@ class WheelchairNode:
         self._write_mpc_reference_path()
         self._write_baseline_evidence()
         self._write_mpc_diagnostics()
+        self._write_mpc_timing_diagnostics()
         self._write_no_progress_execution_audit()
         self._write_wheelchair_execution_diagnostics()
         self._write_wheelchair_diff_drive_chain_audit()
@@ -7671,6 +7704,79 @@ class WheelchairNode:
         self._write_runtime_recovery_diagnostics()
         self._write_decision_trace()
         self._write_candidate_recovery_diagnostics()
+
+    def _write_mpc_timing_diagnostics(self):
+        """Persist measured Wheelchair solve-to-command timing only."""
+        if self.baseline:
+            return
+        diag, _breakdown = self._mpc_output_paths()
+        output_dir = os.path.dirname(diag)
+        if output_dir and not os.path.isdir(output_dir):
+            os.makedirs(output_dir)
+        records = list(self.mpc_timing_records)
+
+        def values(key, positive_only=False):
+            rows = []
+            for item in records:
+                value = item.get(key, None)
+                if value is None:
+                    continue
+                value = float(value)
+                if positive_only and value <= 0.0:
+                    continue
+                rows.append(value)
+            return rows
+
+        def stats(rows):
+            if not rows:
+                return {"mean": 0.0, "p50": 0.0, "p95": 0.0, "max": 0.0}
+            arr = np.asarray(rows, float)
+            return {
+                "mean": float(np.mean(arr)), "p50": float(np.percentile(arr, 50)),
+                "p95": float(np.percentile(arr, 95)), "max": float(np.max(arr)),
+            }
+
+        mpc_dt = float(self.mpc.dt)
+        solve = values("solve_wall_s")
+        control = values("control_interval_s", positive_only=True)
+        age = values("state_age_at_publish_s")
+        solve_ratio = values("solve_dt_ratio")
+        control_ratio = values("control_dt_ratio", positive_only=True)
+        summary = {
+            "contract": "wheelchair_mpc_timing_consistency_audit_v1",
+            "cycle_count": int(len(records)),
+            "nominal_loop_period_s": 0.10,
+            "mpc_dt": mpc_dt,
+            "mpc_horizon": int(self.mpc.N),
+            "solve_mean_s": stats(solve)["mean"],
+            "solve_p50_s": stats(solve)["p50"],
+            "solve_p95_s": stats(solve)["p95"],
+            "solve_max_s": stats(solve)["max"],
+            "control_interval_mean_s": stats(control)["mean"],
+            "control_interval_p95_s": stats(control)["p95"],
+            "control_interval_max_s": stats(control)["max"],
+            "state_age_publish_mean_s": stats(age)["mean"],
+            "state_age_publish_p95_s": stats(age)["p95"],
+            "state_age_publish_max_s": stats(age)["max"],
+            "solve_dt_ratio_mean": stats(solve_ratio)["mean"],
+            "solve_dt_ratio_p95": stats(solve_ratio)["p95"],
+            "control_dt_ratio_mean": stats(control_ratio)["mean"],
+            "control_dt_ratio_p95": stats(control_ratio)["p95"],
+            "solve_over_dt_ratio": float(np.mean(
+                np.asarray(solve, float) > mpc_dt)) if solve else 0.0,
+            "planner_event_count": int(len(self.planner_timing_events)),
+            "runtime_planner_event_count": int(sum(
+                bool(row.get("runtime_replan", False))
+                for row in self.planner_timing_events)),
+            "planning_events": list(self.planner_timing_events),
+        }
+        with open(os.path.join(output_dir or ".",
+                               "mpc_timing_diagnostics.json"), "w") as handle:
+            json.dump({"contract": summary["contract"],
+                       "records": records}, handle, indent=2, sort_keys=True)
+        with open(os.path.join(output_dir or ".",
+                               "mpc_timing_summary.json"), "w") as handle:
+            json.dump(summary, handle, indent=2, sort_keys=True)
 
     def _write_no_progress_execution_audit(self):
         """Persist execution-chain evidence for post-run no-progress analysis."""
@@ -8359,7 +8465,15 @@ class WheelchairNode:
         rospy.loginfo("[wc] start %s -> goal %s (mode=%s)",
                       np.round(self.state, 2), self.goal,
                       "baseline" if self.baseline else "stsm")
+        initial_plan_t0 = time.time()
         corridor = self._plan_corridor()
+        initial_plan_t1 = time.time()
+        self.planner_timing_events.append({
+            "kind": "initial_planning", "runtime_replan": False,
+            "planner_wall_s": float(initial_plan_t1 - initial_plan_t0),
+            "start_wall_time": float(initial_plan_t0),
+            "end_wall_time": float(initial_plan_t1),
+        })
         self.last_topology_replan_time = rospy.Time.now()
         self.mpc.near_goal_radius = self.near_goal_radius
         self.mpc.near_goal_adp_scale = self.near_goal_adp_scale
@@ -8610,6 +8724,16 @@ class WheelchairNode:
                     rospy.logerr("[wc] invalid STSM corridor before MPC: %s", exc)
                     break
                 topology_constraint_for_mpc = {}
+            # Snapshot audit metadata immediately before the real MPC call.
+            # The solver input and control policy are intentionally unchanged.
+            cycle_id = int(len(self.mpc_timing_records))
+            cycle_start_wall = float(time.time())
+            state_at_solve = np.asarray(self.state, float).copy()
+            state_receive_wall = self.state_receive_wall_time
+            state_age_at_solve = (
+                max(0.0, cycle_start_wall - float(state_receive_wall))
+                if state_receive_wall is not None else None)
+            ref_target = np.asarray(ref[0], float) if len(ref) else np.zeros(3)
             solve_t0 = time.time()
             v, w = self.mpc.solve(
                 self.state, ref, self.field,
@@ -8716,10 +8840,48 @@ class WheelchairNode:
                     self._watchdog_zero_duty_ratio()),
             }
             self.mpc_runtime_records.append(runtime_record)
+            timing_record = {
+                "cycle_id": cycle_id,
+                "state_timestamp": self.state_timestamp_ros_s,
+                "state_timestamp_source": str(self.state_timestamp_source),
+                "state_receive_wall_time": state_receive_wall,
+                "state_x": float(state_at_solve[0]),
+                "state_y": float(state_at_solve[1]),
+                "state_yaw": float(state_at_solve[2]),
+                "solve_start_time": float(solve_t0),
+                "solve_end_time": float(now_wall),
+                "command_publish_time": None,
+                "solve_wall_s": float(solve_wall_s),
+                "state_age_at_solve_start_s": state_age_at_solve,
+                "state_age_at_publish_s": None,
+                "control_interval_s": 0.0,
+                "nominal_loop_period_s": 0.10,
+                "actual_cycle_wall_s": None,
+                "mpc_dt": float(self.mpc.dt),
+                "mpc_horizon": int(self.mpc.N),
+                "solve_dt_ratio": float(solve_wall_s / max(float(self.mpc.dt), 1e-9)),
+                "control_dt_ratio": 0.0,
+                "reference_global_index": int(getattr(
+                    corridor, "reference_index", -1)),
+                "reference_target_x": float(ref_target[0]),
+                "reference_target_y": float(ref_target[1]),
+                "command_v": None,
+                "command_w": None,
+                # Replanning occurs outside an MPC solve cycle and returns to
+                # the loop with ``continue``.  These flags make that boundary
+                # explicit rather than attributing planning time to MPC.
+                "planner_active": False,
+                "runtime_replan_active": False,
+                "planner_wall_s": 0.0,
+                "planning_control_blocking": False,
+            }
+            self.mpc_timing_records.append(timing_record)
             if len(self.mpc_runtime_records) > 200:
                 self.mpc_runtime_records = self.mpc_runtime_records[-200:]
             if len(self.mpc_timing_history) > 200:
                 self.mpc_timing_history = self.mpc_timing_history[-200:]
+            if len(self.mpc_timing_records) > 1000:
+                self.mpc_timing_records = self.mpc_timing_records[-1000:]
             if (not self.baseline and not final_approach_active and
                     not str(self.mpc.last_solver_status).startswith(
                         "safe_stop:")):
@@ -8934,6 +9096,40 @@ class WheelchairNode:
             tw.angular.z = w
             self._set_command_keepalive(v, w, active=(not gate.stop))
             self._publish_cmd_vel(tw)
+            command_publish_wall = float(self.last_cmd_publish_wall_s)
+            control_interval = 0.0
+            if self._last_mpc_command_publish_wall is not None:
+                control_interval = max(
+                    0.0, command_publish_wall -
+                    float(self._last_mpc_command_publish_wall))
+            replan_event = self._runtime_replan_timing_since_last_command
+            replan_blocked_control = bool(
+                replan_event is not None and
+                self._last_mpc_command_publish_wall is not None and
+                float(replan_event["start_wall_time"]) >=
+                float(self._last_mpc_command_publish_wall) and
+                float(replan_event["end_wall_time"]) <= command_publish_wall)
+            self._last_mpc_command_publish_wall = command_publish_wall
+            timing_record.update({
+                "command_publish_time": command_publish_wall,
+                "state_age_at_publish_s": (
+                    max(0.0, command_publish_wall - float(state_receive_wall))
+                    if state_receive_wall is not None else None),
+                "control_interval_s": float(control_interval),
+                "actual_cycle_wall_s": float(
+                    max(0.0, command_publish_wall - cycle_start_wall)),
+                "control_dt_ratio": float(
+                    control_interval / max(float(self.mpc.dt), 1e-9)),
+                "command_v": float(v),
+                "command_w": float(w),
+                "runtime_replan_active": bool(replan_blocked_control),
+                "planner_wall_s": float(
+                    replan_event["planner_wall_s"]
+                    if replan_blocked_control else 0.0),
+                "planning_control_blocking": bool(replan_blocked_control),
+            })
+            if replan_blocked_control:
+                self._runtime_replan_timing_since_last_command = None
             if self.no_progress_execution_records:
                 self.no_progress_execution_records[-1].update({
                     "cmd_topic": str(self.cmd_topic),
