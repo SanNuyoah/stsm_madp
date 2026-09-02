@@ -437,19 +437,21 @@ def _refined_repair_lineage(point_count, repair):
     return lineage
 
 
-def _execution_reference(rebuilt):
+def _execution_reference(rebuilt, force_launch_prefix=False):
     """Reuse the existing profile and bounded smoothing policy offline."""
     base_profile = wheelchair_nonholonomic_execution_profile(
         rebuilt, STATE, GOAL, min_step=0.03, initial_lookahead=0.12,
         horizon_points=min(10, max(4, len(rebuilt))))
-    needs_prefix = (base_profile["initial_heading_error"] > 1.85 or
-                    base_profile["monotonic_regression_ratio"] > 0.18 or
-                    base_profile["nonmonotonic_fraction"] > 0.30 or
-                    base_profile["heading_oscillation"] > 0.50)
+    needs_prefix = bool(force_launch_prefix or
+                        base_profile["initial_heading_error"] > 1.85 or
+                        base_profile["monotonic_regression_ratio"] > 0.18 or
+                        base_profile["nonmonotonic_fraction"] > 0.30 or
+                        base_profile["heading_oscillation"] > 0.50)
     prefix_metadata = _heading_prefix(rebuilt) if needs_prefix else None
     reference = prefix_metadata["points"] if prefix_metadata is not None else rebuilt
     metrics = path_curvature_metrics(reference)
-    if float(metrics["max_turn"]) > TURN + 0.03:
+    if (not force_launch_prefix and
+            float(metrics["max_turn"]) > TURN + 0.03):
         smooth = smooth_wheelchair_corners(reference, samples_per_segment=6, passes=1)
         if len(smooth) > 64:
             keep = sorted(set(int(round(value)) for value in np.linspace(
@@ -628,10 +630,17 @@ def run(trace_path, output_path, include_terminal_trials=True):
                 trials.append(trial)
                 continue
             rebuilt = np.vstack([refined[:start_index + 1], suffix])
-            rebuilt, main_turn_repair = _repair_refined_main_turn(
-                rebuilt, evaluator)
+            # Mirror the live ordering: rebuilding the terminal never skips
+            # the shared launch geometry; only then may the main-path repair
+            # operate on the final merged reference.
             final, geometry, prefix_used, turn_origin, prefix_audit = (
-                _execution_reference(rebuilt))
+                _execution_reference(rebuilt, force_launch_prefix=True))
+            final, main_turn_repair = _repair_refined_main_turn(
+                final, evaluator)
+            geometry = dict(path_curvature_metrics(final))
+            execution_profile = wheelchair_nonholonomic_execution_profile(
+                final, STATE, GOAL, min_step=0.03, initial_lookahead=0.12,
+                horizon_points=min(10, max(4, len(final))))
             # Mirror WheelchairNode's authoritative final-reference context:
             # generated launch geometry is evaluated against the reference
             # that would actually be handed to execution, not the obsolete
@@ -683,6 +692,7 @@ def run(trace_path, output_path, include_terminal_trials=True):
                                   "refined_execution_curvature_limit" if max_curvature > CURVATURE + 1e-9 else
                                   "completion_region_not_reached"),
                 "execution_geometry": geometry,
+                "nonholonomic_execution_profile": execution_profile,
                 "turn_origin_audit": turn_origin,
                 "launch_prefix_audit": prefix_audit,
                 "refined_main_turn_repair": main_turn_repair,

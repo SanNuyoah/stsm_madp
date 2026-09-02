@@ -3509,6 +3509,34 @@ class WheelchairNode:
         if base.size == 0:
             return base, dict(metrics or {}), False
         base, terminal_rebuild = self._safe_terminal_rebuild_c0001(corr, base)
+        # A terminal rebuild changes only the tail, but it must not discard
+        # the common launch contract.  In particular, the rebuilt corridor's
+        # first point is not a diff-drive command from the current pose.
+        # Always synthesize the heading-continuous prefix before evaluating or
+        # repairing the final execution geometry.
+        terminal_rebuild_applied = bool(terminal_rebuild.get(
+            "safe_terminal_rebuild_applied", False))
+        launch_prefix_audit = {}
+        if terminal_rebuild_applied:
+            prefixed = self._make_heading_progress_prefix(base, corr)
+            launch_prefix_audit = dict(getattr(
+                self, "last_launch_prefix_audit", {}) or {})
+            if prefixed is None or len(prefixed) < 2:
+                # Do not silently fall back to start-pose -> refined[0].  The
+                # existing execution contracts will reject this explicitly
+                # labelled failed construction rather than executing it.
+                out = dict(metrics or {})
+                out["safe_terminal_rebuild"] = dict(terminal_rebuild)
+                out["launch_prefix_audit"] = launch_prefix_audit
+                out["launch_prefix_required"] = True
+                out["launch_prefix_generated"] = False
+                out["reference_source"] = "safe_terminal_rebuild_launch_prefix_failed"
+                out["diff_drive_reference_source"] = (
+                    "safe_terminal_rebuild_launch_prefix_failed")
+                return base, out, True
+            base = np.asarray(prefixed, float)
+        # Repair after the final launch-prefix merge so the geometry that is
+        # checked here is exactly the geometry handed to the execution gates.
         base, main_turn_repair = self._repair_c0001_refined_main_turn(
             corr, base)
         current = wheelchair_nonholonomic_execution_profile(
@@ -3521,6 +3549,26 @@ class WheelchairNode:
             float(current.get("monotonic_regression_ratio", 0.0)) > 0.18 or
             float(current.get("nonmonotonic_fraction", 0.0)) > 0.30 or
             float(current.get("heading_oscillation", 0.0)) > 0.50)
+        if terminal_rebuild_applied:
+            # The mandatory prefix is already merged.  Do not offer a raw
+            # corridor alternative below: that would reintroduce the exact
+            # ordering regression this branch prevents.
+            from stsm_madp.deform import path_curvature_metrics, path_length
+            out = dict(metrics or {})
+            out.update(path_curvature_metrics(base))
+            out["refined_path_length"] = float(path_length(base))
+            out["reference_path_count"] = int(len(base))
+            out["nonholonomic_execution_profile"] = dict(current)
+            out["diff_drive_reference_repaired"] = True
+            out["refined_main_turn_repair"] = dict(main_turn_repair)
+            out["safe_terminal_rebuild"] = dict(terminal_rebuild)
+            out["launch_prefix_audit"] = launch_prefix_audit
+            out["launch_prefix_required"] = True
+            out["launch_prefix_generated"] = True
+            out["reference_source"] = "safe_terminal_rebuild_launch_prefix"
+            out["diff_drive_reference_source"] = (
+                "safe_terminal_rebuild_launch_prefix")
+            return base, out, True
         if not needs_repair:
             from stsm_madp.deform import path_curvature_metrics, path_length
             out = dict(metrics or {})
@@ -3533,9 +3581,13 @@ class WheelchairNode:
                 terminal_rebuild.get("safe_terminal_rebuild_applied", False))
             out["refined_main_turn_repair"] = dict(main_turn_repair)
             out["safe_terminal_rebuild"] = dict(terminal_rebuild)
-            if bool(terminal_rebuild.get("safe_terminal_rebuild_applied", False)):
-                out["reference_source"] = "safe_terminal_rebuild"
-                out["diff_drive_reference_source"] = "safe_terminal_rebuild"
+            if terminal_rebuild_applied:
+                out["launch_prefix_audit"] = launch_prefix_audit
+                out["launch_prefix_required"] = True
+                out["launch_prefix_generated"] = True
+                out["reference_source"] = "safe_terminal_rebuild_launch_prefix"
+                out["diff_drive_reference_source"] = (
+                    "safe_terminal_rebuild_launch_prefix")
             return base, out, bool(
                 main_turn_repair.get("repair_applied", False) or
                 terminal_rebuild.get("safe_terminal_rebuild_applied", False))
@@ -3591,7 +3643,13 @@ class WheelchairNode:
         out = dict(metrics or {})
         out["refined_main_turn_repair"] = dict(main_turn_repair)
         out["safe_terminal_rebuild"] = dict(terminal_rebuild)
-        if best_source == "diff_drive_launch_prefix":
+        if terminal_rebuild_applied:
+            # The mandatory terminal-rebuild prefix is the only admissible
+            # launch source; never replace it with the raw corridor variant.
+            out["launch_prefix_audit"] = launch_prefix_audit
+            out["launch_prefix_required"] = True
+            out["launch_prefix_generated"] = True
+        elif best_source == "diff_drive_launch_prefix":
             out["launch_prefix_audit"] = dict(repaired_launch_audit)
         elif best_source == "raw_diff_drive_launch_prefix":
             out["launch_prefix_audit"] = dict(raw_launch_audit)

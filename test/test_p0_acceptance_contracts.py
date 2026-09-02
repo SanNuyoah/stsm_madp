@@ -1656,6 +1656,46 @@ def test_runtime_sources_preserve_p0_execution_contracts():
     assert "def first_value(*values):" in experiment_source
 
 
+def test_safe_terminal_rebuild_keeps_mandatory_launch_prefix_ordering():
+    source = open(os.path.join(ROOT, "nodes", "wheelchair_node.py"), "r").read()
+    start = source.index("def _select_wheelchair_execution_reference")
+    end = source.index("def _stsm_corridor_execution_contract_status", start)
+    selection = source[start:end]
+
+    assert "terminal_rebuild_applied" in selection
+    assert "safe_terminal_rebuild_launch_prefix" in selection
+    assert selection.index("_safe_terminal_rebuild_c0001") < selection.index(
+        "_make_heading_progress_prefix") < selection.index(
+            "_repair_c0001_refined_main_turn")
+    assert "launch_prefix_required" in selection
+    assert "launch_prefix_generated" in selection
+
+
+def test_start_yaw_cannot_directly_connect_to_refined_head_when_boundary_turn_is_unsafe():
+    # This is the R001 start -> refined[0] -> refined[1] geometry.  It must
+    # trigger the mandatory prefix branch, not be accepted as a direct launch.
+    direct = np.array([
+        [2.0, 1.5, 0.0],
+        [2.05, 1.5555555555555554, 0.0],
+        [1.9, 1.5555555555555554, 0.0],
+    ])
+    assert wheelchair_sharp_turn_audit(direct, turn_limit=0.40)["max_turn"] > 0.40
+
+    script = os.path.join(
+        ROOT, "scripts", "analysis", "replay_c0001_safe_terminal_trials.py")
+    spec = importlib.util.spec_from_file_location("terminal_prefix_replay", script)
+    replay = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(replay)
+    replay.STATE = np.array([2.0, 1.5, -2.4], float)
+    _reference, _geometry, prefix_used, _turn, prefix_audit = (
+        replay._execution_reference(direct, force_launch_prefix=True))
+
+    assert prefix_used
+    assert prefix_audit["launch_prefix_point_count"] > 0
+    assert prefix_audit["launch_prefix_max_turn"] <= 0.40 + 1e-9
+    assert prefix_audit["prefix_join_max_turn"] <= 0.40 + 1e-9
+
+
 def test_baseline_failure_stage_is_execution_not_refinement():
     with open(os.path.join(ROOT, "nodes", "metrics_node.py"), "r") as handle:
         source = handle.read()
