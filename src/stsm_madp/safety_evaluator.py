@@ -208,12 +208,22 @@ class SafetyEvaluator(object):
             planning_clearance_margin or
             self.manifold_constraint.get("planning_clearance_margin", 0.0) or 0.0)
         self._profile = self._new_profile()
-        self._fast_profile = {"fast_core_total_s": 0.0,
-                              "fast_core_risk_field_s": 0.0,
-                              "fast_core_corridor_query_s": 0.0,
-                              "fast_core_manifold_s": 0.0,
-                              "fast_core_pack_s": 0.0,
-                              "profiled_calls": 0}
+        self._fast_profile = {
+            # Keep the complete R022 schema even where a batch operation is
+            # intentionally fused (those fused components remain zero rather
+            # than being guessed or double-counted).
+            "fast_core_total_s": 0.0,
+            "fast_core_context_s": 0.0,
+            "fast_core_interest_transform_s": 0.0,
+            "fast_core_human_s": 0.0,
+            "fast_core_anchor_s": 0.0,
+            "fast_core_risk_field_s": 0.0,
+            "fast_core_corridor_query_s": 0.0,
+            "fast_core_manifold_s": 0.0,
+            "fast_core_threshold_s": 0.0,
+            "fast_core_pack_s": 0.0,
+            "fast_core_misc_s": 0.0,
+            "profiled_calls": 0}
 
     @staticmethod
     def _new_profile():

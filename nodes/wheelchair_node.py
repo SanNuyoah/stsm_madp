@@ -8053,6 +8053,13 @@ class WheelchairNode:
                            "safety_eval_contract_profile", {}),
                        "sample_count": int(len(records))}, handle,
                       indent=2, sort_keys=True)
+        with open(os.path.join(output_dir or ".",
+                               "safety_eval_fast_core_profile.json"), "w") as handle:
+            json.dump({"contract": "wheelchair_safety_eval_fast_core_profile_v1",
+                       "profile": summary["solve_phase_profile"].get(
+                           "fast_core_profile", {}),
+                       "sample_count": int(len(records))}, handle,
+                      indent=2, sort_keys=True)
         progress_records = []
         for record in records:
             progress_records.append({
@@ -8710,6 +8717,45 @@ class WheelchairNode:
                 "max_s": float(max(values)) if values else 0.0,
             }
         summary["safety_eval_component_profile"] = profile
+        # Fast-path timing is recorded separately from the legacy full
+        # evaluator profile.  Keep the per-solve snapshot intact so the
+        # report cannot silently show zeros when MPC used evaluate_fast_states.
+        fast_names = (
+            "fast_core_total_s", "fast_core_context_s",
+            "fast_core_interest_transform_s", "fast_core_human_s",
+            "fast_core_anchor_s", "fast_core_risk_field_s",
+            "fast_core_corridor_query_s", "fast_core_manifold_s",
+            "fast_core_threshold_s", "fast_core_pack_s", "fast_core_misc_s")
+        fast_profile = {"sample_count": int(len(samples)),
+                        "profiled_state_count": int(sum(
+                            int((item.get("fast_core_profile", {}) or {}).get(
+                                "profiled_calls", 0) or 0)
+                            for item in samples))}
+        for name in fast_names:
+            values = [float((item.get("fast_core_profile", {}) or {}).get(
+                name, 0.0) or 0.0) for item in samples]
+            fast_profile[name] = {
+                "mean_s": float(np.mean(values)) if values else 0.0,
+                "p50_s": float(np.percentile(values, 50)) if values else 0.0,
+                "p95_s": float(np.percentile(values, 95)) if values else 0.0,
+                "max_s": float(max(values)) if values else 0.0,
+                "total_s": float(sum(values)),
+            }
+        fast_total = fast_profile["fast_core_total_s"]["total_s"]
+        component_names = [name for name in fast_names
+                           if name not in ("fast_core_total_s",)]
+        component_sum = float(sum(fast_profile[name]["total_s"]
+                                  for name in component_names))
+        for name in component_names:
+            fast_profile[name]["percentage_of_total"] = float(
+                100.0 * fast_profile[name]["total_s"] / fast_total
+                if fast_total > 1e-12 else 0.0)
+        fast_profile["subcomponent_sum_s"] = component_sum
+        fast_profile["unaccounted_s"] = float(fast_total - component_sum)
+        fast_profile["unaccounted_ratio"] = float(
+            max(0.0, fast_total - component_sum) / fast_total
+            if fast_total > 1e-12 else 0.0)
+        summary["fast_core_profile"] = fast_profile
         contract_total = profile.get("contract_s", {}).get("total_s", 0.0)
         contract_names = (
             "contract_context_access", "contract_interest_transform",
