@@ -1824,6 +1824,25 @@ def test_wheelchair_mpc_timing_diagnostics_contract_is_explicit():
     assert record["mpc_dt"] == 0.2
 
 
+def test_wheelchair_safety_component_profile_contract_is_explicit():
+    source = open(os.path.join(ROOT, "nodes", "wheelchair_node.py"), "r").read()
+    evaluator_source = open(os.path.join(
+        ROOT, "src", "stsm_madp", "safety_evaluator.py"), "r").read()
+    assert "safety_eval_component_profile.json" in source
+    for field in ("context_lookup", "interest_transform", "human_risk",
+                  "anchor_risk", "risk_field", "manifold_clearance",
+                  "corridor_clearance", "contract"):
+        assert field in evaluator_source
+    assert "miss_total" in source
+    assert "profile_snapshot" in evaluator_source
+
+
+def test_decision_trace_success_contract_has_controller_and_safety_status():
+    source = open(os.path.join(ROOT, "src", "stsm_madp", "decision_trace.py"), "r").read()
+    for field in ("controller_success", "safety_success", "task_success"):
+        assert 'trace["%s"]' % field in source
+
+
 def test_wheelchair_final_gate_reference_contract_is_immutable_and_auditable():
     node_source = open(os.path.join(
         ROOT, "nodes", "wheelchair_node.py"), "r").read()

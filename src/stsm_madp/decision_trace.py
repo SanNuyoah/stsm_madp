@@ -94,6 +94,9 @@ def init_trace(robot="", variant=""):
         "stop_reason": "",
         "success_goal": "",
         "success_safe": "",
+        "controller_success": "",
+        "safety_success": "",
+        "task_success": "",
         "topology_fallback_used": 0,
         "planning_failed": 0,
         "steps": {},
@@ -249,6 +252,9 @@ def trace_from_debug(debug, metrics=None, robot="", variant="stsm"):
     trace["stop_reason"] = str(metrics.get("stop_reason") or "")
     trace["success_goal"] = metrics.get("success_goal", "")
     trace["success_safe"] = metrics.get("success_safe", "")
+    trace["controller_success"] = metrics.get("controller_success", "")
+    trace["safety_success"] = metrics.get("safety_success", "")
+    trace["task_success"] = metrics.get("task_success", "")
     if selected_id == "planning_failed":
         trace["planning_failed"] = 1
         if not trace["execution_status"]:

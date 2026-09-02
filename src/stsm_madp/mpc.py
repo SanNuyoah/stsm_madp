@@ -5166,8 +5166,17 @@ class WheelchairMPC:
             "hard_safety_prune_count": 0,
         }
 
+        manifold_evaluator = None
+
         def finish_timing():
             timing["solve_wall_s"] = max(0.0, time.time() - solve_t0)
+            if manifold_evaluator is not None:
+                profile = manifold_evaluator.profile_snapshot()
+                for name, item in profile.items():
+                    timing["safety_profile_%s_s" % name] = float(
+                        item["total_s"])
+                timing["safety_profile_miss_total_s"] = float(sum(
+                    item["total_s"] for item in profile.values()))
             self.last_timing = dict(timing)
 
         has_adp_terminal = (
@@ -5208,6 +5217,7 @@ class WheelchairMPC:
             manifold_constraint=manifold_payload,
             corridor_constraint=corridor_payload,
             risk_field=field)
+        manifold_evaluator.reset_profile()
         tube_payload = dict(corridor_payload.get("tube_constraint", {}) or {})
         tube_mode = str(
             tube_payload.get(

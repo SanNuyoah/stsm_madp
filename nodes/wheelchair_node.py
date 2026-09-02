@@ -7466,6 +7466,9 @@ class WheelchairNode:
                     result.get("failure_reason", "unknown") or "unknown"),
                 "success_goal": int(bool(result.get("task_success", False))),
                 "success_safe": int(bool(result.get("safety_success", False))),
+                "controller_success": int(bool(result.get("controller_success", succeeded))),
+                "safety_success": int(bool(result.get("safety_success", False))),
+                "task_success": int(bool(result.get("task_success", False))),
                 "module_chain_valid": int(bool(
                     result.get("module_chain_valid", False))),
                 "mpc_executed_trajectory_count": int(result.get(
@@ -8034,6 +8037,13 @@ class WheelchairNode:
         with open(os.path.join(output_dir or ".",
                                "mpc_solve_profile.json"), "w") as handle:
             json.dump(summary["solve_phase_profile"], handle,
+                      indent=2, sort_keys=True)
+        with open(os.path.join(output_dir or ".",
+                               "safety_eval_component_profile.json"), "w") as handle:
+            json.dump({"contract": "wheelchair_safety_eval_component_profile_v1",
+                       "profile": summary["solve_phase_profile"].get(
+                           "safety_eval_component_profile", {}),
+                       "sample_count": int(len(records))}, handle,
                       indent=2, sort_keys=True)
 
     def _write_no_progress_execution_audit(self):
@@ -8653,6 +8663,27 @@ class WheelchairNode:
                 "p95": float(np.percentile(values, 95)) if values else 0.0,
                 "max": float(max(values)) if values else 0.0,
             }
+        profile_names = (
+            "context_lookup", "interest_transform", "human_risk",
+            "anchor_risk", "risk_field", "manifold_clearance",
+            "corridor_clearance", "contract", "miss_total")
+        profile = {}
+        miss_values = [float(item.get("cache_miss_count", 0.0))
+                       for item in samples]
+        for name in profile_names:
+            key = "safety_profile_%s_s" % name
+            values = [float(item.get(key, 0.0)) for item in samples]
+            profile[name + "_s"] = {
+                "count": int(sum(miss_values)) if name == "miss_total" else int(
+                    sum(int(item.get("safety_eval_call_count", 0) or 0)
+                        for item in samples)),
+                "total_s": float(sum(values)),
+                "mean_s": float(np.mean(values)) if values else 0.0,
+                "p50_s": float(np.percentile(values, 50)) if values else 0.0,
+                "p95_s": float(np.percentile(values, 95)) if values else 0.0,
+                "max_s": float(max(values)) if values else 0.0,
+            }
+        summary["safety_eval_component_profile"] = profile
         return summary
 
     def _publish_zero_command(self):

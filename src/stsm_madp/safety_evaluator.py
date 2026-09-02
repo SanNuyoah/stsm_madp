@@ -3,6 +3,7 @@ sys.dont_write_bytecode = True
 
 import hashlib
 import json
+import time
 
 import numpy as np
 
@@ -204,6 +205,30 @@ class SafetyEvaluator(object):
         self.planning_clearance_margin = float(
             planning_clearance_margin or
             self.manifold_constraint.get("planning_clearance_margin", 0.0) or 0.0)
+        self._profile = self._new_profile()
+
+    @staticmethod
+    def _new_profile():
+        return {name: {"count": 0, "total_s": 0.0} for name in (
+            "context_lookup", "interest_transform", "human_risk",
+            "anchor_risk", "risk_field", "manifold_clearance",
+            "corridor_clearance", "contract")}
+
+    def reset_profile(self):
+        self._profile = self._new_profile()
+
+    def profile_snapshot(self):
+        return {key: {"count": int(value["count"]),
+                      "total_s": float(value["total_s"]),
+                      "mean_s": (float(value["total_s"]) / value["count"]
+                                 if value["count"] else 0.0)}
+                for key, value in self._profile.items()}
+
+    def _profile_add(self, name, elapsed, count=1):
+        item = self._profile.get(name)
+        if item is not None:
+            item["count"] += int(count)
+            item["total_s"] += max(0.0, float(elapsed))
 
     @property
     def minimum_clearance(self):
@@ -375,17 +400,31 @@ class SafetyEvaluator(object):
         points = _as_points(states)
         if len(points) == 0:
             return []
+        phase_t0 = time.perf_counter()
+        context_count = len(points)
         if self.risk_field is not None and hasattr(self.risk_field, "phi_s_batch"):
             risks = np.asarray(self.risk_field.phi_s_batch(points), float)
         else:
             risks = [None] * len(points)
+        risk_elapsed = time.perf_counter() - phase_t0
+        self._profile_add("risk_field", risk_elapsed, context_count)
         distances, inside = self._corridor_distances_batch(points)
+        corridor_elapsed = time.perf_counter() - phase_t0 - risk_elapsed
+        self._profile_add("corridor_clearance", corridor_elapsed, context_count)
+        clearance_t0 = time.perf_counter()
         clearances = self._boundary_distances_batch(points)
-        return [self.evaluate_state(
+        self._profile_add("manifold_clearance", time.perf_counter() - clearance_t0,
+                          context_count)
+        contract_t0 = time.perf_counter()
+        result = [self.evaluate_state(
             point, risk=risk,
             corridor=(float(distance), bool(valid)), clearance=float(clearance))
                 for point, risk, distance, valid, clearance in zip(
                     points, risks, distances, inside, clearances)]
+        self._profile_add("contract", time.perf_counter() - contract_t0,
+                          context_count)
+        self._profile_add("context_lookup", 0.0, context_count)
+        return result
 
     def evaluate_state_or_points(self, state=None, interest_points=None,
                                  robot_type="", task_phase="",
