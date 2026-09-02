@@ -1843,6 +1843,13 @@ def test_decision_trace_success_contract_has_controller_and_safety_status():
         assert 'trace["%s"]' % field in source
 
 
+def test_wheelchair_authoritative_result_is_finalized_before_trace_snapshot():
+    source = open(os.path.join(ROOT, "nodes", "wheelchair_node.py"), "r").read()
+    finalize = source.index('result["overall_success"] = bool(')
+    snapshot = source.index('self._last_authoritative_mpc_result = dict(result)')
+    assert snapshot > finalize
+
+
 def test_wheelchair_final_gate_reference_contract_is_immutable_and_auditable():
     node_source = open(os.path.join(
         ROOT, "nodes", "wheelchair_node.py"), "r").read()

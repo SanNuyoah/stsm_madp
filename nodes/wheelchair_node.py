@@ -7046,9 +7046,6 @@ class WheelchairNode:
                             "safe_stop:")
                         for row in self.mpc_runtime_records)),
             })
-        # Keep the final result available to the downstream decision-trace
-        # writer; it is the canonical source for execution status fields.
-        self._last_authoritative_mpc_result = dict(result)
         fixed_point = (np.asarray(final_trajectory[-1], float)
                        if len(final_trajectory) else np.zeros(3, float))
         fixed_context_audit = safety_context_audit(
@@ -7085,6 +7082,11 @@ class WheelchairNode:
         result["success"] = bool(result["overall_success"])
         if not result["task_success"]:
             result["failure_reason"] = self.stop_reason or "task_not_completed"
+        # Keep the fully finalized result available to the downstream
+        # decision-trace writer.  This must happen after live stop/task state
+        # is folded into the result, otherwise an earlier feasible solve can
+        # overwrite a later execution safe-stop in diagnostics.
+        self._last_authoritative_mpc_result = dict(result)
         runtime_last = (
             dict(self.mpc_runtime_records[-1])
             if self.mpc_runtime_records else {})
