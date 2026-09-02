@@ -2124,6 +2124,33 @@ def test_decision_trace_ignores_generic_dls_delta_without_adp_influence():
     assert trace["adp_affects_control"] == 0
 
 
+def test_decision_trace_accepts_safe_terminal_rebuild_and_canonical_status():
+    trace = trace_from_debug(
+        {
+            "candidate_corridors": [{
+                "corridor_id": "wheelchair_c0001", "selected": True,
+                "refinement_used": 1, "raw_waypoints_count": 19,
+                "refined_waypoints_count": 53,
+                "mpc_reference_source": "safe_terminal_rebuild_launch_prefix",
+            }],
+            "num_topology_nodes": 10, "num_used_saddles": 1,
+            "mpc_reference_source": "safe_terminal_rebuild_launch_prefix",
+            "mpc_used": 1,
+        },
+        metrics={
+            "execution_corridor_id": "wheelchair_c0001",
+            "execution_status": "success", "failure_stage": "none",
+            "stop_reason": "none", "success_goal": 1, "success_safe": 1,
+            "module_chain_valid": 1, "mpc_feasibility_status": "feasible",
+            "selected_refinement_used": 1,
+        }, robot="wheelchair")
+    assert trace["mpc_reference_source"] == "safe_terminal_rebuild_launch_prefix"
+    assert trace["module_chain_valid"] == 1
+    assert trace["execution_status"] == "success"
+    assert trace["success_goal"] == 1
+    assert trace["success_safe"] == 1
+
+
 def test_formal_experiments_default_to_target_calibrated_critics():
     with open(os.path.join(ROOT, "scripts", "run_experiments.sh"), "r") as handle:
         source = handle.read()

@@ -7046,6 +7046,9 @@ class WheelchairNode:
                             "safe_stop:")
                         for row in self.mpc_runtime_records)),
             })
+        # Keep the final result available to the downstream decision-trace
+        # writer; it is the canonical source for execution status fields.
+        self._last_authoritative_mpc_result = dict(result)
         fixed_point = (np.asarray(final_trajectory[-1], float)
                        if len(final_trajectory) else np.zeros(3, float))
         fixed_context_audit = safety_context_audit(
@@ -7451,9 +7454,43 @@ class WheelchairNode:
         if not self.decision_trace_out or self.baseline:
             return
         debug = dict(getattr(self.manifold, "last_topology_debug", {}) or {})
+        trace_metrics = self._runtime_metrics_for_trace()
+        result = dict(getattr(self, "_last_authoritative_mpc_result", {}) or {})
+        if result:
+            succeeded = bool(result.get("overall_success", False))
+            trace_metrics.update({
+                "execution_status": "success" if succeeded else "failed",
+                "failure_stage": "none" if succeeded else str(
+                    result.get("failed_constraint_type", "unknown") or "unknown"),
+                "stop_reason": "none" if succeeded else str(
+                    result.get("failure_reason", "unknown") or "unknown"),
+                "success_goal": int(bool(result.get("task_success", False))),
+                "success_safe": int(bool(result.get("safety_success", False))),
+                "module_chain_valid": int(bool(
+                    result.get("module_chain_valid", False))),
+                "mpc_executed_trajectory_count": int(result.get(
+                    "actual_executed_trajectory_count", 0) or 0),
+                "mpc_rollout_solve_count": int(result.get(
+                    "rollout_solve_count", 0) or 0),
+                "mpc_feasibility_status": str(result.get(
+                    "mpc_feasibility_status", "") or ""),
+            })
         trace = trace_from_debug(
-            debug, self._runtime_metrics_for_trace(), "wheelchair", "stsm")
+            debug, trace_metrics, "wheelchair", "stsm")
         trace["mpc_reference_path_file"] = self.mpc_reference_out
+        if result:
+            trace["execution_status"] = trace_metrics["execution_status"]
+            trace["failure_stage"] = trace_metrics["failure_stage"]
+            trace["stop_reason"] = trace_metrics["stop_reason"]
+            trace["success_goal"] = trace_metrics["success_goal"]
+            trace["success_safe"] = trace_metrics["success_safe"]
+            trace["module_chain_valid"] = int(
+                trace.get("module_chain_valid", 0) and
+                trace_metrics["module_chain_valid"])
+            trace["mpc_executed_trajectory_count"] = trace_metrics[
+                "mpc_executed_trajectory_count"]
+            trace["mpc_rollout_solve_count"] = trace_metrics[
+                "mpc_rollout_solve_count"]
         write_trace(trace, self.decision_trace_out)
         rospy.loginfo("[wc][trace] wrote decision trace %s", self.decision_trace_out)
 

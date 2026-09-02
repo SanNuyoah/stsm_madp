@@ -93,6 +93,7 @@ def init_trace(robot="", variant=""):
         "failure_stage": "",
         "stop_reason": "",
         "success_goal": "",
+        "success_safe": "",
         "topology_fallback_used": 0,
         "planning_failed": 0,
         "steps": {},
@@ -247,6 +248,7 @@ def trace_from_debug(debug, metrics=None, robot="", variant="stsm"):
     trace["failure_stage"] = str(metrics.get("failure_stage") or "")
     trace["stop_reason"] = str(metrics.get("stop_reason") or "")
     trace["success_goal"] = metrics.get("success_goal", "")
+    trace["success_safe"] = metrics.get("success_safe", "")
     if selected_id == "planning_failed":
         trace["planning_failed"] = 1
         if not trace["execution_status"]:
@@ -480,7 +482,8 @@ def finalize_trace(trace):
     topology_fallback = int(_num(trace.get("topology_fallback_used", 0), 0))
     refined_ok = (
         int(_num(trace.get("refined_waypoints_count", 0), 0)) > 0 and
-        trace.get("mpc_reference_source") == "refined_waypoints")
+        trace.get("mpc_reference_source") in (
+            "refined_waypoints", "safe_terminal_rebuild_launch_prefix"))
     trace["module_chain_valid"] = int(
         all(int(trace.get(key, 0)) == 1 for key in required) and
         fallback == 0 and topology_fallback == 0 and refined_ok and
@@ -540,6 +543,7 @@ def flatten_trace(trace):
         "final_path_source", "module_chain_valid",
         "selection_consistent", "refinement_trace_valid", "planning_failed",
         "execution_status", "failure_stage", "stop_reason", "success_goal",
+        "success_safe",
         "topology_fallback_used",
     ]
     return {key: trace.get(key, "") for key in keys}
