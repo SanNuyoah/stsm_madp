@@ -8051,6 +8051,20 @@ class WheelchairNode:
                            "safety_eval_component_profile", {}),
                        "sample_count": int(len(records))}, handle,
                       indent=2, sort_keys=True)
+        progress_records = []
+        for record in records:
+            progress_records.append({
+                key: record.get(key) for key in (
+                    "cycle_id", "state_x", "state_y", "state_yaw",
+                    "reference_global_index", "reference_target_x",
+                    "reference_target_y", "command_v", "command_w",
+                    "candidate_population_audit",
+                    "progress_feasibility_status")})
+        with open(os.path.join(output_dir or ".",
+                               "mpc_progress_audit.json"), "w") as handle:
+            json.dump({"contract": "wheelchair_mpc_progress_audit_v1",
+                       "records": progress_records}, handle,
+                      indent=2, sort_keys=True)
 
     def _write_no_progress_execution_audit(self):
         """Persist execution-chain evidence for post-run no-progress analysis."""
@@ -9149,6 +9163,10 @@ class WheelchairNode:
                 "solve_end_time": float(now_wall),
                 "command_publish_time": None,
                 "solve_wall_s": float(solve_wall_s),
+                "candidate_population_audit": list(mpc_timing.get(
+                    "candidate_population_audit", []) or []),
+                "progress_feasibility_status": str(mpc_timing.get(
+                    "progress_feasibility_status", "")),
                 "state_age_at_solve_start_s": state_age_at_solve,
                 "state_age_at_publish_s": None,
                 "control_interval_s": 0.0,

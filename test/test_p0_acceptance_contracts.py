@@ -1849,6 +1849,8 @@ def test_wheelchair_progress_candidate_audit_contract_is_explicit():
                   "positive_reference_progress", "progress_feasibility_status",
                   "first_step_goal_progress", "first_step_reference_progress"):
         assert field in source
+    node_source = open(os.path.join(ROOT, "nodes", "wheelchair_node.py"), "r").read()
+    assert "mpc_progress_audit.json" in node_source
 
 
 def test_wheelchair_authoritative_result_is_finalized_before_trace_snapshot():
