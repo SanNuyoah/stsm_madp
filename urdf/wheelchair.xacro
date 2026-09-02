@@ -8,6 +8,10 @@
   <xacro:property name="wheel_w" value="0.05"/>
   <xacro:property name="sep" value="0.62"/>
   <xacro:arg name="wheel_mu" default="1.0"/>
+  <!-- Explicit, symmetric velocity-loop authority.  The probe may vary only
+       effort; velocity remains bounded above the 1.333 rad/s test target. -->
+  <xacro:arg name="wheel_effort_limit" default="10.0"/>
+  <xacro:arg name="wheel_velocity_limit" default="4.0"/>
   <!-- Disabled by default: the probe can enable an explicit ODE friction
        direction without changing the production isotropic-contact baseline. -->
   <xacro:arg name="wheel_fdir1_enabled" default="false"/>
@@ -83,6 +87,7 @@
       <child link="${name}"/>
       <origin xyz="0 ${y} ${-base_z/2}"/>
       <axis xyz="0 1 0"/>
+      <limit effort="$(arg wheel_effort_limit)" velocity="$(arg wheel_velocity_limit)"/>
     </joint>
     <transmission name="${name}_trans">
       <type>transmission_interface/SimpleTransmission</type>

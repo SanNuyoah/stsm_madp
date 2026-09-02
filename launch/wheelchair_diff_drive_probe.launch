@@ -6,6 +6,8 @@
   <arg name="duration_s" default="4.0"/>
   <arg name="spawn_z" default="0.05"/>
   <arg name="wheel_mu" default="1.0"/>
+  <arg name="wheel_effort_limit" default="10.0"/>
+  <arg name="wheel_velocity_limit" default="4.0"/>
   <arg name="wheel_fdir1_enabled" default="false"/>
   <arg name="wheel_lateral_slip_enabled" default="false"/>
   <arg name="wheel_lateral_slip" default="0.0"/>
@@ -25,6 +27,8 @@
     <arg name="gui" value="$(arg gui)"/>
     <arg name="spawn_z" value="$(arg spawn_z)"/>
     <arg name="wheel_mu" value="$(arg wheel_mu)"/>
+    <arg name="wheel_effort_limit" value="$(arg wheel_effort_limit)"/>
+    <arg name="wheel_velocity_limit" value="$(arg wheel_velocity_limit)"/>
     <arg name="wheel_fdir1_enabled" value="$(arg wheel_fdir1_enabled)"/>
     <arg name="wheel_lateral_slip_enabled" value="$(arg wheel_lateral_slip_enabled)"/>
     <arg name="wheel_lateral_slip" value="$(arg wheel_lateral_slip)"/>
@@ -43,6 +47,8 @@
     <param name="duration_s" value="$(arg duration_s)"/>
     <param name="spawn_z" value="$(arg spawn_z)"/>
     <param name="wheel_mu" value="$(arg wheel_mu)"/>
+    <param name="wheel_effort_limit" value="$(arg wheel_effort_limit)"/>
+    <param name="wheel_velocity_limit" value="$(arg wheel_velocity_limit)"/>
     <param name="wheel_fdir1_enabled" value="$(arg wheel_fdir1_enabled)"/>
     <param name="wheel_lateral_slip_enabled" value="$(arg wheel_lateral_slip_enabled)"/>
     <param name="wheel_lateral_slip" value="$(arg wheel_lateral_slip)"/>

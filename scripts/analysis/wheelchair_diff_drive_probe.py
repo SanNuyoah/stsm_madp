@@ -370,6 +370,8 @@ def main():
                                   "/tmp/wheelchair_diff_drive_probe.json")
     spawn_z = float(rospy.get_param("~spawn_z", 0.05))
     wheel_mu = float(rospy.get_param("~wheel_mu", 1.0))
+    wheel_effort_limit = float(rospy.get_param("~wheel_effort_limit", 10.0))
+    wheel_velocity_limit = float(rospy.get_param("~wheel_velocity_limit", 4.0))
     wheel_fdir1_enabled = bool(rospy.get_param("~wheel_fdir1_enabled", False))
     wheel_lateral_slip_enabled = bool(rospy.get_param(
         "~wheel_lateral_slip_enabled", False))
@@ -418,6 +420,8 @@ def main():
         "odom_topic": ODOM_TOPIC, "wheel_radius": probe.radius,
         "wheel_separation": probe.separation,
         "probe_spawn_z": spawn_z, "probe_wheel_mu": wheel_mu,
+        "probe_wheel_effort_limit": wheel_effort_limit,
+        "probe_wheel_velocity_limit": wheel_velocity_limit,
         "probe_wheel_fdir1_enabled": wheel_fdir1_enabled,
         "probe_wheel_lateral_slip_enabled": wheel_lateral_slip_enabled,
         "probe_wheel_lateral_slip": wheel_lateral_slip,

@@ -6,6 +6,8 @@
        raised spawn only while it isolates wheel-joint actuation. -->
   <arg name="spawn_z" default="0.05"/>
   <arg name="wheel_mu" default="1.0"/>
+  <arg name="wheel_effort_limit" default="10.0"/>
+  <arg name="wheel_velocity_limit" default="4.0"/>
   <arg name="wheel_fdir1_enabled" default="false"/>
   <arg name="wheel_lateral_slip_enabled" default="false"/>
   <arg name="wheel_lateral_slip" default="0.0"/>
@@ -24,7 +26,7 @@
   </include>
 
   <param name="wheelchair/robot_description"
-         command="$(find xacro)/xacro '$(find stsm_madp)/urdf/wheelchair.xacro' wheel_mu:=$(arg wheel_mu) wheel_fdir1_enabled:=$(arg wheel_fdir1_enabled) wheel_lateral_slip_enabled:=$(arg wheel_lateral_slip_enabled) wheel_lateral_slip:=$(arg wheel_lateral_slip) wheel_contact_stiffness_enabled:=$(arg wheel_contact_stiffness_enabled) wheel_contact_kp:=$(arg wheel_contact_kp) wheel_contact_kd:=$(arg wheel_contact_kd) wheel_contact_min_depth_enabled:=$(arg wheel_contact_min_depth_enabled) wheel_contact_min_depth:=$(arg wheel_contact_min_depth) wheel_contact_max_vel_enabled:=$(arg wheel_contact_max_vel_enabled) wheel_contact_max_vel:=$(arg wheel_contact_max_vel)"/>
+         command="$(find xacro)/xacro '$(find stsm_madp)/urdf/wheelchair.xacro' wheel_mu:=$(arg wheel_mu) wheel_effort_limit:=$(arg wheel_effort_limit) wheel_velocity_limit:=$(arg wheel_velocity_limit) wheel_fdir1_enabled:=$(arg wheel_fdir1_enabled) wheel_lateral_slip_enabled:=$(arg wheel_lateral_slip_enabled) wheel_lateral_slip:=$(arg wheel_lateral_slip) wheel_contact_stiffness_enabled:=$(arg wheel_contact_stiffness_enabled) wheel_contact_kp:=$(arg wheel_contact_kp) wheel_contact_kd:=$(arg wheel_contact_kd) wheel_contact_min_depth_enabled:=$(arg wheel_contact_min_depth_enabled) wheel_contact_min_depth:=$(arg wheel_contact_min_depth) wheel_contact_max_vel_enabled:=$(arg wheel_contact_max_vel_enabled) wheel_contact_max_vel:=$(arg wheel_contact_max_vel)"/>
 
   <node name="wc_spawner" pkg="gazebo_ros" type="spawn_model" respawn="false"
         output="screen"
