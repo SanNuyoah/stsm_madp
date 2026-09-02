@@ -683,6 +683,14 @@ def sync_derived_reports(run_dir, robot, selected, diag, ref_count):
     validation = runtime_validation_fields(
         diag, metrics=metrics if isinstance(metrics, dict) else {},
         selected=selected, ref_count=ref_count)
+    execution_status = "success" if bool(validation["overall_success"]) else "failed"
+    failure_reason = str(first_value(
+        metrics.get("failure_reason"), validation.get("failure_reason"),
+        "" if execution_status == "success" else "unknown"))
+    failure_stage = str(first_value(
+        metrics.get("failure_stage"), "none" if execution_status == "success" else "execution"))
+    stop_reason = str(first_value(
+        metrics.get("stop_reason"), failure_reason if execution_status != "success" else "none"))
     if isinstance(metrics, dict) and metrics:
         metrics.update({
             "target": robot,
@@ -854,6 +862,33 @@ def sync_derived_reports(run_dir, robot, selected, diag, ref_count):
         "mpc_used": bool(diag.get("mpc_used", False) or ref_count > 0),
         "success": bool(validation["overall_success"]),
     })
+    # Keep the lightweight status/trace artifacts aligned with the same
+    # validation truth used for metrics and mpc_validation.
+    status_path = os.path.join(run_dir, "simulation_status.json")
+    status = load_json(status_path)
+    status.update({
+        "success": bool(validation["overall_success"]),
+        "overall_success": bool(validation["overall_success"]),
+        "planner_success": bool(validation["planner_success"]),
+        "controller_success": bool(validation["controller_success"]),
+        "safety_success": bool(validation["safety_success"]),
+    })
+    write_json(status_path, status)
+    trace_path = os.path.join(run_dir, "decision_trace.json")
+    trace = load_json(trace_path)
+    trace.update({
+        "success": bool(validation["overall_success"]),
+        "overall_success": bool(validation["overall_success"]),
+        "planner_success": bool(validation["planner_success"]),
+        "controller_success": bool(validation["controller_success"]),
+        "safety_success": bool(validation["safety_success"]),
+        "task_success": bool(validation["task_success"]),
+        "execution_status": execution_status,
+        "failure_stage": failure_stage,
+        "failure_reason": failure_reason,
+        "stop_reason": stop_reason,
+    })
+    write_json(trace_path, trace)
 
 
 def write_consistency_report(run_root):
