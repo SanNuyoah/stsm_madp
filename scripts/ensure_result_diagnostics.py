@@ -749,12 +749,12 @@ def sync_derived_reports(run_dir, robot, selected, diag, ref_count):
         "failure_stage": failure_stage,
         "failure_reason": failure_reason,
         "stop_reason": stop_reason,
-        "success_goal": int(bool(metrics.get("success_goal", success))),
-        "success_safe": int(bool(metrics.get("success_safe", success))),
+        "success_goal": int(truthy(metrics.get("success_goal", success))),
+        "success_safe": int(truthy(metrics.get("success_safe", success))),
         "task_success": bool(validation["task_success"]),
         "controller_success": bool(validation["controller_success"]),
         "safety_success": bool(validation["safety_success"]),
-        "module_chain_valid": int(bool(metrics.get("module_chain_valid", success))),
+        "module_chain_valid": int(truthy(metrics.get("module_chain_valid", success))),
     })
     write_json(os.path.join(run_dir, "simulation_check_report.json"), {
         "robot": robot,

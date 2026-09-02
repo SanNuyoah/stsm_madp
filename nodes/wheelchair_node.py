@@ -7463,9 +7463,13 @@ class WheelchairNode:
             trace_metrics.update({
                 "execution_status": "success" if succeeded else "failed",
                 "failure_stage": "none" if succeeded else str(
-                    result.get("failed_constraint_type", "unknown") or "unknown"),
+                    result.get("failure_stage", "") or
+                    ("execution" if self.stop_triggered else
+                     result.get("failed_constraint_type", "unknown")) or
+                    "unknown"),
                 "stop_reason": "none" if succeeded else str(
-                    result.get("failure_reason", "unknown") or "unknown"),
+                    result.get("failure_reason", "") or self.stop_reason or
+                    "unknown"),
                 "success_goal": int(bool(result.get("task_success", False))),
                 "success_safe": int(bool(result.get("safety_success", False))),
                 "controller_success": int(bool(result.get("controller_success", succeeded))),

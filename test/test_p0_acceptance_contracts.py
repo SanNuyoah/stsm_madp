@@ -1857,6 +1857,7 @@ def test_simulation_status_carries_canonical_execution_fields():
                   '"controller_success"', '"safety_success"',
                   '"module_chain_valid"'):
         assert field in source
+    assert 'truthy(metrics.get("success_goal"' in source
 
 
 def test_wheelchair_final_gate_reference_contract_is_immutable_and_auditable():
