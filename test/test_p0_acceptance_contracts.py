@@ -1853,6 +1853,19 @@ def test_wheelchair_progress_candidate_audit_contract_is_explicit():
     assert "mpc_progress_audit.json" in node_source
 
 
+def test_wheelchair_contract_profile_has_subcomponents_and_reconciliation():
+    source = open(os.path.join(ROOT, "nodes", "wheelchair_node.py"), "r").read()
+    evaluator = open(os.path.join(ROOT, "src", "stsm_madp", "safety_evaluator.py"), "r").read()
+    for field in ("contract_context_access", "contract_interest_transform",
+                  "contract_phi_query", "contract_human_risk",
+                  "contract_anchor_risk", "contract_manifold_membership",
+                  "contract_threshold", "contract_object_build", "contract_misc"):
+        assert field in evaluator and field in source
+    for field in ("contract_total_s", "contract_subcomponent_sum_s",
+                  "unaccounted_ratio", "percentage_of_contract"):
+        assert field in source
+
+
 def test_wheelchair_authoritative_result_is_finalized_before_trace_snapshot():
     source = open(os.path.join(ROOT, "nodes", "wheelchair_node.py"), "r").read()
     finalize = source.index('result["overall_success"] = bool(')

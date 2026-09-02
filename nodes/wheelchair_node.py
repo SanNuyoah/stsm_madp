@@ -8049,6 +8049,8 @@ class WheelchairNode:
             json.dump({"contract": "wheelchair_safety_eval_component_profile_v1",
                        "profile": summary["solve_phase_profile"].get(
                            "safety_eval_component_profile", {}),
+                       "contract_profile": summary["solve_phase_profile"].get(
+                           "safety_eval_contract_profile", {}),
                        "sample_count": int(len(records))}, handle,
                       indent=2, sort_keys=True)
         progress_records = []
@@ -8686,7 +8688,11 @@ class WheelchairNode:
         profile_names = (
             "context_lookup", "interest_transform", "human_risk",
             "anchor_risk", "risk_field", "manifold_clearance",
-            "corridor_clearance", "contract", "miss_total")
+            "corridor_clearance", "contract", "miss_total",
+            "contract_context_access", "contract_interest_transform",
+            "contract_phi_query", "contract_human_risk",
+            "contract_anchor_risk", "contract_manifold_membership",
+            "contract_threshold", "contract_object_build", "contract_misc")
         profile = {}
         miss_values = [float(item.get("cache_miss_count", 0.0))
                        for item in samples]
@@ -8704,6 +8710,32 @@ class WheelchairNode:
                 "max_s": float(max(values)) if values else 0.0,
             }
         summary["safety_eval_component_profile"] = profile
+        contract_total = profile.get("contract_s", {}).get("total_s", 0.0)
+        contract_names = (
+            "contract_context_access", "contract_interest_transform",
+            "contract_phi_query", "contract_human_risk",
+            "contract_anchor_risk", "contract_manifold_membership",
+            "contract_threshold", "contract_object_build", "contract_misc")
+        contract_components = {
+            name: profile.get(name + "_s", {
+                "count": 0, "total_s": 0.0, "mean_s": 0.0,
+                "p50_s": 0.0, "p95_s": 0.0, "max_s": 0.0})
+            for name in contract_names}
+        component_sum = float(sum(item.get("total_s", 0.0)
+                                  for item in contract_components.values()))
+        for item in contract_components.values():
+            item["percentage_of_contract"] = float(
+                100.0 * item.get("total_s", 0.0) / contract_total
+                if contract_total > 1e-12 else 0.0)
+        summary["safety_eval_contract_profile"] = {
+            "contract_total_s": float(contract_total),
+            "contract_subcomponent_sum_s": component_sum,
+            "unaccounted_s": float(contract_total - component_sum),
+            "unaccounted_ratio": float(
+                max(0.0, contract_total - component_sum) / contract_total
+                if contract_total > 1e-12 else 0.0),
+            "components": contract_components,
+        }
         return summary
 
     def _publish_zero_command(self):

@@ -214,7 +214,11 @@ class SafetyEvaluator(object):
         return {name: {"count": 0, "total_s": 0.0} for name in (
             "context_lookup", "interest_transform", "human_risk",
             "anchor_risk", "risk_field", "manifold_clearance",
-            "corridor_clearance", "contract")}
+            "corridor_clearance", "contract", "contract_context_access",
+            "contract_interest_transform", "contract_phi_query",
+            "contract_human_risk", "contract_anchor_risk",
+            "contract_manifold_membership", "contract_threshold",
+            "contract_object_build", "contract_misc")}
 
     def reset_profile(self):
         self._profile = self._new_profile()
@@ -423,7 +427,13 @@ class SafetyEvaluator(object):
             corridor=(float(distance), bool(valid)), clearance=float(clearance))
                 for point, risk, distance, valid, clearance in zip(
                     points, risks, distances, inside, clearances)]
-        self._profile_add("contract", _perf_counter() - contract_t0,
+        contract_elapsed = _perf_counter() - contract_t0
+        self._profile_add("contract", contract_elapsed, context_count)
+        # The current evaluator's per-state contract work is object/result
+        # construction after batched field queries.  Keep the remaining
+        # buckets explicit (zero until a future split identifies work there)
+        # so the component sum is auditable without changing verdicts.
+        self._profile_add("contract_object_build", contract_elapsed,
                           context_count)
         self._profile_add("context_lookup", 0.0, context_count)
         return result
