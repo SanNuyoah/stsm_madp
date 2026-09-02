@@ -5179,6 +5179,7 @@ class WheelchairMPC:
                         item["total_s"])
                 timing["safety_profile_miss_total_s"] = float(sum(
                     item["total_s"] for item in profile.values()))
+                timing["fast_core_profile"] = manifold_evaluator.fast_profile_snapshot()
             self.last_timing = dict(timing)
 
         has_adp_terminal = (

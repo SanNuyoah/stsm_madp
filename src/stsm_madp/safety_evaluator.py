@@ -208,6 +208,12 @@ class SafetyEvaluator(object):
             planning_clearance_margin or
             self.manifold_constraint.get("planning_clearance_margin", 0.0) or 0.0)
         self._profile = self._new_profile()
+        self._fast_profile = {"fast_core_total_s": 0.0,
+                              "fast_core_risk_field_s": 0.0,
+                              "fast_core_corridor_query_s": 0.0,
+                              "fast_core_manifold_s": 0.0,
+                              "fast_core_pack_s": 0.0,
+                              "profiled_calls": 0}
 
     @staticmethod
     def _new_profile():
@@ -222,6 +228,11 @@ class SafetyEvaluator(object):
 
     def reset_profile(self):
         self._profile = self._new_profile()
+        for key in self._fast_profile:
+            self._fast_profile[key] = 0.0
+
+    def fast_profile_snapshot(self):
+        return dict(self._fast_profile)
 
     def profile_snapshot(self):
         return {key: {"count": int(value["count"]),
@@ -437,19 +448,31 @@ class SafetyEvaluator(object):
 
     def evaluate_fast_states(self, states):
         """Batch fast path retaining only fields consumed by MPC rollout."""
+        total_t0 = _perf_counter()
         points = _as_points(states)
         if len(points) == 0:
             return []
+        phase_t0 = _perf_counter()
         risks = (np.asarray(self.risk_field.phi_s_batch(points), float)
                  if self.risk_field is not None and
                  hasattr(self.risk_field, "phi_s_batch") else [None] * len(points))
+        self._fast_profile["fast_core_risk_field_s"] += _perf_counter() - phase_t0
+        phase_t0 = _perf_counter()
         distances, inside = self._corridor_distances_batch(points)
+        self._fast_profile["fast_core_corridor_query_s"] += _perf_counter() - phase_t0
+        phase_t0 = _perf_counter()
         clearances = self._boundary_distances_batch(points)
-        return [self.evaluate_fast(point, risk=risk,
+        self._fast_profile["fast_core_manifold_s"] += _perf_counter() - phase_t0
+        phase_t0 = _perf_counter()
+        result = [self.evaluate_fast(point, risk=risk,
                                    corridor=(float(distance), bool(valid)),
                                    clearance=float(clearance))
                 for point, risk, distance, valid, clearance in zip(
                     points, risks, distances, inside, clearances)]
+        self._fast_profile["fast_core_pack_s"] += _perf_counter() - phase_t0
+        self._fast_profile["fast_core_total_s"] += _perf_counter() - total_t0
+        self._fast_profile["profiled_calls"] += len(points)
+        return result
 
     def evaluate_states(self, states):
         """Batch risk and corridor queries, retaining per-state safety checks."""
