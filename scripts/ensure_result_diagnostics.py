@@ -861,6 +861,12 @@ def sync_derived_reports(run_dir, robot, selected, diag, ref_count):
         "mpc_status": mpc_status,
         "mpc_used": bool(diag.get("mpc_used", False) or ref_count > 0),
         "success": bool(validation["overall_success"]),
+        "execution_status": execution_status,
+        "failure_stage": failure_stage,
+        "stop_reason": stop_reason,
+        "success_goal": int(truthy(metrics.get("success_goal", validation["task_success"]))),
+        "success_safe": int(truthy(metrics.get("success_safe", validation["safety_success"]))),
+        "module_chain_valid": int(truthy(metrics.get("module_chain_valid", validation["overall_success"]))),
     })
     # Keep the lightweight status/trace artifacts aligned with the same
     # validation truth used for metrics and mpc_validation.
