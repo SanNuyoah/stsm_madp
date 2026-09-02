@@ -31,6 +31,7 @@ from stsm_madp.mpc import build_mpc_constraint_inputs
 from stsm_madp.mpc import audit_reference_safety
 from stsm_madp.mpc import _phase_constraint_diagnostics_payload
 from stsm_madp.mpc import _task_state_diagnostics_payload
+from stsm_madp.mpc import _apply_success_contract
 from stsm_madp.mpc import evaluate_executed_trajectory
 from stsm_madp.mpc import (
     wheelchair_nonholonomic_execution_profile, wheelchair_sharp_turn_audit)
@@ -841,6 +842,59 @@ def test_persistent_override_triggers_replan():
 
     assert fields["controller_success"] is False
     assert fields["overall_success"] is False
+
+
+def test_complete_safe_execution_evidence_overrides_only_formal_replay_status():
+    result = _apply_success_contract({
+        "manifold_constraint_mode": "soft",
+        "mpc_feasibility_status": "manifold_infeasible",
+        "failure_reason": "persistent_manifold_violation",
+        "mpc_failure_reason": "persistent_manifold_violation",
+        "failed_constraint_type": "manifold",
+        "replan_required": True,
+        "consecutive_manifold_override_max": 17,
+        "override_replan_limit": 4,
+        "executed_evidence_required": True,
+        "actual_executed_trajectory_count": 8,
+        "executed_controller_accepted": True,
+        "executed_consecutive_manifold_override_max": 0,
+        "executed_manifold_violation_count": 0,
+        "executed_corridor_violation_count": 0,
+        "executed_major_violation_count": 0,
+        "executed_max_manifold_violation": 0.0,
+        "rolling_goal_reached": True,
+    }, {"feasible": True})
+
+    assert result["formal_prediction_mpc_feasibility_status"] == "manifold_infeasible"
+    assert result["formal_prediction_failure_reason"] == "persistent_manifold_violation"
+    assert result["controller_truth_source"] == "executed"
+    assert result["controller_success"] is True
+    assert result["safety_success"] is True
+    assert result["mpc_feasibility_status"] == "feasible"
+    assert result["overall_success"] is True
+
+
+def test_safe_execution_evidence_never_overrides_a_live_safe_stop():
+    result = _apply_success_contract({
+        "manifold_constraint_mode": "soft",
+        "mpc_feasibility_status": "manifold_infeasible",
+        "failure_reason": "persistent_manifold_violation",
+        "consecutive_manifold_override_max": 17,
+        "override_replan_limit": 4,
+        "executed_evidence_required": True,
+        "actual_executed_trajectory_count": 8,
+        "executed_controller_accepted": False,
+        "executed_consecutive_manifold_override_max": 0,
+        "executed_manifold_violation_count": 0,
+        "executed_corridor_violation_count": 0,
+        "executed_major_violation_count": 0,
+        "executed_max_manifold_violation": 0.0,
+        "rolling_goal_reached": True,
+    }, {"feasible": True})
+
+    assert result["controller_success"] is False
+    assert result["mpc_feasibility_status"] == "manifold_infeasible"
+    assert result["overall_success"] is False
 
 
 def test_reference_source_defaults_to_selected_candidate_when_not_refined():

@@ -7040,6 +7040,11 @@ class WheelchairNode:
                 "executed_phase_sequence": [
                     row["phase"] for row in self.mpc_executed_records],
                 "executed_evidence_required": True,
+                "executed_controller_accepted": bool(
+                    self.mpc_runtime_records and all(
+                        not str(row.get("solver_status", "")).startswith(
+                            "safe_stop:")
+                        for row in self.mpc_runtime_records)),
             })
         fixed_point = (np.asarray(final_trajectory[-1], float)
                        if len(final_trajectory) else np.zeros(3, float))

@@ -1721,7 +1721,7 @@ def _apply_success_contract(result, reference_audit=None):
     override_limit = int(result.get("override_replan_limit", 4) or 4)
     consecutive_override = int(
         result.get("consecutive_manifold_override_max", 0) or 0)
-    controller_success = bool(
+    predicted_controller_success = bool(
         mpc_status in (
             "feasible", "feasible_with_soft_violation",
             "feasible_with_soft_violations") and
@@ -1729,6 +1729,12 @@ def _apply_success_contract(result, reference_audit=None):
     executed_required = bool(result.get("executed_evidence_required", False))
     executed_count = int(result.get("actual_executed_trajectory_count", 0) or 0)
     use_executed = bool(executed_count > 0)
+    executed_consecutive_override = int(result.get(
+        "executed_consecutive_manifold_override_max", 0) or 0)
+    executed_controller_accepted = bool(result.get(
+        "executed_controller_accepted", False))
+    execution_evidence_authoritative = bool(
+        executed_required and use_executed)
     prefix = "executed_" if use_executed else ""
     manifold_v = int(result.get(
         prefix + "manifold_violation_count",
@@ -1760,11 +1766,42 @@ def _apply_success_contract(result, reference_audit=None):
             corridor_v == 0 and major_v == 0 and
             max_soft <= soft_tol + 1e-9 and
             soft_ratio <= soft_ratio_limit + 1e-9 and
-            consecutive_override < override_limit)
+            (executed_consecutive_override if use_executed else
+             consecutive_override) < override_limit)
+    # The formal rolling replay audits the reference, but cannot replace a
+    # complete measured execution trace.  Preserve a replay discrepancy for
+    # diagnostics while deriving the final controller contract from the live
+    # solver evidence and its evaluated execution trajectory.
+    if execution_evidence_authoritative:
+        controller_success = bool(
+            executed_controller_accepted and
+            executed_consecutive_override < override_limit)
+    else:
+        controller_success = bool(predicted_controller_success)
     task_success = bool(result.get("rolling_goal_reached", True))
     overall_success = bool(
         task_success and planner_success and controller_success and
         safety_success)
+    if execution_evidence_authoritative:
+        result["formal_prediction_mpc_feasibility_status"] = mpc_status
+        result["formal_prediction_failure_reason"] = str(
+            result.get("failure_reason", "") or "")
+        result["formal_prediction_controller_success"] = bool(
+            predicted_controller_success)
+        if controller_success and safety_success and planner_success:
+            result["mpc_feasibility_status"] = "feasible"
+            result["mpc_failure_reason"] = ""
+            result["failed_constraint_type"] = ""
+            result["replan_required"] = False
+            feedback = dict(result.get("mpc_feedback", {}) or {})
+            feedback.update({
+                "replan_required": False,
+                "failure_type": "",
+                "failed_constraint": "",
+                "failure_reason": "",
+                "failed_constraint_type": "",
+            })
+            result["mpc_feedback"] = feedback
     result.update({
         "task_success": bool(task_success),
         "planner_success": bool(planner_success),
@@ -1775,6 +1812,10 @@ def _apply_success_contract(result, reference_audit=None):
         "soft_violation_ratio": float(soft_ratio),
         "soft_violation_ratio_limit": float(soft_ratio_limit),
         "safety_truth_source": "executed" if use_executed else "predicted",
+        "controller_truth_source": (
+            "executed" if execution_evidence_authoritative else "predicted"),
+        "execution_evidence_authoritative": bool(
+            execution_evidence_authoritative),
         "executed_evidence_complete": bool(
             use_executed or not executed_required),
     })
@@ -2396,6 +2437,8 @@ def run_mpc_tracking(robot_type, current_state, reference_path,
     feedback.setdefault("failed_constraint", result.get("failed_constraint_type", ""))
     result["mpc_feedback"] = feedback
     measured = cfg.get("executed_trajectory", [])
+    result["executed_controller_accepted"] = bool(
+        cfg.get("executed_controller_accepted", False))
     if _as_optional_points(measured).size:
         executed_rows, executed_summary = evaluate_executed_trajectory(
             measured, context, social_field=social_field, robot_type=robot,
