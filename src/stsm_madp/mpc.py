@@ -5105,8 +5105,13 @@ class WheelchairMPC:
         solve_t0 = time.time()
         timing = {
             "t_reference_s": 0.0,
+            "t_candidate_generation_s": 0.0,
+            "t_rollout_dynamics_s": 0.0,
             "t_rollout_s": 0.0,
             "t_safety_eval_s": 0.0,
+            "t_cost_s": 0.0,
+            "t_selection_s": 0.0,
+            "t_diag_s": 0.0,
             "t_search_s": 0.0,
             "t_post_s": 0.0,
             # These counters are solve-local by construction.  A dynamic
@@ -5213,6 +5218,7 @@ class WheelchairMPC:
                     x, local_ref if len(local_ref) else ref, field, previous)
                 local_goal_u = self._goal_seek_u(x, goal)
                 step_candidates = []
+                candidate_t0 = time.time()
                 for u in self._sequence_step_controls(
                         previous, warm_u=warm, goal_u=local_goal_u):
                     if (abs(float(u[0] - previous[0])) >
@@ -5229,10 +5235,15 @@ class WheelchairMPC:
                             float(u[0]) + 1e-9 < min_alignment_first_v):
                         violation_counts["insufficient_progress"] += 1
                         continue
+                    dynamics_t0 = time.time()
                     x_next = self._step(x, u)
+                    timing["t_rollout_dynamics_s"] += max(
+                        0.0, time.time() - dynamics_t0)
                     state_key = tuple(float(value) for value in x_next[:3])
                     position_key = state_key[:2]
                     step_candidates.append((u, x_next, state_key, position_key))
+                timing["t_candidate_generation_s"] += max(
+                    0.0, time.time() - candidate_t0)
 
                 # Each sibling rollout has the same safety definition.  Batch
                 # its field queries before performing the unchanged hard/soft
@@ -5285,6 +5296,7 @@ class WheelchairMPC:
                     0.0, time.time() - batch_safety_t0)
 
                 for u, x_next, state_key, position_key in step_candidates:
+                    cost_t0 = time.time()
                     parts = dict(item["parts"])
                     hard_violation = False
                     step_soft_cost = 0.0
@@ -5378,6 +5390,7 @@ class WheelchairMPC:
                         "states": item["states"] + [x_next.copy()],
                         "parts": parts,
                     })
+                    timing["t_cost_s"] += max(0.0, time.time() - cost_t0)
             if not expanded:
                 timing["t_rollout_s"] += max(0.0, time.time() - rollout_t0)
                 self.last_solver_status = "safe_stop: no_feasible_sequence"
@@ -5387,7 +5400,9 @@ class WheelchairMPC:
             search_t0 = time.time()
             expanded.sort(key=lambda value: value["cost"])
             beam = expanded[:self.beam_width]
-            timing["t_search_s"] += max(0.0, time.time() - search_t0)
+            selection_elapsed = max(0.0, time.time() - search_t0)
+            timing["t_search_s"] += selection_elapsed
+            timing["t_selection_s"] += selection_elapsed
 
         timing["t_rollout_s"] += max(0.0, time.time() - rollout_t0)
 

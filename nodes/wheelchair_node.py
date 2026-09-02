@@ -271,6 +271,9 @@ class WheelchairNode:
         # synchronous runtime replan.  Keep that event for diagnostics only;
         # it must never affect command generation or recovery decisions.
         self._runtime_replan_timing_since_last_command = None
+        self.reference_version_counter = 0
+        self.reference_version_audit = []
+        self.reference_manifold_failure_audit = {}
         self.stop_triggered = False
         self.stop_reason = ""
         self.task_completed = False
@@ -2596,6 +2599,42 @@ class WheelchairNode:
             task_context=self.task_context,
             source="WheelchairNode.authoritative_safety_context", strict=True), constraint
 
+    def _freeze_final_reference_contract(self, corridor, reference,
+                                         safety_context, constraint):
+        """Bind one Final-Gate-passed reference to an immutable safety world."""
+        field_snapshot = copy.deepcopy(safety_context.get("social_field"))
+        task_snapshot = dict(safety_context.get("task_context", {}) or {})
+        if field_snapshot is not None and hasattr(field_snapshot, "set_task_context"):
+            field_snapshot.set_task_context(task_snapshot)
+        frozen_constraint = copy.deepcopy(dict(constraint or {}))
+        frozen_context = build_safety_context(
+            social_field=field_snapshot,
+            manifold_constraint=dict(frozen_constraint.get(
+                "manifold_constraint", {}) or {}),
+            task_context=task_snapshot,
+            source="WheelchairNode.final_gate_reference_snapshot", strict=True)
+        self.reference_version_counter += 1
+        version = int(self.reference_version_counter)
+        points = self._as_corridor_points(reference)
+        corridor.final_gate_safety_context = frozen_context
+        corridor.final_gate_safety_constraint = frozen_constraint
+        corridor.reference_version = version
+        corridor.reference_generation_id = "wheelchair_ref_%04d" % version
+        corridor.final_gate_reference = np.asarray(points, float).copy()
+        self.reference_version_audit.append({
+            "reference_version": version,
+            "reference_generation_id": str(corridor.reference_generation_id),
+            "final_gate_timestamp_wall_s": float(time.time()),
+            "planning_state_pose": [float(value) for value in self.state[:3]],
+            "safety_context_fingerprint": str(frozen_context.get(
+                "fingerprint", "")),
+            "point_count": int(len(points)),
+            "terminal_point": (
+                [float(value) for value in points[-1]] if len(points) else []),
+            "source_corridor_id": self._corridor_id(corridor, ""),
+        })
+        return frozen_context, frozen_constraint
+
     def _final_reference_safety_status(self, corridor, reference,
                                        safety_context, constraint):
         """Fail closed before a geometry-modified reference reaches MPC."""
@@ -4145,10 +4184,10 @@ class WheelchairNode:
                     getattr(corr, "corridor_id", getattr(corr, "label", "")),
                     refined_max_turn, executable_turn_limit,
                     executable_turn_tolerance)
-            _unused_context, final_constraint = self._authoritative_safety_context(
-                corr, reference=refined)
+            final_gate_context, final_constraint = (
+                self._authoritative_safety_context(corr, reference=refined))
             final_safety = self._final_reference_safety_status(
-                corr, refined, safety_context, final_constraint)
+                corr, refined, final_gate_context, final_constraint)
             attempt["final_reference_safety"] = dict(final_safety)
             if not bool(final_safety.get("final_reference_valid", False)):
                 corr.reject_reason = str(final_safety.get(
@@ -4162,6 +4201,13 @@ class WheelchairNode:
                     corr.reject_reason,
                     str(final_safety.get("first_hard_invalid_index")))
                 continue
+            frozen_context, frozen_constraint = (
+                self._freeze_final_reference_contract(
+                    corr, refined, final_gate_context, final_constraint))
+            attempt["final_gate_reference_version"] = int(getattr(
+                corr, "reference_version", 0))
+            attempt["final_gate_safety_context_fingerprint"] = str(
+                frozen_context.get("fingerprint", ""))
             attempt["accepted"] = True
             attempt["reject_reason"] = ""
             attempt["execution_curvature_limit"] = float(
@@ -4194,7 +4240,7 @@ class WheelchairNode:
             refinement_output["diff_drive_reference_source"] = str(metrics.get(
                 "diff_drive_reference_source", reference_source))
             refinement_output["planning_safety_context_fingerprint"] = str(
-                safety_context.get("fingerprint", ""))
+                frozen_context.get("fingerprint", ""))
             refinement_output["refinement_safety_context_fingerprint"] = str(
                 metrics.get("refinement_safety_context_fingerprint", ""))
             refinement_output["final_reference_safety"] = dict(final_safety)
@@ -6695,6 +6741,118 @@ class WheelchairNode:
         write_failed_topology_diagnostics(
             base, "wheelchair", debug, failure_reason=failure_reason)
 
+    def _write_reference_contract_audits(self, output_dir, result, corridor,
+                                         reference_rows, final_trajectory,
+                                         formal_safety_context,
+                                         authoritative_constraint):
+        """Write immutable-reference and first-failure evidence once per run."""
+        version_payload = {
+            "reference_versions": list(self.reference_version_audit),
+            "selected_reference_version": int(getattr(
+                corridor, "reference_version", 0) or 0),
+            "selected_reference_generation_id": str(getattr(
+                corridor, "reference_generation_id", "") or ""),
+            "selected_safety_context_fingerprint": str(
+                formal_safety_context.get("fingerprint", "")),
+        }
+        with open(os.path.join(output_dir, "reference_version_audit.json"), "w") as handle:
+            json.dump(version_payload, handle, indent=2, sort_keys=True)
+        with open(os.path.join(output_dir, "mpc_reference_lineage.json"), "w") as handle:
+            json.dump({
+                "reference_version": version_payload["selected_reference_version"],
+                "records": list(reference_rows),
+            }, handle, indent=2, sort_keys=True)
+
+        reference_audit = dict(result.get("reference_safety_audit", {}) or {})
+        violation = next((row for row in reference_audit.get("records", [])
+                          if bool(row.get("violation", False))), None)
+        payload = {
+            "contract": "wheelchair_reference_manifold_first_failure_v1",
+            "triggered": bool(violation is not None),
+            "failure_status": str(result.get("mpc_feasibility_status", "")),
+            "reference_version": int(getattr(corridor, "reference_version", 0) or 0),
+            "planning_safety_context_fingerprint": str(
+                formal_safety_context.get("fingerprint", "")),
+        }
+        if violation is not None:
+            index = int(violation.get("index", -1))
+            row = (reference_rows[index] if 0 <= index < len(reference_rows)
+                   else {})
+            point = np.asarray([
+                row.get("x", 0.0), row.get("y", 0.0), row.get("z", 0.0)], float)
+            live_context, live_constraint = self._authoritative_safety_context(
+                corridor, reference=final_trajectory)
+            planning_point = safety_context_audit(
+                point,
+                formal_safety_context.get("manifold_constraint", {}),
+                authoritative_constraint.get("corridor_constraint", {}),
+                formal_safety_context.get("social_field"),
+                stage="planning_final_gate_reference_snapshot",
+                task_context_source="final_gate_snapshot")
+            runtime_point = safety_context_audit(
+                point,
+                live_context.get("manifold_constraint", {}),
+                live_constraint.get("corridor_constraint", {}),
+                live_context.get("social_field"), stage="runtime_live_context",
+                task_context_source="runtime_task_context")
+            last = dict(self.mpc_runtime_records[-1]) if self.mpc_runtime_records else {}
+            state = np.asarray([
+                last.get("state_x", self.state[0] if self.state is not None else 0.0),
+                last.get("state_y", self.state[1] if self.state is not None else 0.0),
+                last.get("state_yaw", self.state[2] if self.state is not None else 0.0)], float)
+            tracking_error = float(np.linalg.norm(state[:2] - point[:2]))
+            heading = float(np.arctan2(point[1] - state[1], point[0] - state[0]))
+            heading_error = float(np.arctan2(
+                np.sin(heading - state[2]), np.cos(heading - state[2])))
+            context_mismatch = str(planning_point.get(
+                "safety_context_fingerprint", "")) != str(runtime_point.get(
+                "safety_context_fingerprint", ""))
+            if context_mismatch:
+                failure_class = "A_safety_context_drift"
+            elif bool(row.get("final_approach_generated", False)):
+                failure_class = "B_interpolated_or_generated_reference_point"
+            elif bool(self.task_completed):
+                failure_class = "D_goal_termination_order"
+            else:
+                failure_class = "C_tracking_or_projection"
+            payload.update({
+                "first_failure_cycle": int(row.get("solve_index", -1)),
+                "violating_horizon_index": int(row.get("horizon_point_index", -1)),
+                "point": [float(point[0]), float(point[1]), float(point[2])],
+                "source_global_idx": int(row.get("global_reference_index", -1)),
+                "source_segment": [int(row.get("original_refined_index", -1)),
+                                   int(row.get("original_refined_index", -1))],
+                "interpolation_alpha": None,
+                "was_interpolated": bool(
+                    row.get("reference_point_source", "") ==
+                    "refined_corridor_interpolation"),
+                "mapped_planning_reference_idx": int(row.get(
+                    "original_refined_index", -1)),
+                "runtime_clearance": float(runtime_point.get("clearance", 0.0)),
+                "runtime_risk": float(runtime_point.get("risk", 0.0)),
+                "runtime_manifold_valid": bool(runtime_point.get("manifold_valid", False)),
+                "planning_clearance": float(planning_point.get("clearance", 0.0)),
+                "planning_risk": float(planning_point.get("risk", 0.0)),
+                "planning_manifold_valid": bool(planning_point.get("manifold_valid", False)),
+                "runtime_safety_context_fingerprint": str(runtime_point.get(
+                    "safety_context_fingerprint", "")),
+                "tracking_error_xy": tracking_error,
+                "heading_error": heading_error,
+                "projection_global_idx": int(row.get("reference_nearest_index", -1)),
+                "reference_index_delta": int(row.get("reference_progress_index", -1)) -
+                int(row.get("reference_nearest_index", -1)),
+                "reference_progress_last_5_cycles": [int(item.get(
+                    "reference_index", -1)) for item in self.mpc_runtime_records[-5:]],
+                "robot_progress_last_5_cycles": [float(item.get(
+                    "reference_horizon_goal_progress", 0.0))
+                    for item in self.mpc_runtime_records[-5:]],
+                "failure_class": failure_class,
+            })
+        self.reference_manifold_failure_audit = dict(payload)
+        with open(os.path.join(output_dir,
+                               "reference_manifold_failure_audit.json"), "w") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+
     def _write_mpc_diagnostics(self):
         if self.baseline:
             return
@@ -6795,12 +6953,21 @@ class WheelchairNode:
                 manifold_constraint_mode=self.manifold_constraint_mode,
                 strict_stsm=bool(not self.baseline),
                 expected_corridor_id=cid))
-        # Reuse the exact authoritative Final-Gate context/constraint.  The
-        # formal diagnostics pass must not silently rebuild a second manifold
-        # from the flattened rolling-reference points.
-        formal_safety_context, authoritative_constraint = (
-            self._authoritative_safety_context(corridor,
-                                                reference=final_trajectory))
+        # Formal validation is tied to the immutable context/reference that
+        # passed the Final Gate.  Runtime task-state updates may legitimately
+        # retune the live social field, but must never retroactively change
+        # the safety truth of this already accepted execution reference.
+        formal_safety_context = dict(getattr(
+            corridor, "final_gate_safety_context", {}) or {})
+        authoritative_constraint = copy.deepcopy(dict(getattr(
+            corridor, "final_gate_safety_constraint", {}) or {}))
+        if not formal_safety_context or not authoritative_constraint:
+            formal_safety_context, authoritative_constraint = (
+                self._authoritative_safety_context(
+                    corridor, reference=final_trajectory))
+            formal_context_source = "runtime_fallback_missing_final_gate_snapshot"
+        else:
+            formal_context_source = "final_gate_reference_snapshot"
         authoritative_manifold = dict(
             authoritative_constraint.get("manifold_constraint", {}) or {})
         manifold_info = dict(manifold_info or {})
@@ -6815,7 +6982,8 @@ class WheelchairNode:
         self.manifold.last_topology_debug = dbg
         result = run_mpc_tracking(
             "wheelchair", start_state, ref,
-            topology_info, corridor_info, manifold_info, self.field,
+            topology_info, corridor_info, manifold_info,
+            formal_safety_context.get("social_field"),
             constraints,
             horizon=int(self.mpc.N), dt=float(self.mpc.dt),
             selected_corridor_id=cid,
@@ -6824,9 +6992,12 @@ class WheelchairNode:
                 "task_mode": self.task_mode,
                 "task_config": self.task_config,
                 "task_weight": self.task_weight,
-                "task_context": dict(self.task_context),
+                "task_context": dict(formal_safety_context.get(
+                    "task_context", {}) or {}),
                 "task_state_diagnostics": list(self.task_context_records),
-                "effective_social_weights": self.field.get_effective_weights(),
+                "effective_social_weights": dict(getattr(
+                    formal_safety_context.get("social_field"),
+                    "get_effective_weights", lambda: {})()),
                 "social_direction_model": self.social_field_direction_model,
                 "weights": self.mpc_cost_weights,
                 "phase_cost_weights": self.mpc_phase_cost_weights,
@@ -6860,6 +7031,9 @@ class WheelchairNode:
             "constraint_source": "reused_planning_authoritative_constraint",
             "context_source": "reused_planning_authoritative_context",
         }
+        result["formal_reference_context_source"] = formal_context_source
+        result["reference_version"] = int(getattr(
+            corridor, "reference_version", 0) or 0)
         result["task_success"] = bool(self.task_completed)
         result["overall_success"] = bool(
             result.get("task_success", False) and
@@ -6965,6 +7139,9 @@ class WheelchairNode:
             getattr(corridor, "critical_point_association", {}) or {})
         write_critical_point_association(association_path, association)
         write_mpc_outputs(result, diag, breakdown)
+        self._write_reference_contract_audits(
+            os.path.dirname(diag) or ".", result, corridor, ref,
+            final_trajectory, formal_safety_context, authoritative_constraint)
         selected_payload = self._write_selected_corridor_debug(os.path.dirname(diag))
         tube_centerline = (
             selected_payload.get("centerline") if selected_payload else
@@ -7769,6 +7946,7 @@ class WheelchairNode:
                 bool(row.get("runtime_replan", False))
                 for row in self.planner_timing_events)),
             "planning_events": list(self.planner_timing_events),
+            "solve_phase_profile": self._mpc_timing_summary(),
         }
         with open(os.path.join(output_dir or ".",
                                "mpc_timing_diagnostics.json"), "w") as handle:
@@ -7777,6 +7955,10 @@ class WheelchairNode:
         with open(os.path.join(output_dir or ".",
                                "mpc_timing_summary.json"), "w") as handle:
             json.dump(summary, handle, indent=2, sort_keys=True)
+        with open(os.path.join(output_dir or ".",
+                               "mpc_solve_profile.json"), "w") as handle:
+            json.dump(summary["solve_phase_profile"], handle,
+                      indent=2, sort_keys=True)
 
     def _write_no_progress_execution_audit(self):
         """Persist execution-chain evidence for post-run no-progress analysis."""
@@ -8379,8 +8561,10 @@ class WheelchairNode:
     def _mpc_timing_summary(self):
         samples = list(self.mpc_timing_history or [])
         fields = (
-            "t_reference_s", "t_rollout_s", "t_safety_eval_s",
-            "t_search_s", "t_post_s", "solve_wall_s",
+            "t_reference_s", "t_candidate_generation_s",
+            "t_rollout_dynamics_s", "t_rollout_s", "t_safety_eval_s",
+            "t_cost_s", "t_selection_s", "t_search_s", "t_post_s",
+            "t_diag_s", "solve_wall_s",
             "safety_eval_call_count", "unique_rollout_state_count",
             "cache_hit_count", "cache_miss_count",
             "hard_safety_prune_count")

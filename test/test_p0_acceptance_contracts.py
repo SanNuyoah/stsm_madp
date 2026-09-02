@@ -1720,6 +1720,22 @@ def test_wheelchair_mpc_timing_diagnostics_contract_is_explicit():
     assert record["mpc_dt"] == 0.2
 
 
+def test_wheelchair_final_gate_reference_contract_is_immutable_and_auditable():
+    node_source = open(os.path.join(
+        ROOT, "nodes", "wheelchair_node.py"), "r").read()
+    mpc_source = open(os.path.join(ROOT, "src", "stsm_madp", "mpc.py"), "r").read()
+    for field in (
+            "_freeze_final_reference_contract", "final_gate_safety_context",
+            "final_gate_safety_constraint", "reference_version_audit.json",
+            "reference_manifold_failure_audit.json", "mpc_reference_lineage.json",
+            "A_safety_context_drift", "final_gate_reference_snapshot"):
+        assert field in node_source
+    for field in (
+            "t_candidate_generation_s", "t_rollout_dynamics_s",
+            "t_safety_eval_s", "t_cost_s", "t_selection_s", "t_diag_s"):
+        assert field in mpc_source
+
+
 def test_baseline_failure_stage_is_execution_not_refinement():
     with open(os.path.join(ROOT, "nodes", "metrics_node.py"), "r") as handle:
         source = handle.read()
