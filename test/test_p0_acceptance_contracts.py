@@ -699,6 +699,37 @@ def test_soft_major_violation_is_not_safety_success():
     assert missing_execution["executed_evidence_complete"] is False
 
 
+def test_runtime_validation_reuses_authoritative_execution_contract():
+    fields = runtime_validation_fields(
+        {
+            "constraints": {"manifold_constraint_mode": "soft"},
+            "mpc_used": True,
+            "mpc_feasibility_status": "feasible",
+            "executed_evidence_required": True,
+            "execution_evidence_authoritative": True,
+            "actual_executed_trajectory_count": 8,
+            "executed_controller_accepted": True,
+            "executed_manifold_violation_count": 0,
+            "executed_corridor_violation_count": 0,
+            "executed_major_violation_count": 0,
+            "executed_max_manifold_violation": 0.0,
+            "executed_manifold_override_count": 0,
+            "executed_consecutive_manifold_override_max": 0,
+            "manifold_override_count": 72,
+            "consecutive_manifold_override_max": 72,
+            "override_replan_limit": 4,
+        },
+        metrics={"success_goal": True},
+        selected={"candidate_source": "morse_topology"},
+        ref_count=8)
+
+    assert fields["controller_truth_source"] == "executed"
+    assert fields["consecutive_manifold_override_max"] == 0
+    assert fields["controller_success"] is True
+    assert fields["safety_success"] is True
+    assert fields["overall_success"] is True
+
+
 def test_runtime_validation_uses_runtime_violation_counts():
     fields = runtime_validation_fields(
         {

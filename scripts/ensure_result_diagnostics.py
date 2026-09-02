@@ -131,6 +131,9 @@ def runtime_validation_fields(diag, metrics=None, selected=None, ref_count=0):
     executed_count = int(number(
         diag.get("actual_executed_trajectory_count"), 0))
     executed_required = bool(diag.get("executed_evidence_required", False))
+    execution_evidence_authoritative = bool(
+        truthy(diag.get("execution_evidence_authoritative", False)) and
+        executed_required and executed_count > 0)
     prefix = "executed_" if executed_count > 0 else ""
     manifold_v = int(number(diag.get(
         prefix + "manifold_violation_count",
@@ -152,7 +155,9 @@ def runtime_validation_fields(diag, metrics=None, selected=None, ref_count=0):
         diag.get("manifold_soft_tolerance"),
         constraints.get("manifold_soft_tolerance"),
         0.005), 0.005)
-    override_count = int(number(diag.get("manifold_override_count"), 0))
+    override_count = int(number(diag.get(
+        "executed_manifold_override_count"
+        if execution_evidence_authoritative else "manifold_override_count"), 0))
     step_count = int(number(first_value(
         diag.get("executed_trajectory_count"),
         diag.get("rollout_solve_count"),
@@ -172,8 +177,10 @@ def runtime_validation_fields(diag, metrics=None, selected=None, ref_count=0):
         diag.get("override_replan_limit"),
         constraints.get("override_replan_limit"),
         4), 4))
-    consecutive_override = int(number(
-        diag.get("consecutive_manifold_override_max"), 0))
+    consecutive_override = int(number(diag.get(
+        "executed_consecutive_manifold_override_max"
+        if execution_evidence_authoritative else
+        "consecutive_manifold_override_max"), 0))
     mpc_status = str(diag.get("mpc_feasibility_status", ""))
     mpc_used = bool(diag.get("mpc_used", False) or ref_count > 0)
     candidate_source = str(first_value(
@@ -188,10 +195,16 @@ def runtime_validation_fields(diag, metrics=None, selected=None, ref_count=0):
         candidate_source not in (
             "", "semantic", "direct", "fallback", "planning_failed") or
         morse_used)
-    controller_success = bool(mpc_used and mpc_status in (
-        "feasible", "feasible_with_soft_violation",
-        "feasible_with_soft_violations") and
-        consecutive_override < override_limit)
+    if execution_evidence_authoritative:
+        controller_success = bool(
+            mpc_used and
+            truthy(diag.get("executed_controller_accepted", False)) and
+            consecutive_override < override_limit)
+    else:
+        controller_success = bool(mpc_used and mpc_status in (
+            "feasible", "feasible_with_soft_violation",
+            "feasible_with_soft_violations") and
+            consecutive_override < override_limit)
     task_success = truthy(first_value(
         metrics.get("success_goal"),
         metrics.get("goal_reached"),
@@ -245,6 +258,10 @@ def runtime_validation_fields(diag, metrics=None, selected=None, ref_count=0):
         "overall_success": bool(overall_success),
         "safety_truth_source": (
             "executed" if executed_count > 0 else "predicted"),
+        "controller_truth_source": (
+            "executed" if execution_evidence_authoritative else "predicted"),
+        "execution_evidence_authoritative": bool(
+            execution_evidence_authoritative),
         "executed_evidence_complete": bool(
             executed_count > 0 or not executed_required),
         "warning_reason": warning_reason,
