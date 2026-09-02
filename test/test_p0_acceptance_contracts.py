@@ -1850,6 +1850,15 @@ def test_wheelchair_authoritative_result_is_finalized_before_trace_snapshot():
     assert snapshot > finalize
 
 
+def test_simulation_status_carries_canonical_execution_fields():
+    source = open(os.path.join(ROOT, "scripts", "ensure_result_diagnostics.py"), "r").read()
+    for field in ('"execution_status"', '"failure_stage"', '"failure_reason"',
+                  '"stop_reason"', '"success_goal"', '"success_safe"',
+                  '"controller_success"', '"safety_success"',
+                  '"module_chain_valid"'):
+        assert field in source
+
+
 def test_wheelchair_final_gate_reference_contract_is_immutable_and_auditable():
     node_source = open(os.path.join(
         ROOT, "nodes", "wheelchair_node.py"), "r").read()

@@ -729,6 +729,14 @@ def sync_derived_reports(run_dir, robot, selected, diag, ref_count):
     success = bool(validation["overall_success"])
     mpc_status = str(diag.get("mpc_feasibility_status", ""))
     clearance = selected_clearance(selected)
+    execution_status = "success" if success else "failed"
+    failure_reason = str(first_value(
+        metrics.get("failure_reason"), validation.get("failure_reason"),
+        "" if success else "unknown"))
+    failure_stage = str(first_value(
+        metrics.get("failure_stage"), "none" if success else "execution"))
+    stop_reason = str(first_value(
+        metrics.get("stop_reason"), failure_reason if not success else "none"))
     write_json(os.path.join(run_dir, "simulation_status.json"), {
         "robot": robot,
         "variant": "stsm",
@@ -737,6 +745,16 @@ def sync_derived_reports(run_dir, robot, selected, diag, ref_count):
         "mpc_finished": bool(mpc_status),
         "goal_reached": bool(success),
         "result_saved": bool(not missing),
+        "execution_status": execution_status,
+        "failure_stage": failure_stage,
+        "failure_reason": failure_reason,
+        "stop_reason": stop_reason,
+        "success_goal": int(bool(metrics.get("success_goal", success))),
+        "success_safe": int(bool(metrics.get("success_safe", success))),
+        "task_success": bool(validation["task_success"]),
+        "controller_success": bool(validation["controller_success"]),
+        "safety_success": bool(validation["safety_success"]),
+        "module_chain_valid": int(bool(metrics.get("module_chain_valid", success))),
     })
     write_json(os.path.join(run_dir, "simulation_check_report.json"), {
         "robot": robot,
