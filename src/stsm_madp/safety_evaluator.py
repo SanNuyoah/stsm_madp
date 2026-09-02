@@ -422,11 +422,53 @@ class SafetyEvaluator(object):
         self._profile_add("manifold_clearance", _perf_counter() - clearance_t0,
                           context_count)
         contract_t0 = _perf_counter()
-        result = [self.evaluate_state(
-            point, risk=risk,
-            corridor=(float(distance), bool(valid)), clearance=float(clearance))
-                for point, risk, distance, valid, clearance in zip(
-                    points, risks, distances, inside, clearances)]
+        # Batch path: resolve invariant thresholds once and build the same
+        # result mapping without re-entering evaluate_state() for every
+        # point.  This preserves the public result contract while removing
+        # repeated property lookups and corridor-radius parsing.
+        required_clearance = self.required_clearance
+        minimum_clearance = self.minimum_clearance
+        nominal_clearance = self.nominal_minimum_clearance
+        risk_threshold = self.risk_threshold
+        corridor_radius = self._corridor_radius()
+        result = []
+        for point, risk, distance, valid, clearance in zip(
+                points, risks, distances, inside, clearances):
+            clearance = float(clearance)
+            risk = float(manifold_risk_value(point, self.risk_field)
+                         if risk is None else risk)
+            clearance_source = "risk_manifold_boundary"
+            if not np.isfinite(clearance) and self.risk_field is not None and hasattr(
+                    self.risk_field, "grad_phi_s"):
+                try:
+                    grad = np.asarray(self.risk_field.grad_phi_s(point), float)[:3]
+                    grad_norm = float(np.linalg.norm(grad))
+                    if grad_norm > 1e-9:
+                        clearance = float((risk_threshold - risk) / grad_norm)
+                        clearance_source = "risk_gradient_distance"
+                except Exception:
+                    pass
+            clearance_available = bool(np.isfinite(clearance))
+            if not clearance_available:
+                clearance_source = "risk_threshold_only"
+            result.append({
+                "clearance": clearance,
+                "clearance_available": clearance_available,
+                "clearance_source": clearance_source,
+                "risk": risk,
+                "inside_manifold": bool(
+                    (not clearance_available or
+                     clearance + 1e-9 >= required_clearance) and
+                    risk <= risk_threshold + 1e-9),
+                "inside_corridor": bool(valid),
+                "corridor_distance": float(distance),
+                "corridor_radius": corridor_radius,
+                "minimum_clearance": minimum_clearance,
+                "nominal_minimum_clearance": nominal_clearance,
+                "effective_minimum_clearance": minimum_clearance,
+                "required_clearance": required_clearance,
+                "risk_threshold": risk_threshold,
+            })
         contract_elapsed = _perf_counter() - contract_t0
         self._profile_add("contract", contract_elapsed, context_count)
         # The current evaluator's per-state contract work is object/result
