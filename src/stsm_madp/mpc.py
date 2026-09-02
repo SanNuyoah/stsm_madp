@@ -5164,6 +5164,8 @@ class WheelchairMPC:
             "cache_hit_count": 0,
             "cache_miss_count": 0,
             "hard_safety_prune_count": 0,
+            "candidate_population_audit": [],
+            "progress_feasibility_status": "no_positive_progress_candidate",
         }
 
         manifold_evaluator = None
@@ -5581,6 +5583,47 @@ class WheelchairMPC:
             0.001,
             float(self.first_step_progress_ratio) *
             float(self.min_progress_per_solve))
+        candidate_audit = []
+        for index, row in enumerate(records):
+            (total, _progress, _heading_improvement, _distN,
+             _sequence_translation, ref_progress, first_goal_progress,
+             first_ref_progress, item, _terminal_adp, objective,
+             _first_positive_progress, _first_heading_improvement,
+             _first_abs_w) = row
+            first_u = np.asarray(item["controls"][0], float) if item.get(
+                "controls") else np.asarray(u_prev, float)
+            candidate_audit.append({
+                "candidate_id": int(index),
+                "v": float(first_u[0]), "w": float(first_u[1]),
+                "feasible": True, "safety_valid": True,
+                "first_step_x": float(item["states"][0][0]) if item.get("states") else float(x0[0]),
+                "first_step_y": float(item["states"][0][1]) if item.get("states") else float(x0[1]),
+                "first_step_yaw": float(item["states"][0][2]) if item.get("states") else float(x0[2]),
+                "first_step_goal_progress": float(first_goal_progress),
+                "first_step_reference_progress": float(first_ref_progress),
+                "positive_goal_progress": bool(first_goal_progress >= min_first_step_progress),
+                "positive_reference_progress": bool(ref_progress >= min_first_step_progress),
+                "tracking_cost": float(objective.get("tracking", 0.0)),
+                "heading_cost": float(objective.get("heading", objective.get("heading_tracking", 0.0))),
+                "goal_cost": float(objective.get("terminal_goal", 0.0)),
+                "risk_cost": float(objective.get("social", 0.0)),
+                "turn_cost": float(objective.get("smooth", 0.0)),
+                "total_cost": float(total), "selected": False,
+                "reject_reason": "",
+            })
+        timing["candidate_population_audit"] = candidate_audit
+        both = sum(bool(row["safety_valid"] and row["positive_goal_progress"] and
+                        row["positive_reference_progress"]) for row in candidate_audit)
+        ref_only = sum(bool(row["safety_valid"] and row["positive_reference_progress"])
+                       for row in candidate_audit)
+        goal_only = sum(bool(row["safety_valid"] and row["positive_goal_progress"])
+                        for row in candidate_audit)
+        if both:
+            timing["progress_feasibility_status"] = "positive_progress_available"
+        elif ref_only:
+            timing["progress_feasibility_status"] = "reference_only_progress_available"
+        elif goal_only:
+            timing["progress_feasibility_status"] = "goal_only_progress_available"
         max_heading_recovery_w = min(
             float(self.w_max), max(0.0, float(self.heading_recovery_w_max)))
         max_heading_recovery_backtrack = max(
@@ -5660,7 +5703,8 @@ class WheelchairMPC:
             timing["t_post_s"] = max(0.0, time.time() - post_t0)
             finish_timing()
             return 0.0, 0.0
-        best = min(valid, key=lambda value: value[0])
+        best_idx = min(range(len(valid)), key=lambda idx: valid[idx][0])
+        best = valid[best_idx]
         (best_cost, progress, heading_improvement, _distN,
          alignment_translation, ref_progress, first_goal_progress,
          first_ref_progress, best_item, terminal_adp, objective,
@@ -5669,6 +5713,12 @@ class WheelchairMPC:
         controls = list(best_item["controls"])
         states = list(best_item["states"])
         best_u = controls[0]
+        for row in candidate_audit:
+            row["selected"] = bool(
+                abs(float(row["total_cost"]) - float(best_cost)) <= 1e-9 and
+                abs(float(row["v"]) - float(best_u[0])) <= 1e-9 and
+                abs(float(row["w"]) - float(best_u[1])) <= 1e-9)
+        timing["candidate_population_audit"] = candidate_audit
         self.last_terminal_adp_cost = float(terminal_adp)
         self.last_track_cost = float(objective.get("tracking", 0.0))
         self.last_social_cost = float(objective.get("social", 0.0))

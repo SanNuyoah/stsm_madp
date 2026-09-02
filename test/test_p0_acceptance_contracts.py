@@ -1843,6 +1843,14 @@ def test_decision_trace_success_contract_has_controller_and_safety_status():
         assert 'trace["%s"]' % field in source
 
 
+def test_wheelchair_progress_candidate_audit_contract_is_explicit():
+    source = open(os.path.join(ROOT, "src", "stsm_madp", "mpc.py"), "r").read()
+    for field in ("candidate_population_audit", "positive_goal_progress",
+                  "positive_reference_progress", "progress_feasibility_status",
+                  "first_step_goal_progress", "first_step_reference_progress"):
+        assert field in source
+
+
 def test_wheelchair_authoritative_result_is_finalized_before_trace_snapshot():
     source = open(os.path.join(ROOT, "nodes", "wheelchair_node.py"), "r").read()
     finalize = source.index('result["overall_success"] = bool(')
