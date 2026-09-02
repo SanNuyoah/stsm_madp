@@ -463,9 +463,14 @@ class SafetyEvaluator(object):
         if len(points) == 0:
             return []
         phase_t0 = _perf_counter()
-        risks = (np.asarray(self.risk_field.phi_s_batch(points), float)
-                 if self.risk_field is not None and
-                 hasattr(self.risk_field, "phi_s_batch") else [None] * len(points))
+        if self.risk_field is not None and hasattr(self.risk_field, "phi_s_batch"):
+            risks = np.asarray(self.risk_field.phi_s_batch(points), float)
+        else:
+            # Preserve the scalar-field contract for lightweight fields that
+            # do not expose a batch API (including the unit-test ZeroField).
+            risks = np.asarray([
+                manifold_risk_value(point, self.risk_field)
+                for point in points], float)
         self._fast_profile["fast_core_risk_field_s"] += _perf_counter() - phase_t0
         phase_t0 = _perf_counter()
         distances, inside = self._corridor_distances_batch(points)
@@ -474,11 +479,31 @@ class SafetyEvaluator(object):
         clearances = self._boundary_distances_batch(points)
         self._fast_profile["fast_core_manifold_s"] += _perf_counter() - phase_t0
         phase_t0 = _perf_counter()
-        result = [self.evaluate_fast(point, risk=risk,
-                                   corridor=(float(distance), bool(valid)),
-                                   clearance=float(clearance))
-                for point, risk, distance, valid, clearance in zip(
-                    points, risks, distances, inside, clearances)]
+        # Pack primitive arrays directly.  Calling ``evaluate_fast`` here
+        # would re-enter ``_evaluate_core`` once per state and dominated the
+        # batch path (the R022 profile measured this as the Top-1 hotspot).
+        risk_values = np.asarray(risks, float)
+        clearance_values = np.asarray(clearances, float)
+        required_clearance = float(self.required_clearance)
+        risk_threshold = float(self.risk_threshold)
+        finite_clearance = np.isfinite(clearance_values)
+        manifold_valid = ((~finite_clearance |
+                           (clearance_values + 1e-9 >= required_clearance)) &
+                          (risk_values <= risk_threshold + 1e-9))
+        corridor_radius = float(self._corridor_radius())
+        result = [{
+            "risk": float(risk),
+            "clearance": float(clearance),
+            "corridor_distance": float(distance),
+            "inside_manifold": bool(valid_manifold),
+            "inside_corridor": bool(valid_corridor),
+            "clearance_available": bool(clearance_available),
+            "required_clearance": required_clearance,
+            "corridor_radius": corridor_radius,
+        } for risk, clearance, distance, valid_manifold, valid_corridor,
+               clearance_available in zip(
+                   risk_values, clearance_values, distances, manifold_valid,
+                   inside, finite_clearance)]
         self._fast_profile["fast_core_pack_s"] += _perf_counter() - phase_t0
         self._fast_profile["fast_core_total_s"] += _perf_counter() - total_t0
         self._fast_profile["profiled_calls"] += len(points)
