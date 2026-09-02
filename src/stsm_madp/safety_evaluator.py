@@ -12,6 +12,8 @@ from stsm_madp.manifold_constraint import (
     manifold_risk_value,
 )
 
+_perf_counter = getattr(time, "perf_counter", time.time)
+
 
 def _as_points(points):
     if points is None or isinstance(points, str):
@@ -400,28 +402,28 @@ class SafetyEvaluator(object):
         points = _as_points(states)
         if len(points) == 0:
             return []
-        phase_t0 = time.perf_counter()
+        phase_t0 = _perf_counter()
         context_count = len(points)
         if self.risk_field is not None and hasattr(self.risk_field, "phi_s_batch"):
             risks = np.asarray(self.risk_field.phi_s_batch(points), float)
         else:
             risks = [None] * len(points)
-        risk_elapsed = time.perf_counter() - phase_t0
+        risk_elapsed = _perf_counter() - phase_t0
         self._profile_add("risk_field", risk_elapsed, context_count)
         distances, inside = self._corridor_distances_batch(points)
-        corridor_elapsed = time.perf_counter() - phase_t0 - risk_elapsed
+        corridor_elapsed = _perf_counter() - phase_t0 - risk_elapsed
         self._profile_add("corridor_clearance", corridor_elapsed, context_count)
-        clearance_t0 = time.perf_counter()
+        clearance_t0 = _perf_counter()
         clearances = self._boundary_distances_batch(points)
-        self._profile_add("manifold_clearance", time.perf_counter() - clearance_t0,
+        self._profile_add("manifold_clearance", _perf_counter() - clearance_t0,
                           context_count)
-        contract_t0 = time.perf_counter()
+        contract_t0 = _perf_counter()
         result = [self.evaluate_state(
             point, risk=risk,
             corridor=(float(distance), bool(valid)), clearance=float(clearance))
                 for point, risk, distance, valid, clearance in zip(
                     points, risks, distances, inside, clearances)]
-        self._profile_add("contract", time.perf_counter() - contract_t0,
+        self._profile_add("contract", _perf_counter() - contract_t0,
                           context_count)
         self._profile_add("context_lookup", 0.0, context_count)
         return result
