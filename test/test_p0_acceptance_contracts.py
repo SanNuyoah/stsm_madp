@@ -1751,6 +1751,20 @@ def test_wheelchair_drive_authority_is_explicit_and_symmetric():
     assert "wheel_effort_limit:=$(arg wheel_effort_limit)" in launch
 
 
+def test_wheelchair_minimal_execution_chassis_preserves_drive_geometry_and_footprint():
+    xacro = open(os.path.join(ROOT, "urdf", "wheelchair.xacro"), "r").read()
+    control = open(os.path.join(ROOT, "config", "wheelchair_control.yaml"),
+                   "r").read()
+    assert 'name="base_link"' in xacro
+    assert '<mass value="12.0"/>' in xacro
+    assert 'name="rear_caster"' in xacro
+    assert xacro.count('<mu1>0.0</mu1><mu2>0.0</mu2>') >= 2
+    assert 'wheel_r" value="0.15"' in xacro
+    assert 'sep" value="0.62"' in xacro
+    assert "left_wheel: left_wheel_joint" in control
+    assert "right_wheel: right_wheel_joint" in control
+
+
 def test_wheelchair_watchdog_hold_covers_measured_control_update_gap():
     launch = open(os.path.join(ROOT, "launch", "wheelchair_action.launch"),
                   "r").read()

@@ -36,8 +36,10 @@
 
   <link name="base_link">
     <inertial>
-      <mass value="40"/>
-      <inertia ixx="2.0" ixy="0" ixz="0" iyy="2.0" iyz="0" izz="2.0"/>
+      <!-- Minimal standard diff-drive execution body.  Dimensions remain the
+           wheelchair footprint; only its physical carrier is simplified. -->
+      <mass value="12.0"/>
+      <inertia ixx="0.45" ixy="0" ixz="0" iyy="0.56" iyz="0" izz="0.73"/>
     </inertial>
     <visual>
       <geometry><box size="${base_x} ${base_y} ${base_z}"/></geometry>
@@ -60,7 +62,8 @@
       <inertia ixx="0.2" ixy="0" ixz="0" iyy="0.2" iyz="0" izz="0.2"/></inertial>
     <visual><geometry><box size="0.1 ${base_y} 0.5"/></geometry>
       <material name="chair"/></visual>
-    <collision><geometry><box size="0.1 ${base_y} 0.5"/></geometry></collision>
+    <!-- Visual task geometry only: the execution chassis collision is the
+         base box and drive/support wheels below. -->
   </link>
   <joint name="seat_joint" type="fixed">
     <parent link="base_link"/>
@@ -70,8 +73,9 @@
 
   <xacro:macro name="wheel" params="name y">
     <link name="${name}">
-      <inertial><mass value="2"/>
-        <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.02"/></inertial>
+      <inertial><mass value="1.5"/>
+        <!-- Cylinder axis is link y after the visual/collision rotation. -->
+        <inertia ixx="0.00875" ixy="0" ixz="0" iyy="0.03375" iyz="0" izz="0.00875"/></inertial>
       <visual>
         <origin rpy="1.5708 0 0"/>
         <geometry><cylinder radius="${wheel_r}" length="${wheel_w}"/></geometry>
@@ -99,7 +103,8 @@
   <xacro:wheel name="left_wheel" y="${sep/2}"/>
   <xacro:wheel name="right_wheel" y="${-sep/2}"/>
 
-  <!-- passive front caster (sphere) -->
+  <!-- Symmetric, friction-free support balls keep the simplified carrier
+       level without adding lateral rolling constraints. -->
   <link name="caster">
     <inertial><mass value="0.5"/>
       <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/></inertial>
@@ -113,7 +118,21 @@
     <origin xyz="${base_x/2 - 0.1} 0 ${-base_z/2 - wheel_r + 0.06}"/>
   </joint>
 
+  <link name="rear_caster">
+    <inertial><mass value="0.5"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/></inertial>
+    <visual><geometry><sphere radius="0.06"/></geometry><material name="dark"/></visual>
+    <collision><geometry><sphere radius="0.06"/></geometry>
+      <surface><friction><ode><mu>0.0</mu><mu2>0.0</mu2></ode></friction></surface></collision>
+  </link>
+  <joint name="rear_caster_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="rear_caster"/>
+    <origin xyz="${-base_x/2 + 0.1} 0 ${-base_z/2 - wheel_r + 0.06}"/>
+  </joint>
+
   <gazebo reference="caster"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+  <gazebo reference="rear_caster"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
   <gazebo reference="left_wheel">
     <mu1>$(arg wheel_mu)</mu1><mu2>$(arg wheel_mu)</mu2>
     <!-- fdir1 is expressed in the collision-fixed frame.  The cylinder's
