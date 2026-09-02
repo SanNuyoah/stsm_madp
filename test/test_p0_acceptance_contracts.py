@@ -1728,7 +1728,9 @@ def test_wheelchair_final_gate_reference_contract_is_immutable_and_auditable():
             "_freeze_final_reference_contract", "final_gate_safety_context",
             "final_gate_safety_constraint", "reference_version_audit.json",
             "reference_manifold_failure_audit.json", "mpc_reference_lineage.json",
-            "A_safety_context_drift", "final_gate_reference_snapshot"):
+            "A_safety_context_drift", "B_interpolated_or_generated_reference_point",
+            "_runtime_reference_hard_valid", "fixed_goal_endpoint_rejected",
+            "final_gate_reference_snapshot"):
         assert field in node_source
     for field in (
             "t_candidate_generation_s", "t_rollout_dynamics_s",

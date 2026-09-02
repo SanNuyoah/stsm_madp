@@ -2673,6 +2673,18 @@ class WheelchairNode:
                 safety_context.get("fingerprint", "")),
         }
 
+    def _runtime_reference_hard_valid(self, corridor, point):
+        """Check a locally generated horizon point against the Final Gate."""
+        safety_context = dict(getattr(
+            corridor, "final_gate_safety_context", {}) or {})
+        constraint = copy.deepcopy(dict(getattr(
+            corridor, "final_gate_safety_constraint", {}) or {}))
+        if not safety_context or not constraint:
+            safety_context, constraint = self._authoritative_safety_context(
+                corridor, reference=getattr(corridor, "final_gate_reference", []))
+        return self._final_reference_safety_status(
+            corridor, np.asarray([point], float), safety_context, constraint)
+
     def _goal_terminal_preflight(self, safety_context):
         """Record fixed-goal/arrival-region safety without changing geometry."""
         return terminal_acceptance_preflight(
@@ -6476,20 +6488,38 @@ class WheelchairNode:
         corridor.reference_horizon_lookahead_m = float(max(0.0, end_s - start_s))
         input_ref = np.asarray(ref, float).copy()
         final_approach_generated = [False] * int(len(ref))
+        final_approach_goal_endpoint_rejected = False
+        final_approach_goal_endpoint_safety = {}
         if self.state is not None:
             dist_goal = float(np.linalg.norm(self.state[:2] - self.goal))
             if self._in_final_approach(dist_goal):
                 goal2 = np.asarray(self.goal[:2], float)
+                final_approach_goal_endpoint_safety = (
+                    {"final_reference_valid": True,
+                     "reason": "baseline_unchanged"}
+                    if self.baseline else
+                    self._runtime_reference_hard_valid(corridor, goal2))
                 if len(ref) == 0:
-                    ref = np.asarray([goal2], float)
-                    input_ref = np.asarray(ref, float).copy()
-                    final_approach_generated = [True]
-                else:
+                    if bool(final_approach_goal_endpoint_safety.get(
+                            "final_reference_valid", False)):
+                        ref = np.asarray([goal2], float)
+                        input_ref = np.asarray(ref, float).copy()
+                        final_approach_generated = [True]
+                    else:
+                        raise RuntimeError(
+                            "planning_failure:no_safe_final_approach_reference")
+                elif bool(final_approach_goal_endpoint_safety.get(
+                        "final_reference_valid", False)):
                     final_approach_generated[-1] = bool(np.linalg.norm(
                         ref[-1, :2] - goal2[:2]) > 1e-9)
                     ref[-1] = goal2
-                corridor.reference_horizon_goal_progress = float(dist_goal)
-                corridor.reference_horizon_end_distance_to_goal = 0.0
+                    corridor.reference_horizon_goal_progress = float(dist_goal)
+                    corridor.reference_horizon_end_distance_to_goal = 0.0
+                else:
+                    # The fixed goal lies outside the safe terminal region.
+                    # Keep the already Final-Gate-passed horizon sample rather
+                    # than injecting an unsafe endpoint into MPC.
+                    final_approach_goal_endpoint_rejected = True
         # Preserve a source map for audit only.  The final-approach endpoint
         # is the sole point generated here; all other reference samples come
         # from interpolation of the selected final corridor trajectory.
@@ -6522,10 +6552,14 @@ class WheelchairNode:
             "generated_points": [item for item in reference_map
                                  if item["final_approach_generated"]],
             "output_path_tail": reference_map[-10:],
-            "safety_evaluator_reexecuted": False,
-            "clearance_checked": False,
-            "manifold_checked": False,
-            "risk_checked": False,
+            "fixed_goal_endpoint_rejected": bool(
+                final_approach_goal_endpoint_rejected),
+            "fixed_goal_endpoint_safety": dict(
+                final_approach_goal_endpoint_safety),
+            "safety_evaluator_reexecuted": True,
+            "clearance_checked": True,
+            "manifold_checked": True,
+            "risk_checked": True,
         }
         self._record_mpc_reference(corridor, ref)
         self._record_baseline_reference_before_mpc(corridor, ref)
@@ -6807,10 +6841,10 @@ class WheelchairNode:
             context_mismatch = str(planning_point.get(
                 "safety_context_fingerprint", "")) != str(runtime_point.get(
                 "safety_context_fingerprint", ""))
-            if context_mismatch:
-                failure_class = "A_safety_context_drift"
-            elif bool(row.get("final_approach_generated", False)):
+            if bool(row.get("final_approach_generated", False)):
                 failure_class = "B_interpolated_or_generated_reference_point"
+            elif context_mismatch:
+                failure_class = "A_safety_context_drift"
             elif bool(self.task_completed):
                 failure_class = "D_goal_termination_order"
             else:
