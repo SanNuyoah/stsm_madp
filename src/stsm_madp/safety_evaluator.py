@@ -358,6 +358,25 @@ class SafetyEvaluator(object):
                        closest - points[:, None, :]), axis=1)))
 
     def evaluate_state(self, state, risk=None, corridor=None, clearance=None):
+        core = self._evaluate_core(state, risk=risk, corridor=corridor,
+                                   clearance=clearance)
+        return {
+            "clearance": core["clearance"],
+            "clearance_available": core["clearance_available"],
+            "clearance_source": core["clearance_source"],
+            "risk": core["risk"],
+            "inside_manifold": core["inside_manifold"],
+            "inside_corridor": core["inside_corridor"],
+            "corridor_distance": core["corridor_distance"],
+            "corridor_radius": core["corridor_radius"],
+            "minimum_clearance": core["minimum_clearance"],
+            "nominal_minimum_clearance": core["nominal_minimum_clearance"],
+            "effective_minimum_clearance": core["effective_minimum_clearance"],
+            "required_clearance": core["required_clearance"],
+            "risk_threshold": core["risk_threshold"],
+        }
+
+    def _evaluate_core(self, state, risk=None, corridor=None, clearance=None):
         point = np.asarray(state, float)[:3]
         if clearance is None:
             clearance = distance_to_manifold_boundary(point, self._boundary())
@@ -400,6 +419,37 @@ class SafetyEvaluator(object):
             "required_clearance": float(self.required_clearance),
             "risk_threshold": float(self.risk_threshold),
         }
+
+    def evaluate_fast(self, state, risk=None, corridor=None, clearance=None):
+        """MPC fast path: primitive safety values only, no diagnostics metadata."""
+        core = self._evaluate_core(state, risk=risk, corridor=corridor,
+                                   clearance=clearance)
+        return {
+            "risk": core["risk"],
+            "clearance": core["clearance"],
+            "corridor_distance": core["corridor_distance"],
+            "inside_manifold": core["inside_manifold"],
+            "inside_corridor": core["inside_corridor"],
+            "clearance_available": core["clearance_available"],
+            "required_clearance": core["required_clearance"],
+            "corridor_radius": core["corridor_radius"],
+        }
+
+    def evaluate_fast_states(self, states):
+        """Batch fast path retaining only fields consumed by MPC rollout."""
+        points = _as_points(states)
+        if len(points) == 0:
+            return []
+        risks = (np.asarray(self.risk_field.phi_s_batch(points), float)
+                 if self.risk_field is not None and
+                 hasattr(self.risk_field, "phi_s_batch") else [None] * len(points))
+        distances, inside = self._corridor_distances_batch(points)
+        clearances = self._boundary_distances_batch(points)
+        return [self.evaluate_fast(point, risk=risk,
+                                   corridor=(float(distance), bool(valid)),
+                                   clearance=float(clearance))
+                for point, risk, distance, valid, clearance in zip(
+                    points, risks, distances, inside, clearances)]
 
     def evaluate_states(self, states):
         """Batch risk and corridor queries, retaining per-state safety checks."""

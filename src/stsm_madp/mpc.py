@@ -5323,7 +5323,7 @@ class WheelchairMPC:
                 if uncached_states:
                     for key, status in zip(
                             uncached_positions,
-                            manifold_evaluator.evaluate_states(uncached_states)):
+                            manifold_evaluator.evaluate_fast_states(uncached_states)):
                         manifold_state_cache[key] = status
                     timing["safety_eval_call_count"] += int(
                         len(uncached_states))

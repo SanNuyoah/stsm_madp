@@ -1866,6 +1866,24 @@ def test_wheelchair_contract_profile_has_subcomponents_and_reconciliation():
         assert field in source
 
 
+def test_safety_evaluator_full_fast_verdict_equivalence():
+    evaluator = SafetyEvaluator(
+        manifold_constraint={"minimum_clearance": 0.1, "risk_threshold": 2.0},
+        corridor_constraint={"centerline": [[0.0, 0.0], [1.0, 0.0]], "radius": 0.5},
+        risk_field=ZeroField())
+    states = np.column_stack((np.linspace(-0.2, 1.2, 1000),
+                              np.full(1000, 0.123), np.zeros(1000)))
+    full = evaluator.evaluate_states(states)
+    fast = evaluator.evaluate_fast_states(states)
+    assert len(full) == len(fast) == 1000
+    assert all(a["inside_manifold"] == b["inside_manifold"] and
+               a["inside_corridor"] == b["inside_corridor"] and
+               abs(a["risk"] - b["risk"]) <= 1e-12 and
+               (np.isclose(a["clearance"], b["clearance"], equal_nan=True,
+                           atol=1e-12, rtol=0.0))
+               for a, b in zip(full, fast))
+
+
 def test_wheelchair_authoritative_result_is_finalized_before_trace_snapshot():
     source = open(os.path.join(ROOT, "nodes", "wheelchair_node.py"), "r").read()
     finalize = source.index('result["overall_success"] = bool(')
