@@ -158,24 +158,27 @@ def _polyline_project(point, centerline):
     wps = pts[:, :dim]
     if len(wps) == 1:
         return wps[0], float(np.linalg.norm(p - wps[0])), 0.0
-    best_q = wps[0]
-    best_d = float("inf")
-    best_s = 0.0
-    acc = 0.0
-    for a, b in zip(wps[:-1], wps[1:]):
-        ab = b - a
-        seg_len = float(np.linalg.norm(ab))
-        denom = float(np.dot(ab, ab))
-        t = 0.0 if denom <= 1e-12 else np.clip(
-            float(np.dot(p - a, ab)) / denom, 0.0, 1.0)
-        q = a + t * ab
-        d = float(np.linalg.norm(p - q))
-        if d < best_d:
-            best_q = q
-            best_d = d
-            best_s = acc + t * seg_len
-        acc += seg_len
-    return best_q, best_d, best_s
+    # Keep the exact segment projection semantics, but evaluate all segments
+    # in NumPy.  MPC calls this for every rollout state, so the former Python
+    # loop over the complete centerline dominated the safety miss path.
+    starts = wps[:-1]
+    segments = wps[1:] - starts
+    denom = np.einsum("ij,ij->i", segments, segments)
+    t = np.zeros(len(segments), float)
+    valid = denom > 1e-12
+    if np.any(valid):
+        offsets = p[None, :] - starts[valid]
+        t[valid] = np.einsum("ij,ij->i", offsets, segments[valid]) / denom[valid]
+    t = np.clip(t, 0.0, 1.0)
+    closest = starts + t[:, None] * segments
+    distances_sq = np.einsum("ij,ij->i", closest - p[None, :],
+                              closest - p[None, :])
+    best_index = int(np.argmin(distances_sq))
+    lengths = np.linalg.norm(segments, axis=1)
+    cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
+    return (closest[best_index],
+            float(np.sqrt(max(0.0, distances_sq[best_index]))),
+            float(cumulative[best_index] + t[best_index] * lengths[best_index]))
 
 
 def _constraint_value(payload, key, default=None):
@@ -263,7 +266,35 @@ class SafetyEvaluator(object):
         _q, dist, _s = _polyline_project(state, centerline)
         return float(dist), bool(dist <= radius + 1e-9)
 
-    def evaluate_state(self, state, risk=None):
+    def _corridor_distances_batch(self, states):
+        """Return exact nearest-centerline distances for a batch of states."""
+        points = _as_points(states)
+        centerline = self._centerline()
+        radius = self._corridor_radius()
+        if len(points) == 0:
+            return np.zeros(0, float), np.ones(0, bool)
+        if len(centerline) == 0 or radius <= 0.0:
+            return np.zeros(len(points), float), np.ones(len(points), bool)
+        if len(centerline) == 1:
+            distances = np.linalg.norm(points - centerline[0], axis=1)
+        else:
+            starts = centerline[:-1]
+            segments = centerline[1:] - starts
+            denom = np.einsum("ij,ij->i", segments, segments)
+            offsets = points[:, None, :] - starts[None, :, :]
+            projection = np.zeros((len(points), len(segments)), float)
+            valid = denom > 1e-12
+            if np.any(valid):
+                projection[:, valid] = np.einsum(
+                    "nmi,mi->nm", offsets[:, valid], segments[valid]) / denom[valid]
+            projection = np.clip(projection, 0.0, 1.0)
+            closest = starts[None, :, :] + projection[:, :, None] * segments[None, :, :]
+            distances = np.sqrt(np.maximum(0.0, np.min(
+                np.einsum("nmi,nmi->nm", closest - points[:, None, :],
+                           closest - points[:, None, :]), axis=1)))
+        return distances, distances <= radius + 1e-9
+
+    def evaluate_state(self, state, risk=None, corridor=None):
         point = np.asarray(state, float)[:3]
         clearance = distance_to_manifold_boundary(point, self._boundary())
         risk = (manifold_risk_value(point, self.risk_field)
@@ -282,7 +313,10 @@ class SafetyEvaluator(object):
         clearance_available = bool(np.isfinite(clearance))
         if not clearance_available:
             clearance_source = "risk_threshold_only"
-        corridor_distance, inside_corridor = self._corridor_distance(point)
+        if corridor is None:
+            corridor_distance, inside_corridor = self._corridor_distance(point)
+        else:
+            corridor_distance, inside_corridor = corridor
         inside_manifold = bool(
             (not clearance_available or
              clearance + 1e-9 >= self.required_clearance) and
@@ -304,15 +338,20 @@ class SafetyEvaluator(object):
         }
 
     def evaluate_states(self, states):
-        """Batch only the risk query; retain the existing per-state checks."""
+        """Batch risk and corridor queries, retaining per-state safety checks."""
         points = _as_points(states)
         if len(points) == 0:
             return []
         if self.risk_field is not None and hasattr(self.risk_field, "phi_s_batch"):
             risks = np.asarray(self.risk_field.phi_s_batch(points), float)
-            return [self.evaluate_state(point, risk=risk)
-                    for point, risk in zip(points, risks)]
-        return [self.evaluate_state(point) for point in points]
+        else:
+            risks = [None] * len(points)
+        distances, inside = self._corridor_distances_batch(points)
+        return [self.evaluate_state(
+            point, risk=risk,
+            corridor=(float(distance), bool(valid)))
+                for point, risk, distance, valid in zip(
+                    points, risks, distances, inside)]
 
     def evaluate_state_or_points(self, state=None, interest_points=None,
                                  robot_type="", task_phase="",

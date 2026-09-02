@@ -137,6 +137,25 @@ def test_batched_wheelchair_footprint_risk_matches_per_pose_evaluation():
         assert batch_summary["phi_mean"] == scalar_summary["phi_mean"]
 
 
+def test_batched_safety_corridor_distance_matches_scalar_evaluation():
+    centerline = np.asarray([
+        [0.0, 0.0, 0.0], [0.4, 0.2, 0.0], [0.8, 0.0, 0.0],
+    ])
+    evaluator = SafetyEvaluator(
+        manifold_constraint={"boundary": [], "minimum_clearance": 0.10,
+                             "risk_threshold": 2.0},
+        corridor_constraint={"centerline": centerline.tolist(), "radius": 0.35},
+        risk_field=ZeroField())
+    points = np.asarray([[0.1, 0.1, 0.0], [0.5, 0.1, 0.0],
+                         [0.9, 0.3, 0.0]])
+    batched = evaluator.evaluate_states(points)
+    scalar = [evaluator.evaluate_state(point) for point in points]
+    for batch, single in zip(batched, scalar):
+        assert np.isclose(batch["corridor_distance"],
+                          single["corridor_distance"])
+        assert batch["inside_corridor"] == single["inside_corridor"]
+
+
 class CountingZeroField(ZeroField):
     def __init__(self):
         self.phi_calls = 0
