@@ -885,6 +885,8 @@ def sync_derived_reports(run_dir, robot, selected, diag, ref_count):
     trace.update({
         "success": bool(validation["overall_success"]),
         "overall_success": bool(validation["overall_success"]),
+        "success_goal": int(truthy(metrics.get("success_goal", validation["task_success"]))),
+        "success_safe": int(truthy(metrics.get("success_safe", validation["safety_success"]))),
         "planner_success": bool(validation["planner_success"]),
         "controller_success": bool(validation["controller_success"]),
         "safety_success": bool(validation["safety_success"]),
