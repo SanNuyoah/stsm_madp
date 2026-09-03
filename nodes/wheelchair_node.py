@@ -4217,6 +4217,11 @@ class WheelchairNode:
                     "max_execution_cost": 50.0,
                     "max_heading_error": 1.50,
                     "max_curvature": executable_curvature_limit,
+                    "dt": float(self.mpc.dt),
+                    "max_speed": float(self.mpc.v_max),
+                    "max_acceleration": float(self.mpc.a_max),
+                    "max_omega": float(self.mpc.w_max),
+                    "max_alpha": float(self.mpc.alpha_max),
                 })
             attempt["execution_validation"] = dict(execution_validation)
             final_safety["execution_validation"] = dict(execution_validation)

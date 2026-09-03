@@ -2606,7 +2606,10 @@ def test_candidate_execution_validation_reports_dynamic_contract():
     result = validate_candidate_execution(
         path, state=[0.0, 0.0, 0.0], goal=[1.0, 0.0],
         limits={"max_execution_cost": 50.0, "max_heading_error": 1.5,
-                "max_curvature": 8.0})
+                "max_curvature": 8.0, "dt": 0.2, "max_speed": 3.0,
+                "max_acceleration": 10.0, "max_omega": 10.0,
+                "max_alpha": 50.0})
     assert result["dynamic_evaluated"] is True
     assert result["hard_valid"] is True
     assert "dynamic_checks" in result
+    assert "max_omega" in result["kinodynamic"]

@@ -69,13 +69,23 @@ def validate_candidate_execution(candidate, state=None, goal=None,
             lengths = np.linalg.norm(np.diff(points[:, :2], axis=0), axis=1)
             speeds = lengths / dt
             accelerations = np.diff(speeds) / dt
+            headings = np.unwrap(np.arctan2(
+                np.diff(points[:, 1]), np.diff(points[:, 0])))
+            omegas = np.diff(headings) / dt if len(headings) >= 2 else np.zeros(0)
+            alphas = np.diff(omegas) / dt if len(omegas) >= 2 else np.zeros(0)
             result["kinodynamic"] = {
                 "max_speed": float(np.max(speeds)) if len(speeds) else 0.0,
                 "max_acceleration": float(np.max(np.abs(accelerations)))
                 if len(accelerations) else 0.0,
+                "max_omega": float(np.max(np.abs(omegas)))
+                if len(omegas) else 0.0,
+                "max_alpha": float(np.max(np.abs(alphas)))
+                if len(alphas) else 0.0,
                 "max_speed_limit": float(limits.get("max_speed", float("inf"))),
                 "max_acceleration_limit": float(
                     limits.get("max_acceleration", float("inf"))),
+                "max_omega_limit": float(limits.get("max_omega", float("inf"))),
+                "max_alpha_limit": float(limits.get("max_alpha", float("inf"))),
             }
         else:
             result["kinodynamic"] = {"status": "not_evaluated"}
@@ -105,6 +115,14 @@ def validate_candidate_execution(candidate, state=None, goal=None,
                                      "limit": kin["max_acceleration_limit"],
                                      "valid": kin["max_acceleration"] <=
                                      kin["max_acceleration_limit"] + 1e-9},
+                "max_omega": {"value": kin["max_omega"],
+                               "limit": kin["max_omega_limit"],
+                               "valid": kin["max_omega"] <=
+                               kin["max_omega_limit"] + 1e-9},
+                "max_alpha": {"value": kin["max_alpha"],
+                               "limit": kin["max_alpha_limit"],
+                               "valid": kin["max_alpha"] <=
+                               kin["max_alpha_limit"] + 1e-9},
             })
         bad = [key for key, item in result["dynamic_checks"].items()
                if not item["valid"]]

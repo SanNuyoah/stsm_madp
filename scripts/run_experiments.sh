@@ -124,6 +124,7 @@ wc_wait_s="${WC_WAIT_S:-12}"
 wc_goal_tolerance="${WC_GOAL_TOLERANCE:-0.08}"
 wc_completion_tolerance="${WC_COMPLETION_TOLERANCE:-0.25}"
 wc_variants="${WC_VARIANTS:-baseline stsm}"
+arm_variants="${ARM_VARIANTS:-baseline stsm}"
 experiment_mode="${EXPERIMENT_MODE:-paper}"
 wc_completion_hold_s="${WC_COMPLETION_HOLD_S:-1.5}"
 wc_max_runtime_s="${WC_MAX_RUNTIME_S:-180.0}"
@@ -1392,6 +1393,7 @@ export WC_COMPLETION_TOLERANCE="${wc_completion_tolerance}"
 export WC_COMMAND_HOLD_S="${wc_command_hold_s}"
 export WC_MPC_SOLVE_DEADLINE_S="${wc_mpc_solve_deadline_s}"
 export WC_VARIANTS="${wc_variants}"
+export ARM_VARIANTS="${arm_variants}"
 export WC_REPLAN_PERIOD="${wc_replan_period}"
 export WC_NEAR_GOAL_RADIUS="${wc_near_goal_radius}"
 export WC_NEAR_GOAL_ADP_SCALE="${wc_near_goal_adp_scale}"
@@ -1423,8 +1425,9 @@ python3 -B "${pkg_dir}/scripts/analysis/results_manager.py" organize \
 
 if [ "${target_filter}" = "all" ] || [ "${target_filter}" = "arm" ]; then
   launch_env arm_view.launch "${arm_wait_s}"
-  run_one arm baseline
-  run_one arm stsm
+  for arm_variant in ${arm_variants}; do
+    run_one arm "${arm_variant}"
+  done
 fi
 
 if [ "${target_filter}" = "all" ] || [ "${target_filter}" = "wheelchair" ]; then
