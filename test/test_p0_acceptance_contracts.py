@@ -57,6 +57,7 @@ from stsm_madp.topology_refinement import refine_topology_path
 from stsm_madp.topology_candidate_generator import (
     TopologyDrivenCandidateGenerator, candidate_topology_identity,
     rank_feasible_candidates)
+from stsm_madp.candidate_validator import validate_candidate_execution
 from stsm_madp.topology_diagnostics_writer import (
     _candidate_ranking_rows, write_failed_topology_diagnostics)
 from stsm_madp.topology_constraint import build_topology_constraint
@@ -103,6 +104,28 @@ def test_arm_executed_controller_acceptance_requires_live_evidence():
     assert derive_executed_controller_acceptance(
         executed_count=8, solve_success_count=4, fallback_count=0,
         stop_triggered=False, solver_status="safe_stop:manifold") is False
+
+
+def test_candidate_execution_validator_enforces_diff_drive_contract():
+    candidate = {"waypoints": [[0.0, 0.0], [0.4, 0.0], [0.8, 0.0]]}
+    status = validate_candidate_execution(
+        candidate, state=[0.0, 0.0, 0.0], goal=[0.8, 0.0],
+        limits={"max_execution_cost": 50.0, "max_heading_error": 1.5,
+                "max_curvature": 8.0})
+    assert status["dynamic_evaluated"] is True
+    assert status["hard_valid"] is True
+    assert status["dynamic_checks"]["max_local_curvature"]["valid"] is True
+
+
+def test_candidate_execution_validator_fails_closed_on_dynamic_violation():
+    candidate = {"waypoints": [[0.0, 0.0], [0.01, 0.0], [0.01, 0.4]]}
+    status = validate_candidate_execution(
+        candidate, state=[0.0, 0.0, 0.0], goal=[0.01, 0.4],
+        limits={"max_execution_cost": 50.0, "max_heading_error": 1.5,
+                "max_curvature": 8.0, "min_step": 0.001})
+    assert status["dynamic_evaluated"] is True
+    assert status["hard_valid"] is False
+    assert status["reject_reason"]
 
 
 def test_strict_safety_evaluator_fails_closed_without_social_context():

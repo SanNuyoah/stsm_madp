@@ -73,6 +73,16 @@ def candidate_decision_record(candidate):
     safety_feasible = bool(manifold_feasible and tube_valid and risk_valid)
     execution_feasible = bool(_candidate_value(
         candidate, "execution_feasible", geometry_valid))
+    # A planner may attach the side-effect-free execution validator result.
+    # Consume it as a hard gate when present; candidates without dynamic
+    # context retain the historical planning-stage behavior and are checked
+    # again after refinement with the real start state.
+    execution_validation = _candidate_value(
+        candidate, "execution_validation", None)
+    if isinstance(execution_validation, dict):
+        execution_feasible = bool(
+            execution_feasible and
+            execution_validation.get("hard_valid", False))
     decision_robot_type = str(_candidate_value(
         candidate, "decision_robot_type", "") or "").lower()
     if (decision_robot_type == "arm" and
@@ -116,6 +126,8 @@ def candidate_decision_record(candidate):
         "geometry_valid": geometry_valid,
         "safety_feasible": safety_feasible,
         "execution_feasible": execution_feasible,
+        "execution_validation": dict(execution_validation or {})
+        if isinstance(execution_validation, dict) else {},
         "hard_feasible": hard_feasible,
         "decision_stage": stage,
         "decision_reason": "eligible" if hard_feasible else ",".join(reasons),
