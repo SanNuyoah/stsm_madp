@@ -61,6 +61,7 @@ from stsm_madp.candidate_validator import validate_candidate_execution
 from stsm_madp.candidate_ranker import (
     rank_feasible_candidates as role_rank_feasible_candidates,
 )
+from stsm_madp.topology_components import default_topology_components
 from stsm_madp.topology_diagnostics_writer import (
     _candidate_ranking_rows, write_failed_topology_diagnostics)
 from stsm_madp.topology_constraint import build_topology_constraint
@@ -2599,6 +2600,15 @@ def test_r001_mpc_reference_lineage_audit_preserves_flattened_index_semantics():
 def test_candidate_ranker_role_boundary_preserves_legacy_callable():
     """The extracted ranking boundary must remain behavior-compatible."""
     assert role_rank_feasible_candidates is rank_feasible_candidates
+
+
+def test_topology_components_bind_existing_roles():
+    components = default_topology_components()
+    assert components.candidate_ranker is role_rank_feasible_candidates
+    assert callable(components.candidate_generator)
+    assert callable(components.candidate_validator)
+    assert callable(components.corridor_manager)
+    assert callable(components.recovery_manager)
 
 
 def test_candidate_execution_validation_reports_dynamic_contract():

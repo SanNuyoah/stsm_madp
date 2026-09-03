@@ -17,6 +17,7 @@ from stsm_madp.candidate_ranker import (
     candidate_topology_identity,
     rank_feasible_candidates,
 )
+from stsm_madp.topology_components import default_topology_components
 from stsm_madp.candidate_recovery import recover_candidates
 from stsm_madp.arm_topology_validator import ArmTopologyValidator
 from stsm_madp.topology_ik_solver import TopologyIKSolver
@@ -385,6 +386,7 @@ class TopologicalCorridorPlanner:
                  candidate_pool_min=None, route_max_paths=None,
                  route_max_routes=None):
         profile = topology_profile_defaults(topology_profile)
+        self.components = default_topology_components()
         self.field = field
         self.rho = float(rho)
         self.bounds = bounds
@@ -4253,7 +4255,7 @@ class TopologicalCorridorPlanner:
         self._apply_normalized_scores(corridors)
         for corridor in corridors:
             corridor.decision_robot_type = str(self.topology_profile)
-        total_order, decision_records = rank_feasible_candidates(corridors)
+        total_order, decision_records = self.components.candidate_ranker(corridors)
         decision_by_id = {
             str(row.get("candidate_id", "")): dict(row)
             for row in decision_records
