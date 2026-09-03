@@ -2644,3 +2644,11 @@ def test_executed_trajectory_preserves_timestamp_and_yaw():
         {}, robot_type="wheelchair")
     assert rows[0]["timestamp"] == 10.0
     assert rows[0]["yaw"] == 0.2
+
+
+def test_points_parser_accepts_timestamped_execution_records():
+    rows, _ = evaluate_executed_trajectory(
+        [{"point": [1.25, -0.5, 0.0], "timestamp": 3.0, "yaw": -1.0}],
+        {}, robot_type="wheelchair")
+    assert rows[0]["x"] == 1.25
+    assert rows[0]["y"] == -0.5

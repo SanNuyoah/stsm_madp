@@ -327,6 +327,15 @@ def _as_points(reference_path):
             for item in reference_path:
                 if not isinstance(item, dict):
                     continue
+                point = item.get("point")
+                if point is not None:
+                    try:
+                        point = list(point)
+                        rows.append([
+                            point[0], point[1], point[2] if len(point) > 2 else 0.0])
+                        continue
+                    except (TypeError, IndexError):
+                        pass
                 rows.append([
                     item.get("x", item.get("ref_x", 0.0)),
                     item.get("y", item.get("ref_y", 0.0)),
