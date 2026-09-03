@@ -126,7 +126,9 @@ def effective_phase_manifold_thresholds(minimum_clearance, risk_threshold,
 
 
 def evaluate_dynamic_state_constraint(state, reference_heading=None,
-                                      limits=None):
+                                      limits=None, curvature=None,
+                                      acceleration=None, omega=None,
+                                      alpha=None):
     """Evaluate the kinodynamic part of the safety manifold for one state.
 
     ``state`` is ``[x, y, theta, v]`` (extra fields are ignored).  The
@@ -146,6 +148,15 @@ def evaluate_dynamic_state_constraint(state, reference_heading=None,
         "heading_error": (heading_error, float(limits.get("heading_max", np.inf))),
         "speed": (abs(speed), float(limits.get("speed_max", np.inf))),
     }
+    optional = {
+        "curvature": (curvature, limits.get("curvature_max", np.inf)),
+        "acceleration": (acceleration, limits.get("acceleration_max", np.inf)),
+        "omega": (omega, limits.get("omega_max", np.inf)),
+        "alpha": (alpha, limits.get("alpha_max", np.inf)),
+    }
+    for name, (value, limit) in optional.items():
+        if value is not None:
+            checks[name] = (abs(float(value)), float(limit))
     return {
         "valid": bool(all(v <= lim + 1e-9 for v, lim in checks.values())),
         "heading_error": heading_error,

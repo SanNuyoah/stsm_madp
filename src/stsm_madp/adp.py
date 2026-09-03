@@ -261,6 +261,32 @@ class ADPCritic(object):
     def predict(self, raw_feature_dict):
         return self.predict_detail(raw_feature_dict)["clipped"]
 
+    def evaluate_value(self, state=None, context=None):
+        """Evaluate terminal value from state plus task/context features.
+
+        Callers may provide an already-built feature dictionary in context;
+        state keys are merged without changing the critic schema.
+        """
+        features = dict(context or {})
+        if isinstance(state, dict):
+            features.update(state)
+        elif state is not None:
+            values = np.asarray(state, float).reshape(-1)
+            for key, index in (("x", 0), ("y", 1), ("theta", 2), ("v", 3)):
+                if index < len(values) and np.isfinite(values[index]):
+                    features[key] = float(values[index])
+        return float(self.predict(features))
+
+    def get_terminal_cost_weight(self, default=0.0):
+        """Return the configured terminal-value contribution weight."""
+        value = self.metadata.get("lambda_adp_terminal",
+                                  self.learning_config.get(
+                                      "lambda_adp_terminal", default))
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
     def predict_detail(self, raw_feature_dict):
         raw = float(np.dot(self.theta, self.featurize(raw_feature_dict)))
         clipped = float(np.clip(raw, -self.clip_value, self.clip_value))

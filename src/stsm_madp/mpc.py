@@ -5510,7 +5510,9 @@ class WheelchairMPC:
                     x, goal, field, gate_info=gate_info,
                     interest_risk=interest_risk, corridor=corridor,
                     u=u_terminal)
-                terminal_adp = max(0.0, critic.predict(features))
+                terminal_adp = max(0.0, critic.evaluate_value(
+                    x, context=features) if hasattr(critic, "evaluate_value")
+                    else critic.predict(features))
             distN = float(np.linalg.norm(x[:2] - goal[:2]))
             progress = dist0 - distN
             initial_heading_error = abs(self._goal_heading_error(x0, ref[0]))

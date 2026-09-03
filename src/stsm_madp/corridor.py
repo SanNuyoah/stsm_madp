@@ -65,6 +65,11 @@ def corridor_contract(corridor, reference_path=None):
     centerline = _first_points(refined, reference, raw_waypoints)
     radius = float(getattr(corridor, "radius", 0.0) or 0.0)
     boundary = dict(getattr(corridor, "boundary", {}) or {})
+    state_tube = getattr(corridor, "state_tube", None)
+    if state_tube is None:
+        state_tube = getattr(corridor, "trajectory_tube", None)
+    if state_tube is None:
+        state_tube = {}
     source = str(
         getattr(corridor, "candidate_source", "") or
         getattr(corridor, "route_source", "") or
@@ -85,6 +90,7 @@ def corridor_contract(corridor, reference_path=None):
             "radius": radius,
             "boundary": boundary,
             "centerline": centerline.tolist(),
+            "state": dict(state_tube) if isinstance(state_tube, dict) else state_tube,
         },
         "source": source,
         "recovery_level": recovery_level,
