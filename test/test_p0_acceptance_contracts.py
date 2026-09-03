@@ -23,6 +23,7 @@ from stsm_madp.manifold_constraint import (
     ManifoldConstraint,
     assert_manifold_mode_consistency,
     distance_to_manifold_boundary,
+    evaluate_dynamic_state_constraint,
 )
 from stsm_madp.manifold_constraint_evaluator import ManifoldConstraintEvaluator
 from stsm_madp.manifold import SafetyManifold
@@ -2636,6 +2637,13 @@ def test_candidate_execution_uses_real_sample_times_for_dynamics():
                 "max_alpha": 1.0})
     assert result["kinodynamic"]["max_speed"] == 0.1
     assert result["hard_valid"] is True
+
+
+def test_dynamic_state_constraint_contract():
+    result = evaluate_dynamic_state_constraint(
+        [0.0, 0.0, 0.1, 0.2], reference_heading=0.0,
+        limits={"heading_max": 0.5, "speed_max": 0.5})
+    assert result["valid"] is True
 
 
 def test_executed_trajectory_preserves_timestamp_and_yaw():

@@ -6,6 +6,7 @@ existing planner remains backward compatible when no dynamic context is
 available.
 """
 import numpy as np
+from stsm_madp.manifold_constraint import evaluate_dynamic_state_constraint
 
 
 def _points(value):
@@ -62,6 +63,14 @@ def validate_candidate_execution(candidate, state=None, goal=None,
             horizon_points=int(limits.get("horizon_points", 10)),
             executable_curvature=float(limits.get("max_curvature", 8.0)))
         result["execution_profile"] = dict(profile)
+        state4 = np.asarray(state, float)
+        if state4.size >= 4:
+            result["dynamic_state"] = evaluate_dynamic_state_constraint(
+                state4[:4], reference_heading=(
+                    float(np.arctan2(points[1, 1] - points[0, 1],
+                                     points[1, 0] - points[0, 0]))),
+                limits={"heading_max": float(limits.get("max_heading_error", 1.5)),
+                        "speed_max": float(limits.get("max_speed", np.inf))})
         # Optional kinodynamic checks use the same sampled path and never
         # alter it.  They are enabled when a positive sample period is given.
         # A geometric corridor has no timing semantics.  Only use dynamic

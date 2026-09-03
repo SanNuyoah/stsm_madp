@@ -125,6 +125,37 @@ def effective_phase_manifold_thresholds(minimum_clearance, risk_threshold,
     return float(effective_clearance), float(risk)
 
 
+def evaluate_dynamic_state_constraint(state, reference_heading=None,
+                                      limits=None):
+    """Evaluate the kinodynamic part of the safety manifold for one state.
+
+    ``state`` is ``[x, y, theta, v]`` (extra fields are ignored).  The
+    function is pure and takes all limits explicitly so planning and runtime
+    callers cannot silently use different defaults.
+    """
+    values = np.asarray(state, float).reshape(-1)
+    limits = dict(limits or {})
+    if values.size < 4 or not np.all(np.isfinite(values[:4])):
+        return {"valid": False, "reason": "state_invalid"}
+    heading_error = 0.0
+    if reference_heading is not None:
+        heading_error = abs(float((values[2] - float(reference_heading) + np.pi) %
+                                  (2.0 * np.pi) - np.pi))
+    speed = float(values[3])
+    checks = {
+        "heading_error": (heading_error, float(limits.get("heading_max", np.inf))),
+        "speed": (abs(speed), float(limits.get("speed_max", np.inf))),
+    }
+    return {
+        "valid": bool(all(v <= lim + 1e-9 for v, lim in checks.values())),
+        "heading_error": heading_error,
+        "speed": speed,
+        "checks": {k: {"value": v, "limit": lim,
+                        "valid": bool(v <= lim + 1e-9)}
+                    for k, (v, lim) in checks.items()},
+    }
+
+
 class ManifoldConstraint(dict):
     """MPC-facing safety manifold constraint payload."""
 
