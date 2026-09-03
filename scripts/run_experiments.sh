@@ -1114,6 +1114,7 @@ run_one() {
   local baseline_arg="false"
   local baseline_type="direct"
   local run_adp_enabled="${adp_enabled}"
+  local run_mpc_use_adp_terminal="false"
   local run_adp_model
   local adp_expected_critic_version
   local adp_expected_theta_hash
@@ -1151,6 +1152,7 @@ run_one() {
     baseline_arg="false"
     variant="stsm"
     run_adp_enabled="${adp_enabled}"
+    run_mpc_use_adp_terminal="${mpc_use_adp_terminal}"
   else
     echo "[run_experiments] unsupported wheelchair variant: ${mode}" >&2
     return 2
@@ -1290,7 +1292,7 @@ EOF
       lambda_adp:="${lambda_adp}" \
       lambda_adp_corridor:="${lambda_adp_corridor}" \
       lambda_adp_terminal:="${lambda_adp_terminal}" \
-      mpc_use_adp_terminal:="${mpc_use_adp_terminal}" \
+      mpc_use_adp_terminal:="${run_mpc_use_adp_terminal}" \
       adp_post_scale_enabled:="${adp_post_scale_enabled}" \
       adp_min_scale:="${adp_min_scale}" \
       adp_debug:="${adp_debug}" \
