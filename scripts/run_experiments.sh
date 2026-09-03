@@ -108,7 +108,9 @@ adp_grad_clip="${ADP_GRAD_CLIP:-8.0}"
 adp_solver_mode="${ADP_SOLVER_MODE:-dls_adp}"
 use_cvxpy="${USE_CVXPY:-false}"
 adp_blend_alpha="${ADP_BLEND_ALPHA:-0.08}"
-mpc_use_adp_terminal="${MPC_USE_ADP_TERMINAL:-false}"
+# Wheelchair MPC has an explicit terminal-value contract; keep it enabled for
+# formal STSM runs unless explicitly overridden. Baseline disables ADP in-node.
+mpc_use_adp_terminal="${MPC_USE_ADP_TERMINAL:-true}"
 adp_post_scale_enabled="${ADP_POST_SCALE_ENABLED:-false}"
 adp_min_scale="${ADP_MIN_SCALE:-0.35}"
 adp_debug="${ADP_DEBUG:-false}"

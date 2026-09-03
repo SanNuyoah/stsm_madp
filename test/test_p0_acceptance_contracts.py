@@ -58,6 +58,9 @@ from stsm_madp.topology_candidate_generator import (
     TopologyDrivenCandidateGenerator, candidate_topology_identity,
     rank_feasible_candidates)
 from stsm_madp.candidate_validator import validate_candidate_execution
+from stsm_madp.candidate_ranker import (
+    rank_feasible_candidates as role_rank_feasible_candidates,
+)
 from stsm_madp.topology_diagnostics_writer import (
     _candidate_ranking_rows, write_failed_topology_diagnostics)
 from stsm_madp.topology_constraint import build_topology_constraint
@@ -2591,3 +2594,8 @@ def test_r001_mpc_reference_lineage_audit_preserves_flattened_index_semantics():
     assert np.isclose(worst["clearance"], 0.011571238099605809)
     assert worst["lineage"]["generated_by"] == "identity"
     assert not worst["lineage"]["coordinate_changed"]
+
+
+def test_candidate_ranker_role_boundary_preserves_legacy_callable():
+    """The extracted ranking boundary must remain behavior-compatible."""
+    assert role_rank_feasible_candidates is rank_feasible_candidates

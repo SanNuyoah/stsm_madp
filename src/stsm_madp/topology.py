@@ -10,9 +10,11 @@ import numpy as np
 from stsm_madp.manifold import Corridor
 from stsm_madp.topology_candidate_generator import (
     TopologyDrivenCandidateGenerator,
-    candidate_topology_identity,
     evaluate_candidate,
     evaluate_candidate_manifold_feasibility,
+)
+from stsm_madp.candidate_ranker import (
+    candidate_topology_identity,
     rank_feasible_candidates,
 )
 from stsm_madp.candidate_recovery import recover_candidates
