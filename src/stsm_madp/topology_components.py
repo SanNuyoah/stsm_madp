@@ -3,18 +3,19 @@
 This keeps the large legacy planner compatible while making its major
 responsibilities explicit and replaceable one at a time.
 """
-from dataclasses import dataclass
-
 import stsm_madp.candidate_ranker as candidate_ranker
 
 
-@dataclass(frozen=True)
 class TopologyPlanningComponents:
-    candidate_generator: object
-    candidate_validator: object
-    candidate_ranker: object
-    corridor_manager: object
-    recovery_manager: object
+    """Python 2/3-compatible immutable-by-convention role bindings."""
+
+    def __init__(self, candidate_generator, candidate_validator,
+                 candidate_ranker, corridor_manager, recovery_manager):
+        self.candidate_generator = candidate_generator
+        self.candidate_validator = candidate_validator
+        self.candidate_ranker = candidate_ranker
+        self.corridor_manager = corridor_manager
+        self.recovery_manager = recovery_manager
 
 
 def default_topology_components():
