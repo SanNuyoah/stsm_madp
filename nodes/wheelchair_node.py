@@ -44,6 +44,7 @@ from stsm_madp.adp import (
 from stsm_madp.topology import topology_param_or_auto, topology_profile_defaults
 from stsm_madp.topology_candidate_generator import (
     recover_candidate_corridor_feasibility)
+from stsm_madp.candidate_validator import validate_candidate_execution
 from stsm_madp.topology_refinement import (
     refine_topology_path, smooth_wheelchair_corners)
 from stsm_madp.decision_trace import trace_from_debug, write_trace
@@ -4206,6 +4207,27 @@ class WheelchairNode:
             final_safety = self._final_reference_safety_status(
                 corr, refined, final_gate_context, final_constraint)
             attempt["final_reference_safety"] = dict(final_safety)
+            # Keep the candidate execution contract explicit at the final
+            # planning boundary.  This reuses the authoritative nonholonomic
+            # profile and records dynamic feasibility without changing any
+            # safety thresholds or generating a fallback path.
+            execution_validation = validate_candidate_execution(
+                {"waypoints": refined}, state=self.state, goal=self.goal,
+                robot_type="wheelchair", limits={
+                    "max_execution_cost": 50.0,
+                    "max_heading_error": 1.50,
+                    "max_curvature": executable_curvature_limit,
+                })
+            attempt["execution_validation"] = dict(execution_validation)
+            final_safety["execution_validation"] = dict(execution_validation)
+            if not bool(execution_validation.get("hard_valid", False)):
+                final_safety["final_reference_valid"] = False
+                final_safety["reject_reason"] = (
+                    "candidate_execution_infeasible:" +
+                    str(execution_validation.get("reject_reason", "unknown")))
+            refinement_output = dict(getattr(corr, "refinement_output", {}) or {})
+            refinement_output["execution_validation"] = dict(execution_validation)
+            corr.refinement_output = refinement_output
             if not bool(final_safety.get("final_reference_valid", False)):
                 corr.reject_reason = str(final_safety.get(
                     "reject_reason", "final_reference_manifold_violation"))

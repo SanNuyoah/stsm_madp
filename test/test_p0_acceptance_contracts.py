@@ -2599,3 +2599,14 @@ def test_r001_mpc_reference_lineage_audit_preserves_flattened_index_semantics():
 def test_candidate_ranker_role_boundary_preserves_legacy_callable():
     """The extracted ranking boundary must remain behavior-compatible."""
     assert role_rank_feasible_candidates is rank_feasible_candidates
+
+
+def test_candidate_execution_validation_reports_dynamic_contract():
+    path = {"waypoints": [[0.0, 0.0], [0.5, 0.0], [1.0, 0.0]]}
+    result = validate_candidate_execution(
+        path, state=[0.0, 0.0, 0.0], goal=[1.0, 0.0],
+        limits={"max_execution_cost": 50.0, "max_heading_error": 1.5,
+                "max_curvature": 8.0})
+    assert result["dynamic_evaluated"] is True
+    assert result["hard_valid"] is True
+    assert "dynamic_checks" in result
