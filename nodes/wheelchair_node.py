@@ -7062,8 +7062,7 @@ class WheelchairNode:
                 "social_direction_model": self.social_field_direction_model,
                 "weights": self.mpc_cost_weights,
                 "phase_cost_weights": self.mpc_phase_cost_weights,
-                "executed_trajectory": [
-                    row["point"] for row in self.mpc_executed_records],
+                "executed_trajectory": list(self.mpc_executed_records),
                 "executed_phase_sequence": [
                     row["phase"] for row in self.mpc_executed_records],
                 "executed_evidence_required": True,
@@ -8918,6 +8917,8 @@ class WheelchairNode:
                 self.mpc_executed_records.append({
                     "point": [float(self.state[0]), float(self.state[1]), 0.0],
                     "phase": "navigation",
+                    "timestamp": float(rospy.Time.now().to_sec()),
+                    "yaw": float(self.state[2]),
                 })
             self._publish_metrics()
             z = np.array([self.state[0], self.state[1], 0.0])

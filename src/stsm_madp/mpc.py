@@ -1860,6 +1860,10 @@ def evaluate_executed_trajectory(trajectory, context, social_field=None,
     corridor_active = list(corridor_active_sequence or [])
     rows = []
     for index, point in enumerate(points):
+        source_row = (trajectory[index]
+                      if isinstance(trajectory, (list, tuple)) and
+                      index < len(trajectory) and
+                      isinstance(trajectory[index], dict) else {})
         phase = phases[min(index, len(phases) - 1)] if phases else (
             "navigation" if str(robot_type).lower() == "wheelchair" else "approach")
         progress = _phase_local_progress(phases, index) if phases else 0.0
@@ -1891,6 +1895,8 @@ def evaluate_executed_trajectory(trajectory, context, social_field=None,
             "phase": str(phase),
             "progress": float(progress),
             "trajectory_source": "executed",
+            "timestamp": float(source_row.get("timestamp", 0.0) or 0.0),
+            "yaw": float(source_row.get("yaw", 0.0) or 0.0),
             "risk": float(risk_info.get("risk_value", 0.0)),
             "risk_value": float(risk_info.get("risk_value", 0.0)),
             "risk_query_valid": int(bool(risk_info.get("risk_query_valid", False))),

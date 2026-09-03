@@ -2636,3 +2636,11 @@ def test_candidate_execution_uses_real_sample_times_for_dynamics():
                 "max_alpha": 1.0})
     assert result["kinodynamic"]["max_speed"] == 0.1
     assert result["hard_valid"] is True
+
+
+def test_executed_trajectory_preserves_timestamp_and_yaw():
+    rows, _ = evaluate_executed_trajectory(
+        [{"x": 0.0, "y": 0.0, "timestamp": 10.0, "yaw": 0.2}],
+        {}, robot_type="wheelchair")
+    assert rows[0]["timestamp"] == 10.0
+    assert rows[0]["yaw"] == 0.2
