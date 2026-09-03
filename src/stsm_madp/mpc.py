@@ -1830,6 +1830,26 @@ def _apply_success_contract(result, reference_audit=None):
     return result
 
 
+def derive_executed_controller_acceptance(
+        executed_count, solve_success_count, fallback_count=0,
+        stop_triggered=False, solver_status=""):
+    """Return the explicit acceptance bit for measured arm execution.
+
+    The executed trajectory is authoritative only when the controller really
+    produced measured samples.  Acceptance therefore requires evidence that
+    the live solver made progress, did not use a fallback, and did not end in
+    a fail-closed safe stop.  Safety/manifold validity remains evaluated by
+    :func:`evaluate_executed_trajectory` and the success contract.
+    """
+    status = str(solver_status or "").strip().lower()
+    return bool(
+        int(executed_count or 0) > 0 and
+        int(solve_success_count or 0) > 0 and
+        int(fallback_count or 0) == 0 and
+        not bool(stop_triggered) and
+        not status.startswith("safe_stop:"))
+
+
 def evaluate_executed_trajectory(trajectory, context, social_field=None,
                                  robot_type="", phase_sequence=None,
                                  corridor_active_sequence=None):

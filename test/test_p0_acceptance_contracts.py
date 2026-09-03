@@ -26,7 +26,9 @@ from stsm_madp.manifold_constraint import (
 )
 from stsm_madp.manifold_constraint_evaluator import ManifoldConstraintEvaluator
 from stsm_madp.manifold import SafetyManifold
-from stsm_madp.mpc import ArmMPC, WheelchairMPC, run_mpc_tracking
+from stsm_madp.mpc import (
+    ArmMPC, WheelchairMPC, derive_executed_controller_acceptance,
+    run_mpc_tracking)
 from stsm_madp.mpc import build_mpc_constraint_inputs
 from stsm_madp.mpc import audit_reference_safety
 from stsm_madp.mpc import _phase_constraint_diagnostics_payload
@@ -83,6 +85,24 @@ class BatchRiskField(object):
     def phi_s_batch(self, points, velocities=None):
         points = np.asarray(points, float)
         return points[:, 0] ** 2 + 0.5 * points[:, 1] ** 2
+
+
+def test_arm_executed_controller_acceptance_requires_live_evidence():
+    assert derive_executed_controller_acceptance(
+        executed_count=8, solve_success_count=4, fallback_count=0,
+        stop_triggered=False, solver_status="dls") is True
+    assert derive_executed_controller_acceptance(
+        executed_count=0, solve_success_count=4, fallback_count=0,
+        stop_triggered=False, solver_status="dls") is False
+    assert derive_executed_controller_acceptance(
+        executed_count=8, solve_success_count=4, fallback_count=1,
+        stop_triggered=False, solver_status="dls") is False
+    assert derive_executed_controller_acceptance(
+        executed_count=8, solve_success_count=4, fallback_count=0,
+        stop_triggered=True, solver_status="dls") is False
+    assert derive_executed_controller_acceptance(
+        executed_count=8, solve_success_count=4, fallback_count=0,
+        stop_triggered=False, solver_status="safe_stop:manifold") is False
 
 
 def test_strict_safety_evaluator_fails_closed_without_social_context():

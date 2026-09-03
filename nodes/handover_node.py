@@ -25,7 +25,8 @@ from stsm_madp.deform import (
     protected_waypoint_distances, topology_preserving_shortcut)
 from stsm_madp.mpc import (
     ArmMPC, build_mpc_constraint_inputs, generate_topology_tube,
-    run_mpc_tracking, write_mpc_outputs)
+    derive_executed_controller_acceptance, run_mpc_tracking,
+    write_mpc_outputs)
 from stsm_madp.topology_constraint import write_topology_constraint
 from stsm_madp.safety_gate import SafetyGate, SafetyGateResult
 from stsm_madp.adp import (
@@ -3507,6 +3508,17 @@ class HandoverNode:
                     bool(row.get("corridor_active", False))
                     for row in self.mpc_executed_records],
                 "executed_evidence_required": True,
+                # Arm execution is authoritative at this point.  Pass an
+                # explicit acceptance bit instead of relying on the generic
+                # default (False); safety/manifold truth is still recomputed
+                # from the measured trajectory inside run_mpc_tracking.
+                "executed_controller_accepted":
+                    derive_executed_controller_acceptance(
+                        len(self.mpc_executed_records),
+                        self.mpc.solve_success_count,
+                        self.mpc.fallback_count,
+                        self.stop_triggered,
+                        self.mpc.last_solver_status),
             })
         result["selected_corridor_label"] = str(getattr(corr, "label", cid))
         result.update(self._runtime_mpc_diagnostic_fields())
