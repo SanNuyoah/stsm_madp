@@ -64,15 +64,35 @@ def validate_candidate_execution(candidate, state=None, goal=None,
         result["execution_profile"] = dict(profile)
         # Optional kinodynamic checks use the same sampled path and never
         # alter it.  They are enabled when a positive sample period is given.
+        # A geometric corridor has no timing semantics.  Only use dynamic
+        # limits when the caller supplies a real sample period or timestamps.
+        sample_times = candidate.get("sample_times") if isinstance(
+            candidate, dict) else getattr(candidate, "sample_times", None)
         dt = float(limits.get("dt", 0.0) or 0.0)
-        if dt > 0.0 and len(points) >= 3:
+        if sample_times is not None:
+            try:
+                times = np.asarray(sample_times, float).reshape(-1)
+                if len(times) == len(points) and np.all(np.diff(times) > 1e-9):
+                    dt = times
+            except (TypeError, ValueError):
+                pass
+        has_timing = ((np.isscalar(dt) and float(dt) > 0.0) or
+                      (not np.isscalar(dt) and len(dt) == len(points)))
+        if has_timing and len(points) >= 3:
             lengths = np.linalg.norm(np.diff(points[:, :2], axis=0), axis=1)
-            speeds = lengths / dt
-            accelerations = np.diff(speeds) / dt
+            if np.isscalar(dt):
+                intervals = np.full(len(lengths), float(dt), float)
+            else:
+                intervals = np.diff(dt)
+            speeds = lengths / np.maximum(intervals, 1e-9)
+            accelerations = np.diff(speeds) / np.maximum(
+                intervals[1:], 1e-9)
             headings = np.unwrap(np.arctan2(
                 np.diff(points[:, 1]), np.diff(points[:, 0])))
-            omegas = np.diff(headings) / dt if len(headings) >= 2 else np.zeros(0)
-            alphas = np.diff(omegas) / dt if len(omegas) >= 2 else np.zeros(0)
+            omegas = (np.diff(headings) / np.maximum(intervals[1:], 1e-9)
+                      if len(headings) >= 2 else np.zeros(0))
+            alphas = (np.diff(omegas) / np.maximum(intervals[2:], 1e-9)
+                      if len(omegas) >= 2 else np.zeros(0))
             result["kinodynamic"] = {
                 "max_speed": float(np.max(speeds)) if len(speeds) else 0.0,
                 "max_acceleration": float(np.max(np.abs(accelerations)))

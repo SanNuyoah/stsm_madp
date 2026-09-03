@@ -2623,3 +2623,16 @@ def test_candidate_execution_validation_reports_dynamic_contract():
     assert result["hard_valid"] is True
     assert "dynamic_checks" in result
     assert "max_omega" in result["kinodynamic"]
+
+
+def test_candidate_execution_uses_real_sample_times_for_dynamics():
+    result = validate_candidate_execution(
+        {"waypoints": [[0.0, 0.0], [0.1, 0.0], [0.2, 0.0]],
+         "sample_times": [0.0, 1.0, 2.0]},
+        state=[0.0, 0.0, 0.0], goal=[0.2, 0.0],
+        limits={"max_execution_cost": 50.0, "max_heading_error": 1.5,
+                "max_curvature": 8.0, "max_speed": 0.5,
+                "max_acceleration": 1.0, "max_omega": 1.0,
+                "max_alpha": 1.0})
+    assert result["kinodynamic"]["max_speed"] == 0.1
+    assert result["hard_valid"] is True
