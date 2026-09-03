@@ -372,6 +372,11 @@ class WheelchairNode:
         self.steering_stall_count = 0
         self.execution_response_stall_count = 0
         self.angular_response_stall_count = 0
+        # Live negative-progress decisions are evaluated over a short rolling
+        # window.  A single MPC sample can legitimately be negative while the
+        # base is aligning; fail-closed stopping remains reserved for a
+        # sustained, motionless window.
+        self.live_progress_window = []
         self.execution_state_records = []
         self.baseline_reference_records = []
         self.baseline_mpc_output_records = []
@@ -9285,9 +9290,40 @@ class WheelchairNode:
                     "first_step_goal_progress", 0.0))
                 first_ref_progress = float(objective.get(
                     "first_step_reference_progress", 0.0))
-                if (heading_recovery_live and
-                        first_goal_progress < -1.0e-3 and
-                        first_ref_progress < -1.0e-3):
+                actual_window_delta = float(np.linalg.norm(
+                    np.asarray(self.state, float)[:2] -
+                    np.asarray(audit_previous_state, float)[:2]))
+                self.live_progress_window.append({
+                    "goal": first_goal_progress,
+                    "reference": first_ref_progress,
+                    "delta_xy": actual_window_delta,
+                    "heading_recovery_live": heading_recovery_live,
+                })
+                self.live_progress_window = self.live_progress_window[-5:]
+                window_ready = len(self.live_progress_window) >= 5
+                window_goal = float(np.mean([
+                    item["goal"] for item in self.live_progress_window]))
+                window_reference = float(np.mean([
+                    item["reference"] for item in self.live_progress_window]))
+                window_motion = float(max([
+                    item["delta_xy"] for item in self.live_progress_window] or
+                    [0.0]))
+                align_guard = bool(
+                    self.execution_mode == "ALIGN" or
+                    abs(self._stsm_reference_heading_error(ref)) >
+                    self.align_enter_threshold)
+                runtime_record["negative_progress_window_size"] = int(
+                    len(self.live_progress_window))
+                runtime_record["negative_progress_window_goal_mean"] = window_goal
+                runtime_record["negative_progress_window_reference_mean"] = (
+                    window_reference)
+                runtime_record["negative_progress_window_motion_max"] = window_motion
+                runtime_record["negative_progress_align_guard"] = align_guard
+                if (heading_recovery_live and window_ready and
+                        window_goal < -1.0e-3 and
+                        window_reference < -1.0e-3 and
+                        window_motion <= self.no_progress_epsilon and
+                        not align_guard):
                     local_reason = (
                         "mpc_live_negative_first_step_progress:"
                         "goal=%.6f,ref=%.6f" %
