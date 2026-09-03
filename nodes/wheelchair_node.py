@@ -44,7 +44,8 @@ from stsm_madp.adp import (
 from stsm_madp.topology import topology_param_or_auto, topology_profile_defaults
 from stsm_madp.topology_candidate_generator import (
     recover_candidate_corridor_feasibility)
-from stsm_madp.candidate_validator import validate_candidate_execution
+from stsm_madp.candidate_validator import (
+    build_state_tube, validate_state_tube, validate_candidate_execution)
 from stsm_madp.topology_refinement import (
     refine_topology_path, smooth_wheelchair_corners)
 from stsm_madp.decision_trace import trace_from_debug, write_trace
@@ -4218,6 +4219,23 @@ class WheelchairNode:
                     "max_heading_error": 1.50,
                     "max_curvature": executable_curvature_limit,
                 })
+            state_tube = build_state_tube(
+                refined, initial_yaw=float(self.state[2]), limits={
+                    "dt": float(self.mpc.dt), "max_speed": float(self.mpc.v_max),
+                    "max_omega": float(self.mpc.w_max)})
+            state_tube_validation = validate_state_tube(state_tube, limits={
+                "max_speed": float(self.mpc.v_max),
+                "max_acceleration": float(self.mpc.a_max),
+                "max_omega": float(self.mpc.w_max),
+                "max_alpha": float(self.mpc.alpha_max)})
+            execution_validation["state_tube"] = state_tube
+            execution_validation["state_tube_validation"] = state_tube_validation
+            if not bool(state_tube_validation.get("valid", False)):
+                execution_validation["hard_valid"] = False
+                execution_validation["reject_reason"] = (
+                    str(execution_validation.get("reject_reason", "")) +
+                    ("|" if execution_validation.get("reject_reason") else "") +
+                    "state_tube:" + str(state_tube_validation.get("reason", "")))
             attempt["execution_validation"] = dict(execution_validation)
             final_safety["execution_validation"] = dict(execution_validation)
             if not bool(execution_validation.get("hard_valid", False)):

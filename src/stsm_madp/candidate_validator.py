@@ -23,6 +23,58 @@ def _points(value):
     return arr[:, :3]
 
 
+def build_state_tube(points, initial_yaw=0.0, limits=None):
+    """Create a conservative time-parameterized ``(x,y,theta,v,t)`` tube."""
+    pts = _points(points)
+    limits = dict(limits or {})
+    if len(pts) < 2:
+        return {"valid": False, "reason": "geometry_invalid", "states": []}
+    dt = max(float(limits.get("dt", 0.2)), 1e-3)
+    v_max = max(float(limits.get("max_speed", 0.5)), 1e-6)
+    omega_max = max(float(limits.get("max_omega", 1.0)), 1e-6)
+    headings = np.unwrap(np.arctan2(np.diff(pts[:, 1]), np.diff(pts[:, 0])))
+    headings = np.r_[float(initial_yaw), headings]
+    times = [0.0]
+    for i, seg in enumerate(np.diff(pts[:, :2], axis=0)):
+        length = float(np.linalg.norm(seg))
+        turn = abs(float(headings[i + 1] - headings[i]))
+        times.append(times[-1] + max(dt, length / v_max, turn / omega_max))
+    intervals = np.diff(np.asarray(times))
+    speeds = np.r_[0.0, np.linalg.norm(np.diff(pts[:, :2], axis=0), axis=1) /
+                   np.maximum(intervals, 1e-9)]
+    states = [[float(p[0]), float(p[1]), float(headings[i]), float(speeds[i]),
+               float(times[i])] for i, p in enumerate(pts)]
+    return {"valid": True, "states": states, "times": times,
+            "max_speed": float(np.max(speeds)),
+            "max_omega": float(np.max(np.abs(np.diff(headings) /
+                                             np.maximum(intervals, 1e-9))))}
+
+
+def validate_state_tube(tube, limits=None):
+    """Hard-check a time-parameterized state tube."""
+    limits = dict(limits or {})
+    states = np.asarray(tube.get("states", []), float)
+    if states.ndim != 2 or states.shape[0] < 2 or states.shape[1] < 5:
+        return {"valid": False, "reason": "state_tube_missing"}
+    dt = np.maximum(np.diff(states[:, 4]), 1e-9)
+    speeds = states[:, 3]
+    omega = np.diff(states[:, 2]) / dt
+    accel = np.diff(speeds) / dt
+    alpha = np.diff(omega) / np.maximum(dt[1:], 1e-9)
+    checks = {
+        "max_speed": (np.max(np.abs(speeds)), limits.get("max_speed", np.inf)),
+        "max_acceleration": (np.max(np.abs(accel)), limits.get("max_acceleration", np.inf)),
+        "max_omega": (np.max(np.abs(omega)), limits.get("max_omega", np.inf)),
+        "max_alpha": (np.max(np.abs(alpha)) if len(alpha) else 0.0,
+                      limits.get("max_alpha", np.inf)),
+    }
+    bad = [k for k, (v, lim) in checks.items() if v > float(lim) + 1e-9]
+    return {"valid": not bad, "reason": "|".join(bad),
+            "checks": {k: {"value": float(v), "limit": float(lim),
+                            "valid": bool(v <= float(lim) + 1e-9)}
+                        for k, (v, lim) in checks.items()}}
+
+
 def validate_candidate_execution(candidate, state=None, goal=None,
                                  robot_type="wheelchair", limits=None):
     """Validate candidate geometry and optional dynamic execution profile.
@@ -178,4 +230,5 @@ def validate_candidate_execution(candidate, state=None, goal=None,
     return result
 
 
-__all__ = ["validate_candidate_execution"]
+__all__ = ["build_state_tube", "validate_state_tube",
+           "validate_candidate_execution"]

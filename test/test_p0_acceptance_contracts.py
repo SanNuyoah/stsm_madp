@@ -59,6 +59,7 @@ from stsm_madp.topology_candidate_generator import (
     TopologyDrivenCandidateGenerator, candidate_topology_identity,
     rank_feasible_candidates)
 from stsm_madp.candidate_validator import validate_candidate_execution
+from stsm_madp.candidate_validator import build_state_tube, validate_state_tube
 from stsm_madp.candidate_ranker import (
     rank_feasible_candidates as role_rank_feasible_candidates,
 )
@@ -2643,6 +2644,17 @@ def test_dynamic_state_constraint_contract():
     result = evaluate_dynamic_state_constraint(
         [0.0, 0.0, 0.1, 0.2], reference_heading=0.0,
         limits={"heading_max": 0.5, "speed_max": 0.5})
+    assert result["valid"] is True
+
+
+def test_state_tube_is_time_parameterized_and_hard_checked():
+    tube = build_state_tube([[0.0, 0.0], [0.1, 0.0], [0.2, 0.0]],
+                            initial_yaw=0.0,
+                            limits={"dt": 0.2, "max_speed": 0.5,
+                                    "max_omega": 1.0})
+    result = validate_state_tube(
+        tube, {"max_speed": 0.5, "max_acceleration": 3.0,
+               "max_omega": 1.0, "max_alpha": 2.0})
     assert result["valid"] is True
 
 
