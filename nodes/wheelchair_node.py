@@ -7700,9 +7700,9 @@ class WheelchairNode:
         for rank, row in enumerate(ranking_rows, start=1):
             row["rank"] = int(rank)
         with open(os.path.join(base, "candidate_corridors.json"), "w") as f:
-            json.dump(rows, f, indent=2, sort_keys=True)
+            json.dump(_jsonable(rows), f, indent=2, sort_keys=True)
         with open(os.path.join(base, "candidate_ranking.json"), "w") as f:
-            json.dump(ranking_rows, f, indent=2, sort_keys=True)
+            json.dump(_jsonable(ranking_rows), f, indent=2, sort_keys=True)
         write_stsm_candidate_ranking_alias(
             base, "wheelchair", ranking_rows)
         candidate_task_breakdown = []
