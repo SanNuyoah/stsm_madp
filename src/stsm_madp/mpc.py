@@ -5060,6 +5060,9 @@ class WheelchairMPC:
         self.heading_recovery_w_max = 0.45
         self.last_final_approach_used = 0
         self.last_terminal_adp_cost = 0.0
+        self.last_terminal_adp_value = 0.0
+        self.last_terminal_adp_weight = 0.0
+        self.last_terminal_adp_cost_ratio = 0.0
         self.last_total_cost = 0.0
         self.last_social_cost = 0.0
         self.last_tube_cost = 0.0
@@ -5510,9 +5513,11 @@ class WheelchairMPC:
                     x, goal, field, gate_info=gate_info,
                     interest_risk=interest_risk, corridor=corridor,
                     u=u_terminal)
-                terminal_adp = max(0.0, critic.evaluate_value(
-                    x, context=features) if hasattr(critic, "evaluate_value")
-                    else critic.predict(features))
+                terminal_adp = max(0.0, critic.evaluate_terminal_value(
+                    x, context=features) if hasattr(
+                        critic, "evaluate_terminal_value") else
+                    critic.evaluate_value(x, context=features) if hasattr(
+                        critic, "evaluate_value") else critic.predict(features))
             distN = float(np.linalg.norm(x[:2] - goal[:2]))
             progress = dist0 - distN
             initial_heading_error = abs(self._goal_heading_error(x0, ref[0]))
@@ -5758,6 +5763,11 @@ class WheelchairMPC:
                 abs(float(row["w"]) - float(best_u[1])) <= 1e-9)
         timing["candidate_population_audit"] = candidate_audit
         self.last_terminal_adp_cost = float(terminal_adp)
+        self.last_terminal_adp_value = float(terminal_adp)
+        self.last_terminal_adp_weight = float(lambda_adp_terminal) * adp_scale
+        self.last_terminal_adp_cost_ratio = float(
+            abs(self.last_terminal_adp_weight * self.last_terminal_adp_value) /
+            max(abs(float(best_cost)), 1e-9))
         self.last_track_cost = float(objective.get("tracking", 0.0))
         self.last_social_cost = float(objective.get("social", 0.0))
         self.last_tube_cost = float(objective.get("tube", 0.0))

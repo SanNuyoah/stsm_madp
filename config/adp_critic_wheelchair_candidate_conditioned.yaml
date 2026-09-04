@@ -42,7 +42,8 @@ learning:
   failure_terminal_penalty: 3.0
   lambda_adp: 0.02
   min_transition_dt: 0.1
-  mpc_influence_enabled: false
+  mpc_influence_enabled: true
+  lambda_adp_terminal: 0.05
   ranking_influence_enabled: true
   risk_scale: 2.0
   save_every_n_transitions: 50

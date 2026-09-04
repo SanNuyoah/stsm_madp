@@ -7474,6 +7474,12 @@ class WheelchairNode:
             "adp_affects_control": int(affects_control),
             "terminal_adp_cost": float(getattr(
                 self.mpc, "last_terminal_adp_cost", 0.0)),
+            "adp_terminal_value": float(getattr(
+                self.mpc, "last_terminal_adp_value", 0.0)),
+            "adp_terminal_weight": float(getattr(
+                self.mpc, "last_terminal_adp_weight", 0.0)),
+            "terminal_cost_ratio": float(getattr(
+                self.mpc, "last_terminal_adp_cost_ratio", 0.0)),
             "corridor_rank_changed_count": int(any(
                 bool(getattr(item, "adp_changed_rank", False))
                 for item in list(self.runtime_topology_candidate_pool or []))),

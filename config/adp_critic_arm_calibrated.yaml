@@ -30,7 +30,8 @@ learning:
   alpha: 0.001
   decision_influence_enabled: true
   ranking_influence_enabled: true
-  mpc_influence_enabled: false
+  mpc_influence_enabled: true
+  lambda_adp_terminal: 0.05
   adp_value_normalization: robust
   adp_norm_clip: 3.0
   adp_contribution_clip: 0.10

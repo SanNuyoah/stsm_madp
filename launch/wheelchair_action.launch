@@ -73,14 +73,14 @@
   <arg name="adp_expected_theta_hash" default=""/>
   <arg name="adp_decision_influence_enabled" default="true"/>
   <arg name="adp_ranking_influence_enabled" default="true"/>
-  <arg name="adp_mpc_influence_enabled" default="false"/>
+  <arg name="adp_mpc_influence_enabled" default="true"/>
   <arg name="adp_ranking_lambda" default="0.02"/>
   <arg name="adp_value_normalization" default="robust"/>
   <arg name="adp_norm_clip" default="3.0"/>
   <arg name="adp_contribution_clip" default="0.10"/>
   <arg name="lambda_adp" default="0.005"/>
   <arg name="lambda_adp_corridor" default="0.05"/>
-  <arg name="lambda_adp_terminal" default="0.0015"/>
+  <arg name="lambda_adp_terminal" default="0.05"/>
   <arg name="mpc_use_adp_terminal" default="true"/>
   <arg name="adp_post_scale_enabled" default="false"/>
   <arg name="adp_min_scale" default="0.35"/>

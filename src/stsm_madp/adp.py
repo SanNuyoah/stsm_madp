@@ -277,6 +277,10 @@ class ADPCritic(object):
                     features[key] = float(values[index])
         return float(self.predict(features))
 
+    def evaluate_terminal_value(self, state=None, context=None):
+        """Explicit terminal-value API used by MPC callers."""
+        return self.evaluate_value(state, context)
+
     def get_terminal_cost_weight(self, default=0.0):
         """Return the configured terminal-value contribution weight."""
         value = self.metadata.get("lambda_adp_terminal",
@@ -286,6 +290,10 @@ class ADPCritic(object):
             return float(value)
         except (TypeError, ValueError):
             return float(default)
+
+    def get_terminal_weight(self, default=0.0):
+        """Compatibility alias for the terminal MPC weight."""
+        return self.get_terminal_cost_weight(default)
 
     def predict_detail(self, raw_feature_dict):
         raw = float(np.dot(self.theta, self.featurize(raw_feature_dict)))

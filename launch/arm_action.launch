@@ -20,7 +20,7 @@
   <arg name="adp_expected_theta_hash" default=""/>
   <arg name="adp_decision_influence_enabled" default="true"/>
   <arg name="adp_ranking_influence_enabled" default="true"/>
-  <arg name="adp_mpc_influence_enabled" default="false"/>
+  <arg name="adp_mpc_influence_enabled" default="true"/>
   <arg name="adp_ranking_lambda" default="0.02"/>
   <arg name="adp_value_normalization" default="robust"/>
   <arg name="adp_norm_clip" default="3.0"/>

@@ -2673,7 +2673,9 @@ def test_state_tube_stretches_nominal_timing_for_dynamic_limits():
 def test_adp_terminal_value_interface_accepts_state_and_context():
     critic = ADPCritic(feature_names=["bias", "x", "y"])
     assert critic.evaluate_value([1.0, 2.0, 0.0, 0.1], {"bias": 1.0}) == 0.0
+    assert critic.evaluate_terminal_value([1.0, 2.0, 0.0, 0.1], {"bias": 1.0}) == 0.0
     assert critic.get_terminal_cost_weight(0.25) == 0.25
+    assert critic.get_terminal_weight(0.25) == 0.25
 
 
 def test_executed_trajectory_preserves_timestamp_and_yaw():
