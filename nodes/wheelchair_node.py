@@ -4222,7 +4222,9 @@ class WheelchairNode:
             state_tube = build_state_tube(
                 refined, initial_yaw=float(self.state[2]), limits={
                     "dt": float(self.mpc.dt), "max_speed": float(self.mpc.v_max),
-                    "max_omega": float(self.mpc.w_max)})
+                    "max_omega": float(self.mpc.w_max),
+                    "max_acceleration": float(self.mpc.a_max),
+                    "max_alpha": float(self.mpc.alpha_max)})
             state_tube_validation = validate_state_tube(state_tube, limits={
                 "max_speed": float(self.mpc.v_max),
                 "max_acceleration": float(self.mpc.a_max),

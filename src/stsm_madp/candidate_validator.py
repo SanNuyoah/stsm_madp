@@ -24,7 +24,13 @@ def _points(value):
 
 
 def build_state_tube(points, initial_yaw=0.0, limits=None):
-    """Create a conservative time-parameterized ``(x,y,theta,v,t)`` tube."""
+    """Create a time-parameterized ``(x,y,theta,v,t)`` tube.
+
+    A geometric corridor has no native timing.  We therefore conservatively
+    stretch its segment times until the requested acceleration and angular
+    acceleration limits are met.  This avoids rejecting an otherwise valid
+    corridor solely because the initial nominal ``dt`` was too aggressive.
+    """
     pts = _points(points)
     limits = dict(limits or {})
     if len(pts) < 2:
@@ -32,16 +38,41 @@ def build_state_tube(points, initial_yaw=0.0, limits=None):
     dt = max(float(limits.get("dt", 0.2)), 1e-3)
     v_max = max(float(limits.get("max_speed", 0.5)), 1e-6)
     omega_max = max(float(limits.get("max_omega", 1.0)), 1e-6)
+    accel_max = float(limits.get("max_acceleration", np.inf))
+    alpha_max = float(limits.get("max_alpha", np.inf))
     headings = np.unwrap(np.arctan2(np.diff(pts[:, 1]), np.diff(pts[:, 0])))
     headings = np.r_[float(initial_yaw), headings]
-    times = [0.0]
+    base_intervals = []
     for i, seg in enumerate(np.diff(pts[:, :2], axis=0)):
         length = float(np.linalg.norm(seg))
         turn = abs(float(headings[i + 1] - headings[i]))
-        times.append(times[-1] + max(dt, length / v_max, turn / omega_max))
-    intervals = np.diff(np.asarray(times))
-    speeds = np.r_[0.0, np.linalg.norm(np.diff(pts[:, :2], axis=0), axis=1) /
-                   np.maximum(intervals, 1e-9)]
+        base_intervals.append(max(dt, length / v_max, turn / omega_max))
+    intervals = np.asarray(base_intervals, float)
+
+    def _kinematics(iv):
+        speeds = np.r_[0.0, np.linalg.norm(np.diff(pts[:, :2], axis=0), axis=1) /
+                       np.maximum(iv, 1e-9)]
+        omega = np.diff(headings) / np.maximum(iv, 1e-9)
+        accel = np.diff(speeds) / np.maximum(iv, 1e-9)
+        alpha = (np.diff(omega) / np.maximum(iv[1:], 1e-9)
+                 if len(omega) >= 2 else np.zeros(0))
+        return speeds, omega, accel, alpha
+
+    # Uniformly stretching all intervals preserves geometry while reducing
+    # acceleration as 1/s^2 and angular acceleration as 1/s^3.
+    for _ in range(12):
+        speeds, omega, accel, alpha = _kinematics(intervals)
+        scale = 1.0
+        if np.isfinite(accel_max) and len(accel):
+            scale = max(scale, np.sqrt(float(np.max(np.abs(accel))) /
+                                       max(accel_max, 1e-9)))
+        if np.isfinite(alpha_max) and len(alpha):
+            scale = max(scale, (float(np.max(np.abs(alpha))) /
+                                max(alpha_max, 1e-9)) ** (1.0 / 3.0))
+        if scale <= 1.000001:
+            break
+        intervals *= scale * 1.01
+    times = np.r_[0.0, np.cumsum(intervals)]
     states = [[float(p[0]), float(p[1]), float(headings[i]), float(speeds[i]),
                float(times[i])] for i, p in enumerate(pts)]
     return {"valid": True, "states": states, "times": times,

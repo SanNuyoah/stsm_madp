@@ -2658,6 +2658,18 @@ def test_state_tube_is_time_parameterized_and_hard_checked():
     assert result["valid"] is True
 
 
+def test_state_tube_stretches_nominal_timing_for_dynamic_limits():
+    tube = build_state_tube(
+        [[2.0, 1.5], [1.9, 1.45], [1.8, 1.46], [1.7, 1.47]],
+        initial_yaw=-2.4,
+        limits={"dt": 0.2, "max_speed": 0.75, "max_omega": 0.95,
+                "max_acceleration": 0.5, "max_alpha": 1.5})
+    result = validate_state_tube(
+        tube, {"max_speed": 0.75, "max_omega": 0.95,
+               "max_acceleration": 0.5, "max_alpha": 1.5})
+    assert result["valid"] is True
+
+
 def test_adp_terminal_value_interface_accepts_state_and_context():
     critic = ADPCritic(feature_names=["bias", "x", "y"])
     assert critic.evaluate_value([1.0, 2.0, 0.0, 0.1], {"bias": 1.0}) == 0.0
